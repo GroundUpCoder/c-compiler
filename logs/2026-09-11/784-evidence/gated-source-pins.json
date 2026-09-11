@@ -1,0 +1,7 @@
+{
+  "host.js": "314638c5cfa6adc74b6d8b035d0fc9c5971323977852b66dbfc691d9e4e6af30",
+  "tests/host/run.js": "ccfabc2b212c4f4849f2a80643ad4894f2f3ae35190c14edbb5c2b750094dbbf",
+  "tests/host/test_callback_capture.js": "fa58c9229946a4ace0400ba57ce3191d713b1cbeb5c88f965eb7c2a175bec73d",
+  "compiler.js": "c3ef62accdbd76521375e04c2a5969876cb45ff7f95c7ef99af56937862cf9ef",
+  "kernel.js": "a3934723b5c3e1fae922f3b707c16ec1640df40a00f034da139ad17a050e4930"
+}

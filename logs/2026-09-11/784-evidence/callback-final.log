@@ -1,0 +1,4 @@
+PASS callback capture C table mutation, re-registration, zero cancellation: jspi
+PASS Small direct refs: frames, replacement, null, timers, exit, errors, teardown: jspi
+PASS callback capture C table mutation, re-registration, zero cancellation: sync
+PASS Small direct refs: frames, replacement, null, timers, exit, errors, teardown: sync

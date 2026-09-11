@@ -1,0 +1,2640 @@
+
+[1mdiff-aware plan[0m (vs HEAD)
+  5 changed path(s), 2 ignored (docs/logs)
+    host.js  →  todos, unit, blockfs, kernel, sweep, host, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, tcc, libc, fuzz, fakegit
+    tests/host/run.js  →  host
+    tests/host/test_callback_capture.js  →  host
+
+  [1msuites:[0m todos, unit, blockfs, kernel, sweep, host, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, tcc, libc, fuzz, fakegit
+
+[1m━━━ tier: diff ━━━[0m
+  runs: todos, unit, host, blockfs, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, tcc, libc, fuzz, fakegit, kernel, sweep
+  [33mdeliberately NOT run: netsurf-patch, disw, sourcemap[0m
+  a green diff is NOT a full gate — ships require `node tests/run.js full`.
+
+[1m━━━ todos suite ━━━[0m
+$ node -r /Users/jku/git/c-compiler-small-callbacks/tests/lib/parent-watch.js tests/todos/run.js
+
+
+── liabilities-check ──
+$ node todos/liabilities.js check
+  pinned  L20  deferral target 0281 is closed — funded by #107: modals still draw min/max boxes; the descope points at a closed item
+  pinned  L21  deferral target 0281 is closed — funded by #107: the WMP_F_TRANSIENT flag's own doc defers min/max suppression to the same closed item
+liabilities: OK — 40 entries, 2 pinned, 33 funding ticket(s).
+
+── liabilities-tests ──
+$ node todos/liabilities.test.js
+  ok  a well-formed entry with a pinned expired deferral passes
+  ok  an anchor resolves to a live file:line
+  ok  RED: an entry whose ticket is in done/ fails
+  ok  RED: an entry whose ticket does not exist fails
+  ok  RED: an entry citing two tickets fails (one entry, one funding item)
+  ok  a #N funding ticket that is open in cc passes
+  ok  a #N funding ticket that is in_progress in cc is live too
+  ok  RED: a #N funding ticket that is done in cc fails as CLOSED
+  ok  RED: a #N funding ticket that is dropped in cc fails as CLOSED
+  ok  RED: a #N funding ticket unknown to cc fails as missing
+  ok  an unverified cc scan never fails a #N entry, and says so via ccNote
+  ok  an all-legacy register never consults cc (no ccNote even when unverified)
+  ok  RED: an unpinned deferral to a CLOSED #N fails; pinning it passes
+  ok  RED: a #N in the anchor that the entry does not classify fails
+  ok  RED: a ref that is neither #N nor a 4-digit id fails the field check
+  ok  RED: an unpinned deferral to a CLOSED item fails (the 0291/0300 shape)
+  ok  RED: a pin whose target is OPEN again fails (the xpass case)
+  ok  RED: an expired id that is not in defers-to fails
+  ok  RED: a deferral target that is not a todo at all fails
+  ok  RED: an anchor that is no longer in the file fails
+  ok  RED: an anchor matching two lines fails as ambiguous
+  ok  RED: a cited file that does not exist fails
+  ok  RED: a ticket id in the anchor that the entry does not classify fails
+  ok  provenance classifies a historical id in the anchor
+  ok  a 4-digit number that is not a ticket needs no classification
+  ok  RED: an empty register fails instead of passing vacuously
+  ok  RED: a register with no entry markers fails
+  ok  RED: a missing register file fails
+  ok  RED: an unparsable line inside the markers fails instead of being skipped
+  ok  RED: an unknown field fails
+  ok  RED: a missing required field fails
+  ok  RED: a repeated field fails
+  ok  RED: a duplicate entry id fails
+  ok  RED: a field before any heading fails
+  ok  the checked-in register passes its own check
+  ok  the register still demonstrates the pinned-expired-deferral shape (L20, L21)
+  ok  unpinning the real entries turns the real register RED
+  ok  citedFiles exposes the register's files to the diff planner
+  ok  RED: two lanes off a common base get DISTINCT liability ids
+  ok  the liability allocator REFUSES outside a repo, and --local opts out
+
+liabilities.js: 40 passed
+
+── idspace-tests ──
+$ node todos/idspace.test.js
+  ok  RED: a remote-tracking ref set the remote contradicts reads STALE, and a fetch clears it
+  ok  --offline skips the probe entirely and says so, rather than reporting fresh
+  ok  a probe that cannot reach the remote degrades LOUDLY, and still allocates
+  ok  the probe is bounded by a timeout, and the timeout reads as a failure not a pass
+  ok  offline, a clone that has never fetched says so instead of reading fresh
+  ok  offline, a stale FETCH_HEAD is reported by age — and a fresh one is not nagged about
+  ok  a fetch made from ANOTHER worktree counts — FETCH_HEAD is per-worktree
+  ok  offline, committing since the last fetch is itself reported
+  ok  RED: an id in a SIBLING WORKTREE's uncommitted tree is taken — the L47 incident
+  ok  a sibling worktree's uncommitted TICKET file is taken too
+  ok  a COMMITTED id keeps its ref label — the worktree scan does not shadow the refs
+  ok  a pruned worktree entry is skipped rather than throwing
+  ok  a repo with no remote is not "stale" — there is nothing to be stale about
+  ok  the verdict is computed ONCE per process: next-id allocates twice, probes once
+
+idspace.test.js: 14 passed
+
+todos suite: 3/3 passed, 0 failed  (7.2s)
+
+[1m━━━ unit suite ━━━[0m
+$ node -r /Users/jku/git/c-compiler-small-callbacks/tests/lib/parent-watch.js tests/run-unit.js
+
+--- unit (852 tests, 10 workers) ---
+.................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+
+849 passed, 0 failed, 3 skipped  (16.3s)
+
+[1m━━━ host suite ━━━[0m
+$ node -r /Users/jku/git/c-compiler-small-callbacks/tests/lib/parent-watch.js tests/host/run.js
+
+registry: 64 declared + 0 excluded == 64 on disk (tests/host/run.js)
+registry: 1 declared + 0 excluded == 1 on disk (tests/host/run.js (../spawn rows))
+registry: 13 declared + 0 excluded == 13 on disk (tests/host/run.js (../serve rows))
+[fixture] os/os-system.img missing — baking once (node tools/mkimage.js --packages=all)…
+[fixture] baked in 217.2s
+
+===== test_small.js =====
+PASS Small discovery, installed compilation, imports, allocator, args, exit, UTF-8, redirected stdout/stderr, C service calls, diagnostics
+
+===== test_foundation.js =====
+Foundation evidence: /Users/jku/git/c-compiler-small-callbacks/build/777/foundation-node-1789114381826-OdzxmH/run.json
+PASS ownership false false
+PASS pools false false
+PASS identity false false
+PASS scope false false
+PASS immortals false false
+PASS reentrant-growth false false
+PASS scope-flow false false
+PASS scope-snapshot false false
+PASS missing-pool false false
+PASS cross-forward false false
+PASS cross-reverse false false
+PASS literal-forward false false
+PASS literal-reverse false false
+PASS exhaustion false false
+PASS bookkeeping-failure false false
+PASS scoped-failure false false
+PASS misuse-0 false false
+PASS misuse-1 false false
+PASS misuse-2 false false
+PASS ownership false true
+PASS pools false true
+PASS identity false true
+PASS scope false true
+PASS immortals false true
+PASS reentrant-growth false true
+PASS scope-flow false true
+PASS scope-snapshot false true
+PASS missing-pool false true
+PASS cross-forward false true
+PASS cross-reverse false true
+PASS literal-forward false true
+PASS literal-reverse false true
+PASS exhaustion false true
+PASS bookkeeping-failure false true
+PASS scoped-failure false true
+PASS misuse-0 false true
+PASS misuse-1 false true
+PASS misuse-2 false true
+PASS ownership true false
+PASS pools true false
+PASS identity true false
+PASS scope true false
+PASS immortals true false
+PASS reentrant-growth true false
+PASS scope-flow true false
+PASS scope-snapshot true false
+PASS missing-pool true false
+PASS cross-forward true false
+PASS cross-reverse true false
+PASS literal-forward true false
+PASS literal-reverse true false
+PASS exhaustion true false
+PASS bookkeeping-failure true false
+PASS scoped-failure true false
+PASS misuse-0 true false
+PASS misuse-1 true false
+PASS misuse-2 true false
+PASS ownership true true
+PASS pools true true
+PASS identity true true
+PASS scope true true
+PASS immortals true true
+PASS reentrant-growth true true
+PASS scope-flow true true
+PASS scope-snapshot true true
+PASS missing-pool true true
+PASS cross-forward true true
+PASS cross-reverse true true
+PASS literal-forward true true
+PASS literal-reverse true true
+PASS exhaustion true true
+PASS bookkeeping-failure true true
+PASS scoped-failure true true
+PASS misuse-0 true true
+PASS misuse-1 true true
+PASS misuse-2 true true
+PASS goto-in undefined undefined
+PASS goto-sibling undefined undefined
+PASS switch-in undefined undefined
+
+===== test_objc.js =====
+PASS core default
+PASS typed-inheritance default
+PASS mixed-signatures-and-recursion default
+PASS nested-keywords-selector-and-c-array default
+PASS function-pointer-and-lifetime default
+PASS static-receiver-signatures default
+PASS aggregate-nested-sibling-override-and-nil default
+PASS method-object-variance default
+PASS variadic-promotions-aggregate-and-nil default
+PASS object-pointer-storage default
+PASS load-and-initialize default
+PASS protocol-qualified-object-types default
+PASS NSString-constant-payload default
+PASS protocol-only-static-method default
+PASS forward-qualified-class-layout default
+PASS dispatch-cache-collision-and-dynamic-class default
+PASS multiple-protocol-return-guarantees default
+PASS core no-inline
+PASS typed-inheritance no-inline
+PASS mixed-signatures-and-recursion no-inline
+PASS nested-keywords-selector-and-c-array no-inline
+PASS function-pointer-and-lifetime no-inline
+PASS static-receiver-signatures no-inline
+PASS aggregate-nested-sibling-override-and-nil no-inline
+PASS method-object-variance no-inline
+PASS variadic-promotions-aggregate-and-nil no-inline
+PASS object-pointer-storage no-inline
+PASS load-and-initialize no-inline
+PASS protocol-qualified-object-types no-inline
+PASS NSString-constant-payload no-inline
+PASS protocol-only-static-method no-inline
+PASS forward-qualified-class-layout no-inline
+PASS dispatch-cache-collision-and-dynamic-class no-inline
+PASS multiple-protocol-return-guarantees no-inline
+PASS refusal category
+PASS refusal property
+PASS refusal pool-entry
+PASS refusal missing-interface
+PASS refusal missing-method
+PASS refusal unknown-superclass
+PASS refusal bad-override
+PASS refusal root-super
+PASS refusal protected-ivar
+PASS refusal private-in-subclass
+PASS refusal unknown-selector
+PASS refusal arity
+PASS refusal object-value
+PASS refusal ambiguous-id
+PASS refusal packed-class
+PASS refusal nonobject-receiver
+PASS refusal bitfield
+PASS refusal missing-return-protocol-guarantee
+PASS refusal reverse-object-return
+PASS refusal unrelated-object-return
+PASS refusal narrow-object-parameter
+PASS refusal nonconforming-object-conversion
+PASS refusal late-protocol-implementation-mismatch
+PASS refusal missing-string-provider
+PASS refusal bad-string-provider
+PASS refusal owning-qualifier
+PASS refusal void-pointer-receiver
+PASS refusal late-ambiguous-id
+PASS refusal ambiguous-instance-id-site
+PASS inherited caller variance main.m,impl.m
+PASS inherited caller variance impl.m,main.m
+PASS inherited caller variance main.m,impl.m
+PASS inherited caller variance impl.m,main.m
+PASS cross-TU base.m,sub.m,main.m
+PASS cross-TU main.m,sub.m,base.m
+PASS cross-TU base.m,sub.m,main.m
+PASS cross-TU main.m,sub.m,base.m
+PASS cross-TU covariance base.m,sub.m,main.m
+PASS cross-TU covariance main.m,sub.m,base.m
+PASS cross-TU covariance base.m,sub.m,main.m
+PASS cross-TU covariance main.m,sub.m,base.m
+PASS C-entry startup driver.c,main.m,sub.m,base.m
+PASS C-entry startup base.m,sub.m,main.m,driver.c
+PASS C-entry startup driver.c,main.m,sub.m,base.m
+PASS C-entry startup base.m,sub.m,main.m,driver.c
+PASS cross-TU refusal forward-adopted-protocol-missing 0.m,1.m
+PASS cross-TU refusal forward-adopted-protocol-missing 1.m,0.m
+PASS cross-TU refusal forward-adopted-protocol-abi 0.m,1.m
+PASS cross-TU refusal forward-adopted-protocol-abi 1.m,0.m
+PASS cross-TU refusal forward-protocol-send 0.m,1.m
+PASS cross-TU refusal forward-protocol-send 1.m,0.m
+PASS cross-TU refusal dynamic-linked-signatures 0.m,1.m
+PASS cross-TU refusal dynamic-linked-signatures 1.m,0.m
+PASS cross-TU refusal dynamic-protocol-schema 0.m,1.m
+PASS cross-TU refusal dynamic-protocol-schema 1.m,0.m
+PASS cross-TU refusal declared-missing-method 0.m,1.m
+PASS cross-TU refusal declared-missing-method 1.m,0.m
+PASS cross-TU refusal nested-member-offsets 0.m,1.m
+PASS cross-TU refusal nested-member-offsets 1.m,0.m
+PASS cross-TU refusal layout 0.m,1.m
+PASS cross-TU refusal layout 1.m,0.m
+PASS cross-TU refusal inherited-signature 0.m,1.m
+PASS cross-TU refusal inherited-signature 1.m,0.m
+PASS cross-TU refusal protocol-missing-method 0.m,1.m
+PASS cross-TU refusal protocol-missing-method 1.m,0.m
+PASS cross-TU refusal protocol-signature 0.m,1.m
+PASS cross-TU refusal protocol-signature 1.m,0.m
+PASS cross-TU refusal masked-signature 0.m,1.m,2.m
+PASS cross-TU refusal masked-signature 2.m,1.m,0.m
+PASS cross-TU refusal signature 0.m,1.m
+PASS cross-TU refusal signature 1.m,0.m
+PASS cross-TU refusal duplicate 0.m,1.m
+PASS cross-TU refusal duplicate 1.m,0.m
+PASS cross-TU refusal missing 0.m
+PASS cross-TU refusal missing 0.m
+PASS frontend object-pointer metadata
+PASS forward-only class has no runtime dependency without optimization
+PASS C-only aggregate ABI control (not Objective-C support)
+PASS C-mode isolation
+
+===== test_epipe_listeners.js =====
+  ok   stdout error listeners grew by at most 1
+  ok   stderr error listeners grew by at most 1
+  ok   custom writers add no stdout listener
+  ok   custom writers add no stderr listener
+PASS
+
+===== test_stdout_flush.js =====
+  ok   exit code preserved through the drain
+  ok   no bytes lost at exit
+  ok   bytes exact across memory.grow
+PASS
+
+===== test_console_ring.js =====
+  ok   program ran to completion
+  ok   no bytes lost or duplicated
+  ok   bytes exact through the ring
+  ok   available never exceeded ring capacity
+PASS
+
+===== test_syscall_restart.js =====
+syscall restart import seam: 28 controls passed
+
+===== test_console_capability.js =====
+  ok   decoy-less backend: write(1) returns count
+  ok   decoy-less backend: bytes reached backend.write, fd preserved
+  ok   decoy-less backend: nothing leaked to the console
+  ok   default fd1 goes to console out
+  ok   default fd2 goes to console err
+  ok   console entry dups to a high fd
+  ok   file opened
+  ok   redirected fd1 write returns count
+  ok   redirected fd1: console untouched
+  ok   restored fd1 goes to console again (marker survived dup/dup2)
+  ok   redirected bytes landed byte-exact in the file
+  ok   close(1) on the default entry succeeds as a no-op
+  ok   fd1 still routes to the console after the no-op close
+  ok   default fd0 reads the console stdin buffer
+  ok   redirected fd0 reads the file, not the stdin buffer
+PASS
+
+===== test_audio_ring_wrap.js =====
+  ok   no RangeError queueing across the 2^31 boundary
+  ok   all bytes accepted across the boundary
+  ok   writePos stays masked into [0, cap)
+  ok   boundary-spanning queue does not throw
+  ok   boundary-spanning queue accepted in full
+  ok   queuedBytes matches accepted
+  ok   consumer readPos lands on the seeded slot
+  ok   ring bytes exact across the wrap
+PASS
+
+===== test_gcstr_imports.js =====
+  ok   compiles
+  ok   one import per distinct literal
+  ok   imports are immutable globals
+  ok   literal appears once (import name only)
+  ok   file-scope literal appears once (import name only)
+  skip type introspection (no imports().type on this Node)
+  ok   instantiates with the "#" Proxy polyfill (no compile options)
+  ok   program result correct under polyfill
+all ok
+
+===== test_blockfs_cli_clobber.js =====
+  ok   unreadable image exits 1
+  ok   stderr names the image
+  ok   program never ran
+  ok   original bytes survive
+  ok   missing image runs fine
+  ok   program ran
+  ok   fresh image created at exit
+test_blockfs_cli_clobber: all checks passed
+
+===== test_host_ceiling.js =====
+  ok   runaway exits on its own (no spawnSync timeout)
+  ok   runaway exit code is 124
+  ok   message names elapsed time and limit
+  ok   message names the module and the override flag
+  ok   died promptly (ceiling, not the 20s harness guard)
+  ok   healthy run under an explicit ceiling exits 0
+  ok   healthy run output intact
+  ok   healthy run under the non-TTY default exits 0
+  ok   --max-seconds=0: runaway still alive after 3s (no ceiling)
+  ok   runaway died only by OUR kill
+  ok   negative --max-seconds exits 2
+host ceiling checks OK
+
+===== test_append_fstat_fail.js =====
+  ok   append open succeeds when fstat works
+  ok   position starts at EOF, not 0
+  ok   append open fails when fstat fails
+  ok   errno surfaced
+  ok   native fd not leaked
+  ok   committed append write returns n despite failed resync
+  ok   SEEK_CUR with broken position fails loud
+  ok   errno from the failed lazy resync
+  ok   SEEK_CUR after fstat recovery resyncs to EOF
+  ok   re-break: committed write still returns n
+  ok   positioned read with broken position fails loud
+  ok   read never issued with a stale offset
+  ok   read errno from the failed resync
+  ok   read after fstat recovery resyncs and proceeds
+  ok   resynced read reached readSync
+test_append_fstat_fail: all checks passed
+
+===== test_pipe_read_block.js =====
+  ok   pipe() succeeds
+  ok   read on empty pipe with live writer does not return
+  ok   write delivers
+  ok   parked read wakes with the data
+  ok   bytes match
+  ok   second read parks again
+  ok   close(write end)
+  ok   EOF after writer closes
+  ok   drain: buffered bytes first
+  ok   drain: then EOF
+  ok   zero-length read on empty pipe with live writer returns 0
+  ok   zero-length read on non-empty pipe returns 0
+  ok   data intact after zero-length read
+  ok   zero-length stdin read returns 0
+test_pipe_read_block: all checks passed
+
+===== test_stream_bulk.js =====
+  ok   pipe() succeeds
+  ok   6MB pipe passthrough byte-exact
+  ok   close(write end)
+  ok   EOF after writer close + drain
+stdin child: 4194304 bytes byte-exact
+  ok   stdin child drains 4MB byte-exact (exit 0)
+test_stream_bulk: all checks passed
+
+===== test_singlefile_emit.js =====
+  ok   .js emit succeeds
+  ok   .js bundle has no tail marker "Dual-purpose logic"
+  ok   .js bundle has no tail marker "// @cc-strip-below"
+  ok   .js bundle has no tail marker "process.argv[2] || 'a.wasm'"
+  ok   bundle exits 0
+  ok   bundle output is exactly one RAN (no double execution)
+  ok   .html emit succeeds
+  ok   .html bundle has no tail marker "Dual-purpose logic"
+  ok   .html bundle has no tail marker "// @cc-strip-below"
+  ok   .html bundle has no tail marker "process.argv[2] || 'a.wasm'"
+  ok   .html bundle still embeds host.js (runModule present)
+  ok   repo host.js carries the sentinel
+  ok   emit against doctored host.js exits nonzero
+  ok   error names the sentinel and host.js
+  ok   no bundle written on failure
+test_singlefile_emit: all checks passed
+
+===== test_cjs_datadir.js =====
+  ok   bundle A compiles
+  ok   bundle B compiles
+  ok   leg1: list run exits 0
+  ok   leg1: payload visible in program cwd (control)
+  ok   leg1: nothing survives a clean exit
+  ok   leg1: write run exits 0
+  ok   leg1: program-authored cwd output does not survive either
+  ok   leg2: program A exits 0
+  ok   leg2: program B exits 0
+  ok   leg2: same-pid successor sees ONLY its own payload
+  ok   leg3: run 1 exits 0
+  ok   leg3: run 2 exits 0
+  ok   leg3: run 1 cwd is under its TMPDIR
+  ok   leg3: run 2 cwd is under its TMPDIR
+  ok   leg3: concurrent same-bundle runs get DISTINCT data dirs
+test_cjs_datadir: all checks passed
+
+===== test_gpu_present_binding.js =====
+  ok   browser flavor exposes the A4 bindWindow seam
+  ok   the window-bound surface import exists
+  ok   surface for window 1 created
+  ok   surface for window 2 created
+  ok   fake device acquired
+  ok   window 1 present lands on sid 1 even though window 2 was created after
+  ok   window 1 presents its OWN canvas at its own size (surface 2 configure did not resize it)
+  ok   window 2 present lands on sid 2
+  ok   the two windows present two DIFFERENT canvases (canvasBySid, not one shared)
+  ok   window 2 canvas is its own size
+  ok   interleaved presents never cross sids
+  ok   present to a destroyed window drops (no frame, no throw)
+  ok   window 2 still presents after window 1 destroy
+  ok   legacy handle-less surface still creates
+  ok   legacy surface keeps the last-created-window tail
+
+gpu present binding: PASS
+
+===== test_gpu_present_clamp.js =====
+  ok   window created
+  ok   per-window present binding exists (A4)
+  ok   flood in one tick ships exactly 1 frame (1 bitmap made)
+  ok   next tick ships exactly 1 more
+  ok   real park entry flushes the held trailing frame
+  ok   second park ships nothing (no held frame left)
+  ok   short park (delay-loop shape) keeps the clamp within the tick
+  ok   short park ships the held frame once the tick advances
+  ok   pump on the same tick keeps the clamp
+  ok   pump on a fresh tick ships the held frame
+  ok   paced one-present-per-tick app ships every frame
+  ok   destroyed window ships nothing at park (held state cleared)
+  ok   vsync-less flavor ships its first present (clock-fallback gate opens)
+  ok   clock fallback holds a same-window present (self-measured trial)
+  ok   clock fallback: the held frame ships at a real park (never lost)
+  ok   first main-live present SHIPS (the SDL_AppInit splash allowance)
+SDL: FATAL — this program presents GPU frames from a blocking main loop.
+             gucOS stops it before it takes the desktop down.
+
+  program : blockyapp (pid 42) — webgpu.h surface
+  detected: wgpuSurfacePresent() called from main(), not from a frame callback
+
+  WHY: a blocking main loop never returns to the browser's event loop, so the
+  browser can never recycle the GPU frames this program presents. That budget
+  is finite. Exhausting it destroys the compositor's GPU device and the whole
+  desktop goes black. gucOS refuses to start that countdown.
+
+  FIX 1 — run it as-is, NO code changes:
+
+      SDL_RENDER_DRIVER=software ./blockyapp
+
+  Draws on the CPU into the window surface. There is no GPU frame budget, so a
+  blocking loop is safe. Equivalent in code: SDL_CreateRenderer(win, "software").
+
+  FIX 2 — keep GPU rendering, let SDL own the loop:
+
+      #define SDL_MAIN_USE_CALLBACKS
+      provide SDL_AppInit / SDL_AppIterate / SDL_AppEvent / SDL_AppQuit
+      instead of your own while() loop.
+
+  Standard SDL3 — the same source runs on desktop SDL3 unchanged.
+
+  Details: /usr/share/doc/sdl-gucos.md
+
+Exiting (status 69). The desktop is unaffected.
+
+  ok   second main-live present refuses (throws with sdlRefusalExit=69)
+  ok   refusal ships nothing beyond the allowance frame
+  ok   refusal reports exit 69 through the kernel handshake exactly once
+  ok   refusal message lands on the app fd 2
+  ok   message FIX 1 teaches the software opt-in (SDL_RENDER_DRIVER=software)
+  ok   message FIX 2 teaches SDL_MAIN_USE_CALLBACKS / SDL_AppIterate
+  ok   message carries the runtime identity (program, pid) + the doc path
+  ok   message quotes no vendor-specific budget figure
+  ok   third main-live present still refuses without re-reporting exit
+  ok   callbacks app presenting in SDL_AppInit ships every frame (never refused)
+  ok   software renderer created on explicit request
+  ok   software presents from a blocking loop: no bitmap, no refusal, no exit
+  ok   mixing GPU after software in one process fails loudly
+
+gpu present clamp: PASS
+SDL_CreateRenderer: cannot mix "software" and GPU renderers in one process
+
+===== test_harness_leaks.js =====
+  ok   a pid-tagged dir whose owner is gone is reaped
+  ok   a pid-tagged dir whose owner is ALIVE is left alone
+  ok   provableOnly: a LIVE owner is never reaped, however old the dir
+  ok   provableOnly: an untagged old dir is kept and named unprovable
+  ok   provableOnly: a DEAD owner still licenses the reap
+  ok   a live-pid dir older than the pid-reuse horizon IS reaped
+  ok   custom prefixes (os-apps-, os-shell-) still parse their owner
+  ok   an UNTAGGED pre-fix dir is reaped only once it is old
+  ok   parsePs reads pid/ppid/command
+  ok   findOrphans takes only PPID-1 harness processes
+  ok   a serve.js with a LIVE parent is never an orphan
+  ok   a running kernel e2e is never an orphan
+  ok   unrelated PPID-1 processes are untouched
+  ok   an ORPHANED mkimage.js is reaped; one with a live parent never is
+  ok   an ORPHANED run.py batch is reaped; live-parent and mere mentions are not
+  ok   a shell that merely MENTIONS serve.js is not a serve.js
+  ok   findOrphans never returns itself or init
+  ok   mkdtempOwned tags the dir with this pid and registers it
+  ok   cleanupAll removes tracked dirs and forgets them
+  ok   the process-exit hook really fires (child process)
+  ok   an UNCAUGHT THROW still cleans up
+  ok   #725 preload chain: launcher spawned a live preloaded child
+  ok   #725 preload chain: the child exits ITSELF after its parent is SIGKILLed
+
+All harness-leak checks passed
+
+===== test_host_health.js =====
+  ok   parseVmStat: page size
+  ok   parseVmStat: free
+  ok   parseVmStat: inactive
+  ok   parseVmStat: speculative
+  ok   parseVmStat: purgeable
+  ok   parseVmStat: compressor OCCUPIED (not stored)
+  ok   availableBytes: reclaimable-inclusive
+  ok   availableBytes: ~5.55 GB on the canned healthy box
+  ok   parseVmStat: missing label parses to null, not 0
+  ok   availableBytes: null on a missing pillar (unmeasured, not zero)
+  ok   availableBytes: reviewer's truncated input (free only) → null, never 1.6 MB
+  ok   availableBytes: null when Pages inactive is absent
+  ok   availableBytes: null when Pages speculative is absent
+  ok   availableBytes: null when Pages purgeable is absent
+  ok   parseSwapUsage: real format
+  ok   parseSwapUsage: G suffix
+  ok   parseSwapUsage: garbage → null
+  ok   healthy/healthy (incident-lookalike raw numbers) → NO suspect
+  ok   unmeasured samples → NO suspect (no fabricated verdict)
+  ok   missing samples → NO suspect
+  ok   pressure 2 after → suspect
+  ok   …naming the instrument and the boundary
+  ok   pressure 4 before → suspect naming level 4
+  ok   memorystatus 12% (pressure normal) → suspect via the backstop
+  ok   degraded at both boundaries → both named
+  ok   label carries ONLY evidence (why), no verdict/directive fields
+  ok   fake seam: injected sample returned verbatim
+  ok   fake seam: tagged fake:true (a control run is never mistakable for a measurement)
+  ok   fake seam: unreadable fake THROWS (never silently measures the real host under a control)
+  ok   verdict: healthy (incident-lookalike raw numbers) → ok
+  ok   verdict: pressure 4 → refuse naming the OS CRITICAL verdict
+  ok   verdict: availGb 0.5 → refuse naming the floor
+  ok   verdict: pressure 2 → warn, NOT refuse
+  ok   verdict: memFreePct 12 (pressure normal) → warn, NOT refuse
+  ok   verdict: 0.9999 GB exact (displays as 1.0) → refuse — the dead zone is closed
+  ok   verdict: 1.0001 GB exact → ok (the floor is a floor, not a fuzz band)
+  ok   verdict: a fake carrying only availGb still compares as given
+  ok   verdict: null pressure/avail axes are silent; the measured axis still warns
+  ok   verdict: unmeasured sample → ok + unmeasured flag (absence never refuses)
+  ok   verdict: null sample → ok + unmeasured
+  ok   verdict output carries only level/reasons/unmeasured (ok)
+  ok   verdict output carries only level/reasons/unmeasured (refuse)
+  ok   verdict output carries only level/reasons/unmeasured (warn)
+  ok   verdict output carries only level/reasons/unmeasured (ok)
+  ok   sample: has a timestamp
+  ok   sample: totalGb plausible
+  ok   sample(darwin): measured
+  ok   sample(darwin): pressure is an OS level
+  ok   sample(darwin): memFreePct in range
+  ok   sample(darwin): availGb positive
+PASS
+
+===== test_tree_guard.js =====
+== cross-tree preflight (todos/0341) ==
+  ok   cross-tree launch is REFUSED
+  ok   the refusal prints BOTH trees
+  ok   the refusal names the escape hatch
+  ok   the exit code is NOT 3 (the heavy-lock code)
+  ok   same-tree launch runs normally
+  ok   a SUBDIRECTORY of the right tree runs normally
+  ok   a nested worktree inside the tree is still caught
+  ok   a cwd in no git tree at all is refused, and says so
+  ok   a script tree with no .git stands down (export/tarball)
+  ok   CC_ALLOW_FOREIGN_CWD=1 continues but STILL prints both paths
+  ok   CC_ALLOW_FOREIGN_CWD=0 does NOT open the hatch
+  ok   treeRootOf walks up to the nearest .git
+  ok   checkTree is pure and reports both trees
+  ok   this checkout passes its own guard
+
+All tree-guard checks passed
+
+===== test_aggregate_frame.js =====
+ok aggregate-returning callees are no longer refused
+ok inlining an aggregate-returning callee keeps the answer
+ok RED CONTROL: noinline still refuses, by its own reason
+ok the deferred shadow-stack bump is gone from the emitter
+ok exclusive aggregate arms fit the default stack (noInline=false)
+ok exclusive aggregate arms fit the default stack (noInline=true)
+ok pooled slots preserve condition, siblings and variadic results (noInline=false)
+ok pooled slots preserve condition, siblings and variadic results (noInline=true)
+ok opposite-sized paths share bytes, not ordinal maxima (noInline=false)
+ok opposite-sized paths share bytes, not ordinal maxima (noInline=true)
+ok byte arena preserves over-alignment and live values (noInline=false)
+ok byte arena preserves over-alignment and live values (noInline=true)
+ok for clauses reuse storage across full expressions (noInline=false)
+ok for clauses reuse storage across full expressions (noInline=true)
+
+===== test_pp_spread_bounds.js =====
+ok   no unbounded call-argument spread in compiler.js — only pushAll's own SPREAD_CHUNK-bounded spreads remain
+ok   pushAll is wired at the converted sites — 18 call(s) (12 converted sites + its own definition)
+ok   compiler.js exports pushAll/SPREAD_CHUNK — SPREAD_CHUNK=4096
+ok   pushAll appends every element — length=500000
+ok   pushAll bounds the per-call argument count — max 4096 arg(s) over 123 call(s), limit 4096
+ok   pushAll keeps the one-call fast path for small inputs — 1 call(s)
+ok   pushAll skips the call entirely for an empty source
+ok   a 400000-token macro preprocesses in a fresh main-thread process — exit 0
+
+All checks passed
+
+===== test_source_date_epoch.js =====
+ok   leg1: epoch-derived UTC __DATE__ (day space-padded) — got "Sep  9 2001"
+ok   leg1: epoch-derived UTC __TIME__ — got "01:46:40"
+ok   leg2: __DATE__ identical across TZ — Sep  9 2001 vs Sep  9 2001
+ok   leg2: __TIME__ identical across TZ — 01:46:40 vs 01:46:40
+ok   leg2: both compiles exit 0 — exit 0/0 
+ok   leg2: wasm byte-identical across TZ + wall-clock
+ok   leg3: epoch 0 renders 1970-01-01 UTC, not the wall clock — ["Jan  1 1970","00:00:00"]
+ok   leg4: max epoch 253402300799 accepted, renders 9999-12-31 — ["Dec 31 9999","23:59:59"]
+ok   leg5: unset path still renders local dates (well-formed) — ["Sep 11 2026","Sep 10 2026"]
+ok   leg5: unset path still LOCAL — 25h-apart zones disagree on the date — ["Sep 11 2026","Sep 10 2026"]
+ok   leg5: unset path is not the epoch rendering
+ok   leg6: "" -> exit 1, named, no stack trace — exit 1 stderr: "error: environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer no greater than 253402300799, not \"\"\n"
+ok   leg6: "abc" -> exit 1, named, no stack trace — exit 1 stderr: "error: environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer no greater than 253402300799, not \"abc\"\n"
+ok   leg6: "-1" -> exit 1, named, no stack trace — exit 1 stderr: "error: environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer no greater than 253402300799, not \"-1\"\n"
+ok   leg6: "+5" -> exit 1, named, no stack trace — exit 1 stderr: "error: environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer no greater than 253402300799, not \"+5\"\n"
+ok   leg6: " 5" -> exit 1, named, no stack trace — exit 1 stderr: "error: environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer no greater than 253402300799, not \" 5\"\n"
+ok   leg6: "12x" -> exit 1, named, no stack trace — exit 1 stderr: "error: environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer no greater than 253402300799, not \"12x\"\n"
+ok   leg6: "1.5" -> exit 1, named, no stack trace — exit 1 stderr: "error: environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer no greater than 253402300799, not \"1.5\"\n"
+ok   leg6: "0x10" -> exit 1, named, no stack trace — exit 1 stderr: "error: environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer no greater than 253402300799, not \"0x10\"\n"
+ok   leg6: "253402300800" -> exit 1, named, no stack trace — exit 1 stderr: "error: environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer no greater than 253402300799, not \"253402300800\"\n"
+ok   leg7: parseSourceDateEpoch exported
+ok   leg7: "0" -> 0
+ok   leg7: cap inclusive
+ok   leg7: cap+1 throws
+ok   leg8: cc driver exitCode 1 + named stderr — {"exitCode":1,"stdout":"","stderr":"cc: environment variable SOURCE_DATE_EPOCH must expand to a non-negative integer no greater than 253402300799, not \"bogus\"\n"}
+all checks passed
+
+===== test_link_hint.js =====
+ok   (1) undefined symbol matching the prefix carries the hint
+ok   (1) undefined symbol OUTSIDE the prefix stays bare (scope control)
+ok   (2) a hint from TU A annotates an undefined reference in TU B
+ok   (3) duplicate hint registrations collapse (message appears exactly once)
+ok   (4) missing message argument is a compile error
+ok   (4) empty prefix is a compile error naming the rule
+ok   (5) bare <git2.h> link failure names <git2_srclib.h> (the #632 hint)
+
+link-hint: PASS
+
+===== test_suite_record.js =====
+[33m⚠ record fixture: --filter=t1,t2 selected 2 of 4 files — this run covers PART of the suite.[0m
+--- record fixture (2 files, 1 jobs) ---
+ok   t1.js  0.0s
+ok   t2.js  0.0s
+
+record fixture: 2 passed, 0 failed  (0.0s)  [2/4 selected, 2/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+  ok   a filtered run records the filter verbatim
+  ok   half one records 2 of 4 selected and executed
+  ok   a single half is VISIBLY partial (recorded < total)
+  ok   half one names exactly one contributing run
+[33m⚠ record fixture: --filter=t3,t4 selected 2 of 4 files — this run covers PART of the suite.[0m
+--- record fixture (2 files, 1 jobs) ---
+ok   t3.js  0.0s
+ok   t4.js  0.0s
+
+record fixture: 2 passed, 0 failed, 2 carried from earlier run(s)  (0.0s)  [2/4 selected, 4/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+  ok   half two does not delete half one
+  ok   the merged record accounts for the whole suite
+  ok   carried results are TAGGED, not silently promoted to fresh
+  ok   both contributing runs are named, with their filters and counts
+--- record fixture (2 files, 2 resumed-pass skipped, 1 jobs) ---
+ok   t1.js  0.0s
+ok   t2.js  0.0s
+
+record fixture: 2 passed, 0 failed, 2 resumed  (0.0s)  [4/4 selected, 4/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+  ok   --resume re-runs CARRIED files and skips only the last run's own passes
+  ok   an unfiltered run records filter: null and covers the suite
+--- record fixture (4 files, 1 jobs) ---
+ok   t3.js  0.0s
+ok   t4.js  0.0s
+ok   t1.js  0.0s
+ok   t2.js  0.0s
+
+record fixture: 4 passed, 0 failed  (0.1s)  [4/4 selected, 4/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+  ok   a full unfiltered run carries nothing and names one run
+  ok   a full run leaves no carried tags behind
+[33mresume: t2.js NOT resumed — source changed since its passing log (source 2026-09-11T08:13:16.132Z > log 2026-09-11T08:13:01.132Z)[0m
+--- record fixture (1 files, 3 resumed-pass skipped, 1 jobs) ---
+ok   t2.js  0.0s
+
+record fixture: 1 passed, 0 failed, 3 resumed  (0.0s)  [4/4 selected, 4/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+  ok   a member edited since its passing log is EXECUTED, not resumed
+  ok   the three untouched members still resume in that same run
+--- record fixture (0 files, 4 resumed-pass skipped, 1 jobs) ---
+
+record fixture: 0 passed, 0 failed, 4 resumed  (0.0s)  [4/4 selected, 4/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+  ok   with nothing edited, every member resumes (resume is not a no-op)
+[33mresume: t3.js NOT resumed — no per-file log at ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/t3.js.log — no evidence of that pass in this artifact dir[0m
+--- record fixture (1 files, 3 resumed-pass skipped, 1 jobs) ---
+ok   t3.js  0.0s
+
+record fixture: 1 passed, 0 failed, 3 resumed  (0.0s)  [4/4 selected, 4/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+  ok   a member whose per-file log is gone is executed, not resumed
+--- record fixture (4 files, 1 jobs) ---
+ok   t1.js  0.0s
+FAIL t2.js  0.0s  → ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/t2.js.log
+     | RED-EVIDENCE-42
+     | 
+ok   t3.js  0.0s
+ok   t4.js  0.0s
+
+record fixture: 3 passed, 1 failed  (0.1s)  [4/4 selected, 4/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+  ok   the fixture red is a real red
+--- record fixture (4 files, 1 jobs) ---
+red log preserved → ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/t2.js.red1.log
+ok   t2.js  0.0s
+ok   t3.js  0.0s
+ok   t1.js  0.0s
+ok   t4.js  0.0s
+
+record fixture: 4 passed, 0 failed  (0.1s)  [4/4 selected, 4/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+  ok   the diagnosing re-run preserves the red log under .red1
+  ok   a passing member's log is overwritten freely (no archive)
+--- record fixture (4 files, 1 jobs) ---
+ok   t1.js  0.0s
+FAIL t2.js  0.0s  → ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/t2.js.log
+     | RED-EVIDENCE-43
+     | 
+ok   t3.js  0.0s
+ok   t4.js  0.0s
+
+record fixture: 3 passed, 1 failed  (0.1s)  [4/4 selected, 4/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+--- record fixture (4 files, 1 jobs) ---
+red log preserved → ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/t2.js.red2.log
+(node:4004) MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 SIGINT listeners added to [process]. MaxListeners is 10. Use emitter.setMaxListeners() to increase limit
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:4004) MaxListenersExceededWarning: Possible EventEmitter memory leak detected. 11 SIGTERM listeners added to [process]. MaxListeners is 10. Use emitter.setMaxListeners() to increase limit
+ok   t2.js  0.0s
+ok   t1.js  0.0s
+ok   t3.js  0.0s
+ok   t4.js  0.0s
+
+record fixture: 4 passed, 0 failed  (0.1s)  [4/4 selected, 4/4 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/artifacts/summary.json
+  ok   a second cycle archives to .red2 and leaves .red1 intact
+--- sched fixture (5 files, 5 jobs) ---
+ok   l1.js  0.4s
+ok   h1.js  0.7s
+ok   l2.js  0.5s
+ok   l3.js  0.5s
+ok   h2.js  0.8s
+
+sched fixture: 5 passed, 0 failed  (1.5s)  [5/5 selected, 5/5 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/sched-artifacts/summary.json
+  ok   two budget-sized heavies never co-run (RAM budget holds)
+  ok   a light co-runs beside a heavy (the two-pool effect, positive control)
+  ok   the weighted scheduler drops nothing: executed == declared, both ways
+  ok   the set comparator can fail (negative control)
+--- oversize fixture (1 files, 2 jobs) ---
+ok   h1.js  0.8s
+
+oversize fixture: 1 passed, 0 failed  (0.8s)  [1/1 selected, 1/1 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/big-artifacts/summary.json
+  ok   an entry heavier than the budget still runs alone (never below 1 job)
+--- hint fixture (5 files, 1 jobs) ---
+ok   h2.js  0.8s
+ok   l3.js  0.5s
+ok   l1.js  0.5s
+ok   h1.js  0.8s
+ok   l2.js  0.4s
+
+hint fixture: 5 passed, 0 failed  (2.9s)  [5/5 selected, 5/5 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-suite-record-rv9aVj/hint-artifacts/summary.json
+  ok   a fresh artifact dir schedules longest-first from the hints table
+
+suite-record: all checks passed
+
+===== test_artifact_freshness.js =====
+  ok   an artifact newer than every input reports no problem
+  ok   a newer file that `match` excludes does not raise a false stale
+  ok   an input newer than the artifact is reported STALE
+  ok   the message names WHICH artifact and WHICH input outran it
+  ok   the recursive walk finds an input in a SUBdirectory
+  ok   a missing artifact reports the rebuild command, as before
+  ok   an input that is not on disk is an ERROR, never a pass
+  ok   quake-renders.mjs imports and calls the freshness guard
+  ok   all three build artifacts are covered by the call
+  ok   no existence-only artifact loop survives in quake-renders.mjs
+
+artifact-freshness: all checks passed
+
+===== test_sleep_clamp.js =====
+block-FS flavor (Atomics.wait):
+  ok   positive control: usleep(50000) parks at least once
+  ok   usleep(50000): requests sum to 50 ms (unit conversion, no over-sleep)
+  ok   usleep(50000): first request <= asked (never over-requests)
+  ok   usleep(50000): requests strictly decrease (deadline-loop shape)
+  ok   usleep(50000): park count 5 <= 12 (log-bounded, no spin)
+  ok   usleep(0) x20 never parks
+  ok   usleep(500) parks exactly once (sub-ms tail passes whole)
+  ok   usleep(500) requests 0.5 ms (not floored to 1)
+  ok   usleep(0) returns 0
+  ok   nanosleep(0, 50ms): requests sum to 50 ms (unit conversion, no over-sleep)
+  ok   nanosleep(0, 50ms): first request <= asked (never over-requests)
+  ok   nanosleep(0, 50ms): requests strictly decrease (deadline-loop shape)
+  ok   nanosleep(0, 50ms): park count 5 <= 12 (log-bounded, no spin)
+  ok   nanosleep(0,0) x20 never parks (#146)
+  ok   nanosleep(0,0) returns 0
+  ok   nanosleep(0.5ms) parks exactly once
+  ok   nanosleep(0.5ms) requests 0.5 ms (not floored to 1)
+  ok   nanosleep(2s, 250ms): requests sum to 2250 ms (unit conversion, no over-sleep)
+  ok   nanosleep(2s, 250ms): first request <= asked (never over-requests)
+  ok   nanosleep(2s, 250ms): requests strictly decrease (deadline-loop shape)
+  ok   nanosleep(2s, 250ms): park count 9 <= 12 (log-bounded, no spin)
+  ok   sleep(1): requests sum to 1000 ms (unit conversion, no over-sleep)
+  ok   sleep(1): first request <= asked (never over-requests)
+  ok   sleep(1): requests strictly decrease (deadline-loop shape)
+  ok   sleep(1): park count 8 <= 12 (log-bounded, no spin)
+  ok   select(timeout=0) never parks
+  ok   select(timeout=50ms): requests sum to 50 ms (unit conversion, no over-sleep)
+  ok   select(timeout=50ms): first request <= asked (never over-requests)
+  ok   select(timeout=50ms): requests strictly decrease (deadline-loop shape)
+  ok   select(timeout=50ms): park count 5 <= 12 (log-bounded, no spin)
+native-fs flavor (setTimeout):
+  ok   positive control: usleep(50000) schedules exactly once
+  ok   usleep(50000) requests 50 ms
+  ok   usleep(0) x20 schedules 20 timers
+  ok   usleep(0) requests 0 ms every time (no 1 ms floor)
+  ok   usleep(500) requests 0.5 ms (not floored to 1)
+  ok   usleep(0) returns 0
+  ok   nanosleep(0, 50ms) schedules once
+  ok   nanosleep(0, 50ms) requests 50 ms
+  ok   nanosleep(0,0) x20 schedules 20 timers
+  ok   nanosleep(0,0) requests 0 ms every time (no 1 ms floor, #146)
+  ok   nanosleep(0.5ms) requests 0.5 ms (not floored to 1)
+  ok   nanosleep(2s, 250ms) requests 2250 ms
+
+All sleep-clamp checks passed
+
+===== test_bakeinput_sources.js =====
+  ok   a source outside the project dir is a bake input
+  ok   a header beside that source is a bake input (dir granularity)
+  ok   an `includes` dir outside the project dir is a bake input
+  ok   the closure does not swallow the whole repo
+  ok   a text-entry .md under os/ is a bake input (#634 red control)
+  ok   a .md beside a project source is a bake input (no extension carve-outs)
+  ok   *.img stays excluded (a bake OUTPUT, not an input)
+  ok   *.img.tmp-<pid> stays excluded (mkimage atomic-rename temp)
+  ok   defs: a sibling package source is a bake input (opts.defs)
+  ok   defs: a sibling definition edit is a bake input (opts.defs)
+  ok   defs: without opts.defs the sibling stays OUT of the closure
+  ok   vendor/cjson is inside the bake-input closure
+  ok   os/ runtime-only files stay excluded
+  ok   tests/run.js agrees on which os/ files are runtime-only
+  ok   every escaping source/include in the manifest closure is covered
+  ok   pkg: the definition file is an input
+  ok   pkg: compiler.js is an input (toolchain)
+  ok   pkg: tools/mkpkg.js is an input (tar/control encoding)
+  ok   pkg: os/os-common.js is an input (packageControl lives there)
+  ok   pkg: a project-dir source is an input
+  ok   pkg: a source reached through `deps` is an input
+  ok   pkg: a source OUTSIDE the project dir is an input (the 0354 hole)
+  ok   pkg: a `bin` blob is an input
+  ok   pkg: a `text` asset is an input (os/-relative)
+  ok   pkg: a `c` entry is an input (os/-relative)
+  ok   pkg: a `hdrs` header is an input
+  ok   pkg: a file under a `tree` entry is an input
+  ok   pkg: the native sibling overlay manifest is an input
+  ok   pkg: an extraInputs derivation input is an input (synthesized defs)
+  ok   pkg: a project-dir .md is an input (#634 — no extension carve-outs in the walk)
+  ok   pkg: *.img stays excluded (bake output)
+  ok   pkg: *.img.tmp-<pid> stays excluded (#634 — mkimage temp on the same walk)
+  ok   pkg: the os/ tree at large is NOT an input (narrow scope)
+  ok   pkg: a file referenced by nothing is NOT an input
+  ok   pkg: real defs never pull in the repo root or os/ wholesale
+  ok   pkg: every `files` entry kind in real defs has a leg here
+bake-input source closure OK
+
+===== test_sibling_resolve.js =====
+  ok   main clone resolves its own sibling
+  ok   a LINKED WORKTREE resolves the MAIN clone's sibling (the deploy-box shape)
+  ok   a RELATIVE gitdir pointer resolves too
+  ok   worktree falls back to the naive sibling when the main-clone sibling is absent
+  ok   a non-git tree uses the naive sibling
+  ok   env override wins over every discovered candidate
+  ok   env override is returned even when it does not exist (the caller fails loud)
+  ok   no candidate anywhere → null
+  ok   the REAL worktree/main-clone pair resolves coherently
+sibling resolution OK
+
+===== test_sibling_tests.js =====
+  ok   no sibling checkout -> status absent
+  ok   GUCOS_PACKAGES pointing nowhere -> invalid, naming the variable
+  ok   missing tests/ dir -> invalid
+  ok   missing manifest.json -> invalid
+  ok   unparseable JSON -> invalid
+  ok   non-object manifest -> invalid
+  ok   missing pattern -> invalid
+  ok   uncompilable pattern -> invalid
+  ok   members not an array -> invalid
+  ok   member with a path separator -> invalid
+  ok   member not matching the pattern -> invalid
+  ok   member with an UNKNOWN key -> invalid naming it (never ignored)
+  ok   member with a bad timeoutMs -> invalid
+  ok   RAM-class tag (light) refused — weights are local measurements
+  ok   exclude entry without an owner -> invalid
+  ok   unknown TOP-LEVEL key -> invalid
+  ok   valid manifest -> prefixed keys, absolute src, allowlisted opts through
+  ok   a linked-worktree ccRoot resolves the main clone's sibling
+--- sib-int (2 files, 2 jobs) ---
+ok   test_same.js  0.0s
+ok   sib/test_same.js  0.0s
+evidence: 2/2 selected members have logs post-dating the run start
+
+sib-int: 2 passed, 0 failed  (0.0s)  [2/2 selected, 2/2 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-sibtests-hMwKNL/suite/artifacts/summary.json
+  ok   6. same-basename members coexist: two records, distinct keys
+  ok   6a. …and distinct per-file logs, each holding its own output
+  ok   8a. evidence covers BOTH sources when both ran
+--- sib-int (3 files, 2 jobs) ---
+FAIL sib/test_red.js  0.0s  → ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-sibtests-hMwKNL/suite/artifacts/sib_test_red.js.log
+     | 
+ok   sib/test_same.js  0.0s
+ok   test_same.js  0.0s
+evidence: 3/3 selected members have logs post-dating the run start
+
+sib-int: 2 passed, 1 failed  (0.0s)  [3/3 selected, 3/3 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-sibtests-hMwKNL/suite/artifacts/summary.json
+  ok   7. a failing sibling member fails the suite
+--- sib-int (1 files, 2 jobs) ---
+ok   test_same.js  0.0s
+[31mEVIDENCE sib/test_same.js: NO per-file log — the runner never executed it[0m
+
+sib-int: 1 passed, 1 failed  (0.0s)  [1/1 selected, 1/1 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-sibtests-hMwKNL/suite/artifacts2/summary.json
+  ok   8. an expected-but-never-run sibling member is an EVIDENCE failure
+--- sib-int (1 files, 2 jobs) ---
+ok   sib/test_same.js  0.0s
+[31mEVIDENCE test_same.js: NO per-file log — the runner never executed it[0m
+
+sib-int: 1 passed, 1 failed  (0.0s)  [1/1 selected, 1/1 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-sibtests-hMwKNL/suite/artifacts3/summary.json
+[33mresume: sib/test_same.js NOT resumed — source changed since its passing log (source 2026-09-11T08:13:37.257Z > log 2026-09-11T08:12:37.257Z)[0m
+--- sib-int (1 files, 2 jobs) ---
+ok   sib/test_same.js  0.0s
+[31mEVIDENCE test_same.js: NO per-file log — the runner never executed it[0m
+
+sib-int: 1 passed, 1 failed  (0.0s)  [1/1 selected, 1/1 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/cc-sibtests-hMwKNL/suite/artifacts3/summary.json
+  ok   9. an edited sibling source is re-executed under --resume, never resumed
+
+all checks passed
+
+===== test_diff_rules.js =====
+ok   #764 shared frame fixture gates both OS hosts
+ok   PY_CATEGORIES is the run.py corpus (18+ categories, upstream corpus present) — 19 categories
+ok   compiler.js is not ignored/unmapped — todos, unit, kernel, blockfs, host, sweep, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, disw, sourcemap, tcc, libc, fuzz, fakegit
+ok   compiler.js selects micropython-upstream (the suite that caught 0356)
+ok   compiler.js selects EVERY run.py category — all 19
+ok   compiler.js selects unit
+ok   compiler.js selects kernel
+ok   compiler.js selects blockfs
+ok   compiler.js selects host
+ok   compiler.js selects sweep
+ok   host.js selects micropython-upstream
+ok   host.js selects every run.py category that executes wasm — 17 categories
+ok   host.js selects unit
+ok   host.js selects blockfs
+ok   host.js selects kernel
+ok   host.js selects sweep
+ok   host.js selects host
+ok   host.js excludes disw (recorded: never executes wasm)
+ok   host.js excludes sourcemap (recorded: never executes wasm)
+ok   os/ runtime-only list is the two per-host sets, nothing else — os.html, osk.js, compositor.js, kernel-worker.js, process-worker.js, boot.js
+ok   os/os.html exists (a stale exception silently pre-narrows a future file)
+ok   os/osk.js exists (a stale exception silently pre-narrows a future file)
+ok   os/compositor.js exists (a stale exception silently pre-narrows a future file)
+ok   os/kernel-worker.js exists (a stale exception silently pre-narrows a future file)
+ok   os/process-worker.js exists (a stale exception silently pre-narrows a future file)
+ok   os/boot.js exists (a stale exception silently pre-narrows a future file)
+ok   os/os.html selects sweep — todos, sweep, host
+ok   os/os.html does NOT select kernel (headless host cannot observe it) — todos, sweep, host
+ok   os/osk.js selects sweep — sweep
+ok   os/osk.js does NOT select kernel (headless host cannot observe it) — sweep
+ok   os/compositor.js selects sweep — sweep
+ok   os/compositor.js does NOT select kernel (headless host cannot observe it) — sweep
+ok   os/kernel-worker.js selects sweep — todos, sweep
+ok   os/kernel-worker.js does NOT select kernel (headless host cannot observe it) — todos, sweep
+ok   os/process-worker.js selects sweep — sweep
+ok   os/process-worker.js does NOT select kernel (headless host cannot observe it) — sweep
+ok   os/os.html selects host (tests/serve/test_first_run.js pins the served path)
+ok   os/boot.js selects kernel — kernel
+ok   os/boot.js does NOT select sweep (no browser test loads it) — kernel
+ok   the os/ walk found a real tree (an empty walk makes the next two vacuous) — 177 shared paths
+ok   every OTHER os/ path still selects kernel — 177 paths
+ok   every OTHER os/ path still selects sweep — 177 paths
+ok   os/wm.c keeps BOTH heavy suites — todos, kernel, sweep
+ok   os/image.json keeps BOTH heavy suites — kernel, sweep
+ok   os/term/term.c keeps BOTH heavy suites — kernel, sweep
+ok   os/win32/user32.c keeps BOTH heavy suites — todos, kernel, sweep
+ok   os/ksvc/ksvc.c keeps BOTH heavy suites — kernel, sweep
+ok   os/gcode/gcode.c keeps BOTH heavy suites — kernel, sweep
+ok   os/os-common.js keeps BOTH heavy suites — todos, kernel, sweep, host
+ok   os/keys.h keeps BOTH heavy suites — kernel, sweep
+ok   BAKED_DOCS derivation parsed os/image.json — 15 file(s)
+ok   derivation finds os/gcode/GCODE.md (an image.json bin entry)
+ok   derivation finds os/doc/sdl-gucos.md (an image.json bin entry)
+ok   derivation finds vendor/libgit2/deps/pcre2/LICENCE.md (a tree-payload doc)
+ok   every derived path is docs-shaped (IGNORE would drop it) — 15 paths
+ok   os/doc/README.md prices kernel + sweep — kernel, sweep
+ok   os/doc/debugging.md prices kernel + sweep — kernel, sweep
+ok   os/doc/editor.md prices kernel + sweep — kernel, sweep
+ok   os/doc/gcode.md prices kernel + sweep — kernel, sweep
+ok   os/doc/git.md prices kernel + sweep — kernel, sweep
+ok   os/doc/packages.md prices kernel + sweep — todos, kernel, sweep
+ok   os/doc/publish.md prices kernel + sweep — todos, kernel, sweep
+ok   os/doc/sdl-api-index.md prices kernel + sweep — kernel, sweep
+ok   os/doc/sdl-gucos.md prices kernel + sweep — kernel, sweep
+ok   os/doc/toolchain.md prices kernel + sweep — kernel, sweep
+ok   os/foundation/README.md prices kernel + sweep — todos, kernel, sweep
+ok   os/gcode/GCODE.md prices kernel + sweep — kernel, sweep
+ok   vendor/cpython/Lib/ctypes/macholib/README.ctypes prices kernel + sweep — kernel, sweep, projects
+ok   vendor/cpython/Lib/site-packages/README.txt prices kernel + sweep — kernel, sweep, projects
+ok   vendor/libgit2/deps/pcre2/LICENCE.md prices kernel + sweep — kernel, sweep, fakegit, projects
+ok   plain docs price NOTHING
+ok   plain docs are ignored, not unmapped — 4 ignored, 0 unmapped
+ok   the ext/ walk found the real tree (an empty walk makes the next check vacuous) — 21 files
+ok   every ext/ file selects ext — 21 files
+ok   every ext/ file selects unit — 21 files
+ok   every ext/ file selects libc — 21 files
+ok   libc-ext.js selects ext+unit+libc — ext, unit, libc
+ok   tools/build-libc-ext.js selects ext+unit+libc — ext, unit, libc
+ok   TIERS is exactly {smoke, diff, full} — smoke, diff, full
+ok   no tier name collides with a suite name (the CLI token would be ambiguous)
+ok   every registered suite is in ALL_SUITES (a suite missing here silently drops from all/full) — 26 suites
+ok   every ALL_SUITES entry is a registered suite
+ok   full tier == ALL_SUITES (set equality — full is the ship gate and cannot narrow) — 26 suites
+ok   diff tier is dynamic (planFromDiff-driven, never a static list)
+ok   every smoke suite is a registered suite — todos, netsurf-patch, unit, host, blockfs, disw, kernel
+ok   smoke is a proper nonempty subset of the registry — 7 of 26
+ok   smoke includes kernel (the OS-coverage leg)
+ok   smoke omits the sweep (recorded: browser coverage belongs to diff/full)
+ok   smoke filter target kernel is in smoke.suites (a filter for an unselected suite is dead)
+ok   smoke filter target kernel is a suite-runner suite with a filterable dir — node tests/kernel/run.js
+ok   smoke kernel filter token "test_kernel." matches >=1 on-disk file (a dead token silently shrinks the tier) — 1 file(s)
+ok   smoke kernel filter token "test_tty" matches >=1 on-disk file (a dead token silently shrinks the tier) — 2 file(s)
+ok   smoke kernel filter token "test_pipes" matches >=1 on-disk file (a dead token silently shrinks the tier) — 3 file(s)
+ok   smoke kernel filter token "test_fs_e2e" matches >=1 on-disk file (a dead token silently shrinks the tier) — 1 file(s)
+ok   smoke kernel filter token "test_wm." matches >=1 on-disk file (a dead token silently shrinks the tier) — 1 file(s)
+ok   smoke kernel filter token "test_strace_e2e" matches >=1 on-disk file (a dead token silently shrinks the tier) — 1 file(s)
+ok   smoke kernel filter selects test_strace_e2e.js (the real fixture-boot leg)
+ok   smoke kernel filter selects test_kernel.js (the SAB protocol core)
+ok   smoke kernel filter does NOT select test_os_boot.js (the ~710s bake-path test)
+ok   tests/run.js selects host (the suite holding this guard)
+
+All checks passed
+
+===== test_browser_preflight.js =====
+== browser install pre-flight (#559) ==
+  ok   precondition: no ambient playwright above $TMPDIR
+  ok   pinned install in tests/browser/node_modules passes
+  ok   OUTCOME-based: node_modules missing but an ancestor resolves the PINNED version passes
+  ok   a non-exact pin (caret range) enforces nothing
+  ok   worktree + drifted ancestor install REFUSES with the exact ln -s fix
+  ok   fresh worktree with NO resolvable playwright also refuses with the symlink fix
+  ok   a DANGLING node_modules symlink counts as missing
+  ok   drifted install IN tests/browser/node_modules refuses with the pnpm fix, no symlink talk
+  ok   a CLONE (not a worktree) missing node_modules gets the pnpm fix, no ln -s to nowhere
+  ok   CC_NO_PLAYWRIGHT_PIN=1 skips the version check when a playwright exists
+  ok   CC_NO_PLAYWRIGHT_PIN=1 does NOT excuse a missing playwright
+  ok   checkPlaywrightPin throws on a drifted resolution, silent on a pinned one
+  ok   browserPreflight stands down when the sweep is not selected
+  ok   browserPreflight refuses a broken tree whenever sweep is in the set
+  ok   no suite in the registry carries `optional` (#477)
+  ok   classify() hard-fails a spawn failure — never a skip (#477)
+  ok   classify() marks a heavy suite exit 3 contended — status stays literally "fail" (#561)
+  ok   classify() exit 3 on a NON-heavy suite, and exit 1 on a heavy one, stay plain fails (#561)
+  ok   exactly the two heavy suites carry heavyLock in the registry (#561)
+  ok   mainTreeOf: worktree pointer file → the main clone; a clone → null
+  ok   pinnedPlaywright reads the fixture pin; resolvedPlaywright reports path+version
+  ok   this checkout: pre-flight verdict agrees with the launch-time pin check
+
+all ok
+
+===== test_host_preflight.js =====
+  ok   leg 1: refused at exit 2 with the [host-health] marker
+  ok   leg 1: names the OS instrument
+  ok   leg 1: the override is documented IN the refusal, with its cost
+  ok   leg 1: NO suite ran (no banner)
+  ok   leg 1: NO summary written (absent = did not finish)
+  ok   leg 1: a per-runId refusal record exists
+  ok   leg 1: the record is classified environmental, with reasons + both samples
+  ok   leg 1: the record names what recovery reaped (attempted BEFORE refusing)
+  ok   leg 2: healthy fake → gate runs, exit 0
+  ok   leg 2: summary records the preflight verdict
+  ok   leg 2: not truncated
+  ok   leg 3: real-host preflight stays quiet on this box (exit 0)
+  ok   leg 3: real preflight verdict recorded
+  ok   leg 4: CC_NO_HOST_HEALTH=1 runs a "critical" host to completion
+  ok   leg 4: the disablement is announced
+  ok   leg 4: summary records the disablement
+  ok   leg 4: samples still recorded (the fake rode through)
+  ok   leg 5: warn fake → gate still runs, exit 0
+  ok   leg 5: the warning is loud and names the tier
+  ok   leg 5: summary records the warn verdict
+  ok   leg 6: truncated gate exits nonzero (rule 5 stays red)
+  ok   leg 6: suite 1 ran and passed
+  ok   leg 6: suite 2 NEVER started (no banner)
+  ok   leg 6: the truncation is loud and names the reason
+  ok   leg 6: the sample map is EXACT (no exhaustion, no under-consumption)
+  ok   leg 6: 🔴 the truncated row is literally fail/host-degraded/DID NOT RUN
+  ok   leg 6: the row that ran keeps its own honest pass
+  ok   leg 6: summary.truncated names the stop point and reasons
+  ok   leg 6: the run STARTED, so it IS summarized + archived (contrast the preflight refusal)
+  ok   leg 6: HOST tag on the verdict line
+  ok   leg 6b: after-row critical truncates — gate exits nonzero
+  ok   leg 6b: suite 2 never started
+  ok   leg 6b: exact map (seam quiet)
+  ok   leg 6b: the COMPLETED row keeps its own honest result (it really ran)
+  ok   leg 6b: the remainder is fail/host-degraded/DID NOT RUN
+  ok   leg 6b: truncated.at names the first unrun suite
+  ok   leg 6c-a: all work ran — the gate exits by its results, with NO phantom truncation
+  ok   leg 6c-a: summary declares NO truncation (artifact self-consistent)
+  ok   leg 6c-a: the py batch row keeps its honest result
+  ok   leg 6c-a: exact map (seam quiet)
+  ok   leg 6c-b: py-after critical truncates the unrun kernel row — exit 1
+  ok   leg 6c-b: the kernel suite NEVER started
+  ok   leg 6c-b: the truncated row is fail/host-degraded/DID NOT RUN
+  ok   leg 6c-b: the decision came from the AFTER-sample (availGb 0.4, not the next before-sample's 0.3)
+  ok   leg 6c-b: truncated.at names the unrun suite
+  ok   leg 6c-b: the py row keeps its honest pass
+  ok   leg 6c-b: exact map (seam quiet)
+  ok   leg 8: an exhausted fake array crashes the gate loudly
+  ok   leg 8: …naming what stickiness would have hidden
+  ok   leg 8: the crashed gate released its lock
+  ok   leg 8: an under-consumed fake array is reported at exit
+  ok   leg 7: unmeasured host → gate runs (absence never refuses)
+  ok   leg 7: the unmeasured state is said out loud
+PASS
+
+===== test_gate_history.js =====
+  ok   leg 1: todos gate passes
+  ok   leg 1: summary carries a runId
+  ok   leg 1: summary carries boundary host samples
+  ok   leg 1: per-row host samples recorded
+  ok   leg 1: no hostSuspect on a passing row
+  ok   leg 1: history/<runId>/summary.json archived
+  ok   leg 1: the suite transcript was tee'd into history
+  ok   leg 1: the gate lock was released on exit
+  ok   leg 2: second run into the same dir passes
+  ok   leg 2: distinct runId
+  ok   leg 2: both runs present in history
+  ok   leg 2: run 1's archived summary is byte-identical after the retry
+  ok   leg 3: refused at exit 2 with the [gate-lock] marker
+  ok   leg 3: the refusal names the holder pid
+  ok   leg 3: NO suite ran (no suite banner)
+  ok   leg 3: summary untouched
+  ok   leg 3: no new history entry
+  ok   leg 3: the LIVE holder's lock survives the refused contender
+  ok   leg 3a: driver completed its 300 acquire/release cycles
+  ok   leg 3a: the observer really observed the lock (anti-vacuity: present >= 20 reads)
+  ok   leg 3a: 🔴 the lock was NEVER observable without its holder JSON (atomic publication)
+  ok   leg 3b: race driver completed
+  ok   leg 3b: concurrent dispatchers — exactly one ran, one refused
+  ok   leg 3b: the loser refused via the gate-lock, not some other exit-2 path
+  ok   leg 3b: the winner released the lock
+  ok   leg 3b: the winner's summary is valid
+  ok   leg 3c: gate completes over aged-out garbage (steals past the grace)
+  ok   leg 3c: the steal is LOUD and names the age + grace
+  ok   leg 3c: the REPORTED age proves the grace was waited out (>= 2s)
+  ok   leg 3d: a perpetually-refreshed garbage lock is REFUSED, not waited on forever
+  ok   leg 3d: …within the acquisition budget (bounded, not the harness timeout)
+  ok   leg 3d: the give-up is LOUD and names the wait
+  ok   leg 3d: NO suite ran
+  ok   leg 3e: a live non-dispatcher pid is treated as PID reuse — the gate runs
+  ok   leg 3e: the steal is LOUD and names the mechanism
+  ok   leg 3e: lock released after the run
+  ok   leg 3f: an AGED but VERIFIED live dispatcher still REFUSES (never robbed by the age cap)
+  ok   leg 3f: no PID-reuse steal message fired
+  ok   leg 4: a dead holder's lock is stolen and the gate runs
+  ok   leg 4: lock released again
+  ok   leg 5: gate still passes over an overflowing history
+  ok   leg 5: pruned to HISTORY_KEEP (20)
+  ok   leg 5: the newest run survived pruning
+  ok   leg 5: the OLDEST seeds are what got dropped
+  ok   leg 6: --diff on a bad ref refuses at exit 2
+  ok   leg 6: the refusal carries git's own stderr
+  ok   leg 6: …and names the empty-green hazard
+  ok   leg 6: a valid ref still plans normally
+  ok   leg 7: a failing row under pressure 4 gets hostSuspect
+  ok   leg 7: 🔴 the label NEVER touches status — the row is still literally 'fail'
+  ok   leg 7: a PASSING row under the same degradation gets NO label
+  ok   leg 7: boundary samples recorded on every row
+PASS
+
+===== test_heavylock_gate.js =====
+  ok   gate() [kernel]: canonical run-level record untouched
+  ok   leg 1: a contended gate exits 3 with the [heavy-lock] marker
+  ok   leg 1: the refusal NAMES the holder
+  ok   leg 1: NO suite ran (no suite banner)
+  ok   leg 1: build/test-run/summary.json untouched (absent summary = did not finish)
+  ok   gate() [kernel --dry-run]: canonical run-level record untouched
+  ok   leg 2: --dry-run exits 0 under a held lock
+  ok   leg 2: the plan printed
+  ok   gate() [netsurf-patch]: canonical run-level record untouched
+  ok   leg 3: a light-only gate runs to completion under a held lock
+  ok   gate() [kernel --filter=__no_such_test__]: canonical run-level record untouched
+  ok   gate() [kernel --filter=__no_such_test__]: restored build/test-kernel/summary.json
+  ok   leg 4: gate over a free lock runs the kernel row to a pass
+  ok   leg 4: the gate released its reservation on exit
+  ok   leg 4: the child wrote its summary into its --out dir
+
+heavylock gate: PASS
+
+===== test_python_resolve.js =====
+== host-python resolver (#483) ==
+  ok   no venv + no override REFUSES despite an ambient $PATH python3
+  ok   healthy venv resolves to ITS interpreter, loose-pin match (3.12 vs 3.12.13)
+  ok   $PYTHON override wins over a healthy venv, used verbatim
+  ok   a dead $PYTHON override REFUSES — never falls through to the healthy venv
+  ok   version drift REFUSES naming uv venv --clear (the system-python-in-a-venv shape)
+  ok   a present-but-broken .venv REFUSES — claims the slot, never routed around
+  ok   no pin file → venv accepted regardless of version (nothing to enforce)
+  ok   worktree read-through: a bare worktree resolves the main clone's .venv
+  ok   worktree with NO venv anywhere: refusal names the MAIN tree's uv venv command
+  ok   a worktree's OWN .venv outranks the main clone's (explicit beats read-through)
+  ok   pythonPreflight skips when no run.py-backed suite is selected
+  ok   pythonPreflight refuses (message-bearing) for a py suite on a bare tree
+  ok   versionMatchesPin: major.minor prefix semantics, no substring accidents
+  ok   pinnedPython/venvPythonVersion read the real files (stdlib `version =` key too)
+  ok   this tree resolves to a working interpreter matching .python-version
+
+all ok
+
+===== test_launcher_convention.js =====
+  ok   cpython-clang:bin/cpython-clang: no command substitution ($( ) outside comments
+  ok   cpython-clang:bin/cpython-clang: no backtick substitution outside comments
+  ok   cpython-clang:bin/cpython-clang: handles both plant sites (/opt + /usr/opt) or neither
+  ok   doom:doom: no command substitution ($( ) outside comments
+  ok   doom:doom: no backtick substitution outside comments
+  ok   doom:doom: handles both plant sites (/opt + /usr/opt) or neither
+  ok   etl-clang:etl-tests: no command substitution ($( ) outside comments
+  ok   etl-clang:etl-tests: no backtick substitution outside comments
+  ok   etl-clang:etl-tests: handles both plant sites (/opt + /usr/opt) or neither
+  ok   quake:quake: no command substitution ($( ) outside comments
+  ok   quake:quake: no backtick substitution outside comments
+  ok   quake:quake: handles both plant sites (/opt + /usr/opt) or neither
+  ok   sent:slides: no command substitution ($( ) outside comments
+  ok   sent:slides: no backtick substitution outside comments
+  ok   sent:slides: handles both plant sites (/opt + /usr/opt) or neither
+  ok   stl4:stl4-demo: no command substitution ($( ) outside comments
+  ok   stl4:stl4-demo: no backtick substitution outside comments
+  ok   stl4:stl4-demo: handles both plant sites (/opt + /usr/opt) or neither
+  ok   tinyrenderer-clang:tinyrenderer-demo: no command substitution ($( ) outside comments
+  ok   tinyrenderer-clang:tinyrenderer-demo: no backtick substitution outside comments
+  ok   tinyrenderer-clang:tinyrenderer-demo: handles both plant sites (/opt + /usr/opt) or neither
+  ok   derived launcher set is non-empty (found 7 across 45 packages)
+
+launcher convention: PASS
+
+===== test_source_packages.js =====
+  ok   gucman-sources exists (image derivation)
+  ok   gucman-sources version is the image version
+  ok   legacy image summary keeps the baked-history marker used by mkpkg
+  ok   gucman-sources closure carries gucman.c + its project + cJSON
+  ok   gcode-sources exists (package derivation — #578 pulled gcode out of the image)
+  ok   gcode-sources version uses its explicit companion lineage
+  ok   gcode-sources closure carries gcode.c + its project + cJSON
+  ok   lua-sources exists (package derivation)
+  ok   lua-sources version is the lua package version
+  ok   lua-sources closure carries the interpreter source
+  ok   win32 (source-only package) gets NO unit
+  ok   a data package (bin-only def) gets NO unit
+  ok   netsurf-demos (seed package) gets NO unit
+  ok   no gated (-clang/-rust) def gets a unit
+  ok   every unit is uniform (name/minBase/srclib; bin-mirror or builtin-content files)
+  ok   synthesis is deterministic
+  ok   libc-sources exists (builtin derivation)
+  ok   libc-sources version is the image version
+  ok   libc-sources inputs name the literal-map files
+  ok   libc-sources carries every merged header BYTE-EQUAL to the compiler map
+  ok   libc-sources carries every builtin .c unit BYTE-EQUAL to the compiler map
+  ok   libc-ext.js yields a non-empty ext .c unit list (parse sanity)
+  ok   libc-sources carries every ext .c unit BYTE-EQUAL to libc-ext.js (14 units)
+  ok   sourcePackageDefs without CompilerJS fails loud (never a silently smaller index)
+  ok   validateSrclibShape accepts a payload-root namespace
+  ok   validateSrclibShape still refuses a bad namespace
+  ok   validateSrclibShape still refuses an escaping dir
+  ok   packageControl carries the payload-root srclib
+  ok   fold plants the /usr/src browse twin at the payload root
+  ok   fold adds the /usr/src tier dir
+  ok   fold refuses a src dir not in the payload
+  ok   mkpkg builds cc-sources
+  ok   index entry has minBase 0
+  ok   payload carries the closure at repo paths
+  ok   control.json carries srclib {src:{cc:"."}}
+  ok   #617: gcode closure carries the busybox template idiom
+  ok   #617: doom closure carries its includer-relative sibling headers
+  ok   #617: 🔴 gcode REBUILDS from payload-only inputs (the dogfood loop, hermetic)
+  ok   #617: a template include rides the closure
+  ok   #617: the follower is TRANSITIVE (template → nested include)
+  ok   #617: an -I-resolved non-header include rides the closure
+  ok   #617: an include escaping the source root is skipped, not shipped
+  ok   #617: the synthetic unit also rebuilds payload-only
+
+all ok
+
+===== test_stdinc_fold.js =====
+  ok   merged map carries the builtin surface (stdio.h/stdlib.h/sys/stat.h/SDL3/SDL.h)
+  ok   merged map carries the ext headers (libc-ext.js loaded)
+  ok   every merged-map header is planted at /usr/include, byte-equal (hazard 1)
+  ok   nothing EXTRA is planted (the set is exactly the map)
+  ok   subdirs derive parent-before-child
+  ok   the input manifest is not mutated
+  ok   a pre-existing entry at a header path throws
+  ok   a pre-existing entry squatting a derived dir path throws
+  ok   srclib package tops (png.h) and baked headers (stdio.h) coexist
+  ok   claim() stays silent across ALL shipped packages (hazard 2)
+  ok   a merged map missing the ext headers fails the bake loud
+
+all ok
+
+===== test_netbridge_wrapper.js =====
+--- leg A: bridge-level answers are named, never "unreachable"
+  ok   400: message names HTTP 400 and a RUNNING bridge
+  ok   400: never "unreachable", never ENETUNREACH
+  ok   400: bridge body text carried into the message
+  ok   403: EACCES + names HTTP 403
+  ok   502: EIO + upstream error text, not "unreachable"
+  ok   200 without x-guc-status: called out as not the bridge protocol
+--- leg B: a genuinely dead bridge keeps unreachable/ENETUNREACH
+  ok   dead bridge: ENETUNREACH kept
+  ok   dead bridge: message kept (unreachable + is net-bridge running)
+  ok   dead bridge: undici cause surfaced (ECONNREFUSED), not a bare "fetch failed"
+--- leg C: non-Latin-1 crosses the hop; invalid input is EINVAL, not bridge-blame
+  ok   non-Latin-1 url + headers: the bridged fetch SUCCEEDS
+  ok   x-guc-url is the ASCII URL serialization
+  ok   every x-guc-* wire value is pure ASCII
+  ok   header JSON round-trips losslessly (astral pair included)
+  ok   unparsable url: EINVAL naming the url
+  ok   unparsable url: not labelled unreachable
+  ok   non-token method: EINVAL naming the method
+--- leg D: the REAL bridge — clean 413, CORS-readable origin refusal
+  ok   over-cap body: named HTTP 413 from a RUNNING bridge
+  ok   over-cap body: never "unreachable"/ENETUNREACH
+  ok   real bridge: disallowed-origin preflight answers 204
+  ok   real bridge: origin refusal is 403 + CORS echo + actionable text
+--- leg E (#391): same-origin passthrough / off-origin absolutization / headless subset
+  ok   bridge ON + same-origin relative url: the BASE fetch ran, with the caller's exact url
+  ok   ...and the bridge never saw it
+  ok   bridge ON + same-origin absolute url: still the base fetch
+  ok   bridge ON + off-origin protocol-relative url: bridged, x-guc-url absolutized
+  ok   ...via the bridge endpoint, not passthrough
+  ok   bridge ON + off-origin absolute url: bridged verbatim
+  ok   opaque ('null') location origin: no passthrough, goes bridged
+  ok   bridge OFF: exact-args tail call to base, url untouched
+  ok   no location + relative url: loud EINVAL naming the url (subset invariant)
+  ok   no location + relative url: nothing fetched, bridge never saw it
+  ok   no location + absolute url: bridged as ever
+all netbridge-wrapper checks passed
+
+===== test_browser_out_dirs.js =====
+  ok   positive control: the original os-vt2zoom OUT_DIR line is flagged
+  ok   control: a comment mentioning logs/ is not flagged
+  ok   tests/browser/build-doom.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/build-quake.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/doom-debug.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/doom-extract.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/doom-motion-check.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/doom-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/lib/doom-artifacts.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/lib/fresh-artifacts.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/lib/os-harness.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/nsdemos-interact.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/nsdemos-paint-probe.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/oc-probe-run.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-abort-backtrace.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-aero.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-boots.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-cairo.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-clang.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-clipboard.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-compositor.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-ctxmenu.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-debugtext.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-deck.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-devloss.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-doom.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-doompage-motion.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-doompage-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-drop.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-edittab.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-egress.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-fileman.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-foundation.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-frame-lifecycle.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-fsbtn.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-gamepad.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-gcode.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-gdi.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-git-cli.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-git-net.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-gpubox.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-gucman.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-harness-unit.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-hires.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-hush-errexit.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-keybind.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-loopguard.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-mgpp.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-minimal.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-mobile2x.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-netbridge-https.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-null-trap.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-objc.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-osk.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-overview.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-paint.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-paste-mac.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-pollball.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-present.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-quake.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-recycle.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-rendertarget.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-rust.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-sameboy.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-saver.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-scale.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-screen.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-sedit.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-shell.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-small.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-snap.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-sounds.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-spawn-build.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-spawntrace.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-sweep.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-term.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-touch.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-undo.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-user32.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-vsync.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-vt.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-vt1mobile.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-vt2zoom.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-warmpool.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-wheel.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-winmine.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/os-wm.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/profile-spawn.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/quake-extract.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/quake-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/safari-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-blend-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-geometry-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-input-check.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-render-batch.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-render-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-scalemode-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-scalemode-safari.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-scalemode-toggle.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-scancode-check.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-shifted-keysym-check.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-wheel-check.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl-window-title.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/sdl3webgpu-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/server.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/shots-0210.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/test-blockfs.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-blend-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-cleanup-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-compute-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-const-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-depth-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-depthbias-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-dynoffset-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-error-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-index-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-mapwrite-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-mrt-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-msaa-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-readback-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-safari.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-sampler-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-stencil-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-storagetex-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-surfcfg-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-texbind-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-texfmt-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-texture-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-texview-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-uniform-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-vbuf-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-vfmt-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-wholesize-renders.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/webgpu-worker-probe.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   tests/browser/wm-spikes.mjs: no committed-dir (logs/, todos/, docs/, old/) path in a string literal
+  ok   scanned set is plausibly complete (found 134 .mjs files, expect > 30)
+  ok   scanned set includes os-vt2zoom.mjs (the #399/#183 regression targets)
+  ok   scanned set includes os-hires.mjs (the #399/#183 regression targets)
+
+browser out-dirs: PASS
+
+===== test_manifest_refs.js =====
+  ok   RED: a launcher invoking an absent command fails
+  ok   RED: a dangling symlink target fails
+  ok   RED: an absolute sealed-territory argument that is not baked fails
+  ok   RED: a dangling shebang interpreter fails
+  ok   RED: an openwith value naming an absent command fails
+  ok   RED: a sounds-scheme WAV that is not baked fails
+  ok   RED: a dangling command inside `sh -c "…"` fails (recursed body)
+  ok   RED: the literal v223 sameboy launchers injected into the real manifest fail 3x
+  ok   GREEN: the real manifest (raw = the minimal/deploy shape) is clean
+  ok   GREEN: the real manifest with all non-gated packages folded is clean
+  ok   GREEN: every single-package fold is clean (partial-fold shapes)
+  ok   negative control: /usr/bin/python -> cmdalt is still in the manifest (green not vacuous)
+  ok   negative control: the minesweeper Desktop sample is still in the manifest
+  ok   negative control (#394): shell functions and fd redirects are not flagged
+  ok   RED (#394): a dangling command inside a function body is still flagged
+  ok   RED (#394): a call to a never-defined function-looking name is still flagged
+  ok   negative control: the cmdalt seed (package-name values) is exempt
+  ok   ragged: one dangling command in a keyword-heavy script yields exactly ONE error
+  ok   bakeSystemImage throws on a dangling reference before doing any work
+manifest referential-integrity checks OK
+
+===== test_gcode_orientation.js =====
+  ok   GCODE.md is baked at /usr/share/gcode/GCODE.md from os/gcode/GCODE.md
+  ok   every file path GCODE.md names is a manifest key
+  ok   RED control: a dangling doc path fails the path check
+  ok   cc accepts -o/-g, refuses -Wall/-O2/-c/-std/-l by name (#710), emits wasm
+  ok   every wmctl verb GCODE.md names exists in wmctl.c usage
+  ok   the doc carries the real shot shape (SID first), wmctl.c still has it
+  ok   RED control: the pre-#505 wrong claim is caught by the shape check
+  ok   exit 69 / callbacks / software-renderer claims agree with sdl-gucos.md
+  ok   libm: sqrtf/fabsf/floorf/sinf compile with only #include <math.h>
+  ok   absent symbols: SDL_snprintf, SDLK_r, SDLK_R all fail as undeclared
+  ok   the documented replacements compile: char-literal keys, scancodes, snprintf, SDL_Log
+  ok   RED control: the absence checker flags a symbol that DOES exist
+  ok   RED control: the compiles checker fails on a truly absent symbol
+  ok   every special-key SDLK_* compiles; the ASCII tier matches the chars event.key.key carries
+  ok   the boundary: digit/punctuation/keypad SDLK_* names stay absent
+  ok   the full SDLK_ surface is exactly the set the doc boundary describes
+  ok   RED control: a drifted SDLK value fails the pin compile
+  ok   RED control: the surface comparator flags an added or a removed constant
+
+All gcode-orientation checks passed
+
+===== test_unknown_type_diag.js =====
+  ok   case B: block-scope static reports unknown type name 'Zzz'
+  ok   case C: file-scope static reports unknown type name 'Zzz'
+  ok   case D: file-scope bare reports unknown type name 'Zzz'
+  ok   case E: qualified local reports unknown type name 'Zzz'
+  ok   case pointer declarator reports unknown type name 'Zzz'
+  ok   case function declaration reports unknown type name 'Zzz'
+  ok   case A (bare block-scope statement) keeps its expression-path 'Undeclared identifier'
+  ok   a genuinely bare declarator keeps the implicit-int wording
+  ok   positive control: a real typedef name still compiles (the branch is not overzealous)
+
+All unknown-type-diag checks passed
+
+===== test_null_trap.js =====
+all null-trap checks passed
+
+===== test_async_lifecycle.js =====
+Async lifecycle evidence: /Users/jku/git/c-compiler-small-callbacks/build/async782/node-1789114559572-YG2Uuo
+async lifecycle: JSPI and synchronous callback checks passed
+
+===== test_callback_capture.js =====
+PASS callback capture C table mutation, re-registration, zero cancellation: jspi
+PASS Small direct refs: frames, replacement, null, timers, exit, errors, teardown: jspi
+PASS callback capture C table mutation, re-registration, zero cancellation: sync
+PASS Small direct refs: frames, replacement, null, timers, exit, errors, teardown: sync
+
+===== test_frame_lifecycle.js =====
+frame lifecycle: trap, failed drain, explicit exit, clean stop passed
+
+===== test_abort_backtrace.js =====
+  ok abort
+  ok assert
+  ok exit
+  ok handled
+  ok closed
+  ok unit assert_fail: exact predicate/file/line, stdout, exit and new unsymbolized abort chain
+
+===== test_debug_image.js =====
+debug image: default API stripped, opt-in and both distribution build paths symbolicate
+
+===== test_cli_options.js =====
+ok host refuses -O0
+ok host refuses -O1
+ok host refuses -O2
+ok host refuses -O3
+ok host refuses -Os
+ok host refuses -Og
+ok host refuses -Wall
+ok host refuses -Wextra
+ok host refuses -Wno-typo
+ok host refuses -std=c11
+ok host refuses -c
+ok host refuses -lm
+ok host refuses -g3
+ok host refuses -fno-inlien
+ok host refuses --typo
+ok host refuses -fsanitize=address
+ok host implemented warning and debug controls
+ok host help
+ok in-OS help succeeds without source access or output writes
+ok in-OS missing inputs remain an error
+
+===== test_debug_flags.js =====
+ok in-OS 
+ok in-OS -g
+ok in-OS -fno-inline
+ok in-OS -g -fno-inline
+ok in-OS -g2 -fno-inline
+ok in-OS -g
+ok unknown -g3
+ok unknown -fno-inlien
+ok unknown --unknown
+ok host -g
+ok host -g -fno-inline
+ok host -g2 -fno-inline
+
+===== test_trap_stack_portability.js =====
+PASS captured index-only named=false mapped=false
+PASS captured index-only named=false mapped=true
+PASS captured index-only named=true mapped=false
+PASS captured index-only named=true mapped=true
+PASS offset-bearing named mapped frame keeps its actual location
+PASS real zero offset is distinct from absent offset
+PASS unnamed V8 frame retains index and offset without source map
+PASS mixed frames keep order and only locate known offsets
+PASS non-frame or malformed stack ""
+PASS non-frame or malformed stack "@http://127.0.0.1/host.js:13286:57"
+PASS non-frame or malformed stack "Error: wasm-function[57]"
+PASS non-frame or malformed stack "57@wasm-function[57]:0x"
+PASS non-frame or malformed stack "57@wasm-function[57]junk"
+PASS non-frame or malformed stack "57@wasm-function[-1]"
+PASS 14 captured-stack formatter checks; no browser launched
+
+===== test_trap_backtrace.js =====
+#759 trap backtrace — expectations derived from the fixture: fault@4 d2@8 d1@13 main@19
+
+A1. cc -g, fd 2 redirected to a file (the `2> err.log` clause)
+  ok   the program really trapped (harness sanity)
+  ok   /err.log exists and is non-empty
+  ok   fd 2 names the frame `depth3`
+  ok   fd 2 names the frame `depth2`
+  ok   fd 2 names the frame `depth1`
+  ok   fd 2 names the frame `main`
+  ok   fd 2 carries the fault location fix.c:4
+  ok   fd 2 carries the depth2 call location fix.c:8
+  ok   fd 2 carries the depth1 call location fix.c:13
+  ok   fd 2 carries the main call location fix.c:19
+  ok   the redirect was respected — nothing leaked to the console writer
+
+A2. cc -g, default (unredirected) fd 2
+  ok   an unredirected trap still reports on stderr
+  ok   and it carries the faulting line fix.c:4
+
+B. built WITHOUT -g: indices + offsets + a note naming the fix, nothing invented
+  ok   a stripped binary still produces a report on fd 2
+  ok   it identifies the frame by index
+  ok   it names `cc -g` as the fix
+  ok   NO INVENTED NAMES: no fixture function name appears
+  ok   NO INVENTED LOCATIONS: no file:line appears
+
+C1. instantiation failure (#558/#752 territory) — must stay silent
+  ok   instantiation really failed with a LinkError (leg premise)
+  ok   a LinkError is NOT a RuntimeError (the discriminator this rests on)
+  ok   NO backtrace for a process that never ran
+
+C2. a non-trap failure — must stay silent
+  ok   the injected non-trap failure really happened (leg premise)
+  ok   a non-RuntimeError rejection produces no backtrace
+
+D. strictly additive (near end of clause 5; far end is in the kernel suite)
+  ok   runModule still REJECTS on a trap (what process-worker.js turns into `crashed`)
+  ok   and it rejects with the original WebAssembly.RuntimeError, not a wrapper
+  ok   the trap message survives verbatim on that error
+
+E. positive control: a program that does NOT trap emits no backtrace
+  ok   the clean program exited normally
+  ok   and wrote NOTHING to fd 2
+
+F. a chain deeper than V8's default frame limit still reaches main()
+  ok   the deep fixture trapped
+  ok   more than V8's default 10 frames are reported
+  ok   the outermost frame main() is still present
+
+G. inlining collapses frames — the report must declare it
+  ok   the inlined fixture trapped
+  ok   the report warns that inlined frames are not shown
+
+H. a trap in the animation-frame callback still reports
+  ok   #764: the frame trap rejects through runModule
+  ok   the frame trap produced a backtrace on fd 2 (blocker: it produced NOTHING)
+  ok   it names the faulting frame `boom` at frame.c:4
+  ok   and the frame callback that called it, at frame.c:7
+
+I. a program that CLOSED its own fd 2 gets no console spill
+  ok   the closed-fd fixture still trapped (leg premise)
+  ok   READ BACK: fd 2 really is absent, not console (the premise this rests on)
+  ok   NOTHING was written to the host console writer
+  ok   and nothing was written to the pre-close redirect target either
+
+all checks passed
+
+===== test_sdl_api_index.js =====
+  ok   node tools/mksdlindex.js --check passes (committed index in sync)
+  ok   RED control: a tampered copy fails the comparator
+  ok   image.json bakes /usr/share/doc/sdl-api-index.md from os/doc/sdl-api-index.md
+  ok   GCODE.md points the agent at the index; the doc README lists it
+  ok   RED control: an unknown function name fails the group matcher
+  ok   RED control: an unknown constant name fails the cluster matcher
+  ok   RED control: claiming a PRESENT symbol absent is refused (two-sided edit gate)
+  ok   documented-absent symbols really fail as undeclared
+  ok   the documented alternatives compile (incl. #672’s SDL_RenderTextureRotated)
+  ok   the signed int family is complete (#707: Sint8/Sint16/Sint32/Sint64)
+
+All sdl-api-index checks passed
+
+===== test_sdl_deadstrip.js =====
+  ok   default flags: a no-audio SDL program carries no #529-A literal
+  ok   positive control: a referencing program really carries those literals
+  ok   general property: an unreferenced non-static function sheds its literal
+  ok   positive control: the same literal survives when the function is called
+  ok   a global-initializer literal is pinned even when only dead code touches it
+  ok   an address-taken function keeps its literal
+  ok   the pruned binary still runs (host smoke)
+
+All sdl-deadstrip checks passed
+
+===== test_sdl_loadwav_diff.js =====
+  ok   the dumper compiles (demand-linked decoder TU)
+  ok   one run decodes the whole corpus
+       (92 fixtures byte-identical with upstream libsdl-org/SDL release-3.4.0 @ a962f40bbba175e9716557a25d5d7965f134a3d3)
+  ok   every fixture matches the pinned upstream oracle exactly
+  ok   red control: a perturbed success expectation fails
+  ok   red control: a perturbed error expectation fails
+  ok   a no-LoadWAV SDL program carries no decoder literal (TU not compiled)
+  ok   --no-fold: a no-LoadWAV SDL program still compiles clean of the decoder
+  ok   --no-undefined: a no-LoadWAV SDL program still compiles clean of the decoder
+  ok   --no-fold positive control: a REFERENCING program carries the decoder
+  ok   positive control: the referencing dumper really carries that literal
+  ok   a VARIABLE-keyed directive fires on an extern read (symbol-general)
+  ok   a user DEFINITION of the keyed variable suppresses the builtin
+  ok   an address-taken-only reference in a global initializer fires
+  ok   a designated-initializer reference (EInitList) bubbles up and fires
+  ok   default mode: a dead static referencing SDL_LoadWAV ships no decoder bytes
+  ok   an extern-linkage never-called function fires (conservative) but ships zero decoder bytes
+  ok   admission instrument works: an external reference FIRES, loudly
+  ok   a live static VARIABLE of the spelling does NOT fire (round-3 repro)
+  ok   a live static FUNCTION of the spelling does NOT fire
+  ok   a block-scope LOCAL of the spelling does NOT fire (no linkage, no list)
+  ok   a block-scope EXTERN declaration DOES fire (external linkage)
+  ok   ADMISSION proof: an extern-linkage never-called function fires (conservative)
+  ok   ADMISSION proof: a dead STATIC does not fire in default mode (pruned first)
+  ok   withdrawal keeps a STATIC forward declaration of the spelling (different symbol)
+  ok   IDENTITY, not spelling: a static ref does not fire even when an external decl of the name EXISTS
+  ok   withdrawal must NOT swallow the undefined-static diagnostic (keep-statics guard)
+  ok   cross-TU: a ROOTED static shadow in another TU does not ADMIT the source
+  ok   a static VARIABLE of the keyed spelling in another TU cannot suppress the demand
+  ok   a static FUNCTION of the keyed spelling in another TU cannot suppress it either
+  ok   a static shadow cannot block WITHDRAWAL either (--no-fold, non-referencing SDL TU)
+  ok   a user definition of SDL_LoadWAV suppresses the builtin (no duplicate symbol)
+
+All sdl-loadwav-diff checks passed
+
+===== test_sdlttf_link.js =====
+  ok   a plain <SDL.h> program links with NO freetype anywhere (pay-for-what-you-use)
+  ok   a <SDL3_ttf/SDL_ttf.h> program without the freetype package fails LOUD naming ft2build.h
+
+All sdlttf-link checks passed
+
+===== test_default_packages.js =====
+  ok   RED: an unknown default package name fails the fold, named
+  ok   positive control: a known ungated default passes the fold
+  ok   the EXPLICIT opt-out strips the set instead of validating (#420)
+  ok   RED: a duplicate default name fails the fold, named
+  ok   RED: a gated (native-sibling) default fails the fold, named
+  ok   RED: a non-array defaultPackages fails the fold
+  ok   RED: a non-empty default set bakes /usr/share/gucman/defaults
+  ok   an empty/absent default set bakes NO defaults file
+  ok   the SHIPPED manifest folds clean with its declared default set
+default-packages checks OK
+
+===== test_skip_baseline.js =====
+ok   checkSkipBaseline is exported
+ok   green control: matching skip set → 0 violations — []
+ok   RED control: extra skip → violation — [{"category":"lua","kind":"new-skip","name":"lua/api.lua","detail":"\"lua/api.lua\" skipped but is not in the baseline — a test stopped running; if intentional, add it WITH its attribution"}]
+ok   RED control: violation is new-skip and names the test — {"category":"lua","kind":"new-skip","name":"lua/api.lua","detail":"\"lua/api.lua\" skipped but is not in the baseline — a test stopped running; if intentional, add it WITH its attribution"}
+ok   RED control: baseline entry that did not skip → stale-baseline violation — [{"category":"lua","kind":"stale-baseline","name":"lua/files.lua","detail":"baseline lists \"lua/files.lua\" but it did not skip — it now runs (drop the entry) or no longer exists"}]
+ok   one retired + one new skip never nets out (2 violations) — [{"category":"lua","kind":"new-skip","name":"lua/api.lua","detail":"\"lua/api.lua\" skipped but is not in the baseline — a test stopped running; if intentional, add it WITH its attribution"},{"category":"lua","kind":"stale-baseline","name":"lua/files.lua","detail":"baseline lists \"lua/files.lua\" but it did not skip — it now runs (drop the entry) or no longer exists"}]
+ok   exemptPrefixes: a fuzz/live-<seed> skip raises nothing — []
+ok   unnamed skip → unnamed-skip violation — [{"category":"lua","kind":"unnamed-skip","detail":"a skip with no name cannot be baselined — name it at the results.skip() call site"}]
+ok   unbaselined category → violation even with zero skips — [{"category":"zlib","kind":"unbaselined-category","detail":"category \"zlib\" has no entry in tests/py-skip-baseline.json — add one (an empty {} pins \"no skips\")"}]
+ok   committed baseline covers every PY category — 19 categories
+ok   committed baseline names no retired category — none
+ok   committed baseline exempts fuzz/live- (csmith seeds are random)
+ok   every committed baseline entry carries an attribution
+ok   committed baseline is self-consistent (0 violations against itself) — []
+
+===== test_pool_exclusive.js =====
+pool exclusive (suite-runner #579):
+--- excl (3 files, 4 jobs) ---
+ok   test_x1.js  0.3s
+ok   test_x2.js  0.4s
+ok   test_x3.js  0.4s
+
+excl: 3 passed, 0 failed  (1.1s)  [3/3 selected, 3/3 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/pool-excl-AeDNuS/artifacts-1-excl/summary.json
+  ok   CONTROL: three same-key rows never overlap, with an unbounded budget
+--- red (3 files, 4 jobs) ---
+ok   test_r1.js  0.4s
+ok   test_r2.js  0.4s
+ok   test_r3.js  0.4s
+
+red: 3 passed, 0 failed  (0.7s)  [3/3 selected, 3/3 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/pool-excl-AeDNuS/artifacts-2-weight-only/summary.json
+  ok   DEMO (not a control): weight alone admits 2 on a 24 GiB host
+--- fix (3 files, 4 jobs) ---
+ok   test_f1.js  0.4s
+ok   test_f2.js  0.4s
+ok   test_f3.js  0.4s
+
+fix: 3 passed, 0 failed  (1.1s)  [3/3 selected, 3/3 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/pool-excl-AeDNuS/artifacts-3-keyed-24g/summary.json
+  ok   CONTROL: the SAME rows at the SAME 24 GiB budget, keyed, never overlap
+--- par (3 files, 4 jobs) ---
+ok   test_p1.js  0.4s
+ok   test_p2.js  0.4s
+ok   test_p3.js  0.4s
+
+par: 3 passed, 0 failed  (0.4s)  [3/3 selected, 3/3 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/pool-excl-AeDNuS/artifacts-4-per-key/summary.json
+  ok   different keys (and no key) still run concurrently — exclusion is per-key
+--- lone (1 files, 4 jobs) ---
+ok   test_l1.js  0.1s
+
+lone: 1 passed, 0 failed  (0.1s)  [1/1 selected, 1/1 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/pool-excl-AeDNuS/artifacts-5-lone/summary.json
+  ok   a lone row heavier than the entire budget still runs (no deadlock)
+--- falsy (2 files, 4 jobs) ---
+ok   test_z1.js  0.3s
+ok   test_z2.js  0.4s
+
+falsy: 2 passed, 0 failed  (0.7s)  [2/2 selected, 2/2 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/pool-excl-AeDNuS/artifacts-6-falsy/summary.json
+  ok   an empty-string key excludes like any other (not read as "no key")
+
+ALL OK
+
+===== test_png_helper.js =====
+ok - rgba round trip dims
+ok - rgba round trip bytes
+ok - px() reads the card
+ok - alpha preserved (non-255)
+ok - rgb source expands with a=255
+ok - all five spec filters unfilter to the original
+ok - stream: first image ends where the second begins
+ok - stream: second image decodes
+ok - stream: second image pixels
+ok - CONTROL: changed pixel is detected
+ok - CONTROL: neighbour pixels still equal
+ok - CONTROL: whole-buffer compare detects it too
+ok - CONTROL: truncated stream throws
+ok - CONTROL: garbage throws (no signature)
+ok - CONTROL: palette PNG refuses
+ok - CONTROL: bad filter byte throws
+ok - CONTROL: corrupted IHDR CRC throws
+ok - CONTROL: corrupted IDAT CRC throws
+ok - CONTROL: px() out of range throws
+test_png_helper: all green
+
+===== ../spawn/test_spawn_host.js =====
+  ok   program exited 0
+  ok   spawn hook saw the spec
+  ok   path
+  ok   argv
+  ok   envp
+  ok   cwd
+  ok   flags
+  ok   pgid
+  ok   n_actions
+  ok   action0 DUP2 fd5->1
+  ok   action1 OPEN /log.txt fd7 0644
+  ok   wait got the returned pid
+  ok   C saw pid=4242 wait=4242 status=1792
+
+spawn-host: PASS
+
+===== ../serve/test_first_run.js =====
+  ok   printed URL points at the OS page
+  ok   printed URL returns 200
+  ok   Content-Type is text/html
+  ok   COOP header present (SAB requirement)
+  ok   COEP header present (SAB requirement)
+  ok   /os/kernel-worker.js is servable (200 js)
+  ok   /os/process-worker.js is servable (200 js)
+  ok   /kernel.js is servable (200 js)
+  ok   /host.js is servable (200 js)
+  ok   /compiler.js is servable (200 js)
+  ok   missing path 404s
+PASS
+
+===== ../serve/test_clang_overlay.js =====
+  ok   present: logs the "folded in" line
+  ok   present: /os/os-system.img serves the overlay SIDECAR bytes
+  ok   absent: logs the not-found/serving-base line
+  ok   absent: /os/os-system.img serves the BASE bytes
+  ok   plain: no overlay logging
+  ok   plain: /os/os-system.img serves the BASE bytes
+PASS
+
+===== ../serve/test_native_base_purity.js =====
+  ok   real: listPackages() has NO -clang name
+  ok   real: listPackages() has NO -rust name
+  ok   real: foldPackages("all") has NO -clang name
+  ok   real: foldPackages("all") has NO -rust name
+  ok   real: producers:[clang] surfaces the shipped doom-clang example
+  ok   real: base EXCLUDES doom-clang
+  ok   real: producers:[clang] ⊇ base
+  ok   real: producers:[clang] surfaces NO -rust name
+  ok   real: producers:[rust] surfaces NO -clang name
+  ok   real: producers:[clang,rust] ⊇ each single-producer set
+  ok   synthetic: base drops the gated foo-clang
+  ok   synthetic: base drops the gated baz-rust
+  ok   synthetic: base keeps the ungated bar
+  ok   synthetic: producers:[clang] includes foo-clang, not baz-rust
+  ok   synthetic: producers:[rust] includes baz-rust, not foo-clang
+  ok   synthetic: an unknown gate value stays excluded everywhere
+  ok   synthetic: malformed def stays visible (fails loud later, not silent)
+  ok   parser: native-sibling:clang -> clang
+  ok   parser: native-sibling:rust -> rust
+  ok   parser: bare native-sibling: -> null
+  ok   parser: the pre-0416 value is DEAD (no alias)
+  ok   parser: non-strings -> null
+PASS
+
+===== ../serve/test_serve_with_clang.js =====
+  ok   successful preflight passes an explicit baseline decision to mkpkg
+  ok   sibling absent: exit 1
+  ok   sibling absent: names the missing sibling path
+  ok   sibling absent: gives the fix command
+  ok   sibling absent: does NOT fall back to serving
+  ok   toolchain unbuilt: exit 1
+  ok   toolchain unbuilt: names build.sh
+  ok   overlay absent: exit 1
+  ok   overlay absent: names mk-overlay.mjs
+  ok   overlay absent: mentions --build-overlay opt-in
+PASS
+
+===== ../serve/test_mkpkg_clang.js =====
+  ok   round-trip: exit 0
+  ok   round-trip: index gains doom-clang
+  ok   round-trip: index sha256 matches the pool payload
+  ok   round-trip: pool tarball carries the verified clang bytes
+  ok   tampered: exit 1
+  ok   tampered: reports a sha256 mismatch
+  ok   tampered: no index written (nothing copied)
+  ok   drift: unclaimed overlay app → exit 1
+  ok   drift: names the orphan payload
+  ok   drift: nothing built
+  ok   drift: explicit exemption builds clean
+  ok   drift: stale exemption → exit 1
+  ok   drift: names the stale entry
+PASS
+
+===== ../serve/test_mkpkg_rust.js =====
+  ok   purity: plain mkpkg exits 0
+  ok   purity: base index has NO -rust name
+  ok   purity: plain mkpkg prints NOTHING about rust
+  ok   positive control: mkpkg --rust exits 0
+  ok   positive control: index gains wc-rust
+  ok   positive control: index sha256 matches the pool payload
+  ok   positive control: pool tarball carries the verified sibling bytes
+  ok   tampered: exit 1
+  ok   tampered: reports a sha256 mismatch
+  ok   tampered: no index written (nothing copied)
+  ok   absent sibling: --rust exits 1
+  ok   absent sibling: names the missing root and the fix
+  ok   flagless gated name: exit 2
+  ok   flagless gated name: points at --rust
+  ok   drift: unclaimed overlay app → exit 1
+  ok   drift: names the orphan payload
+  ok   drift: explicit exemption builds clean
+  ok   drift: stale exemption → exit 1
+  ok   drift: names the stale entry
+  ok   gate validation: unknown requires → exit 1 on a PLAIN build
+  ok   gate validation: names the def, the value and the known producers
+PASS
+
+===== ../serve/test_mkpkg_isolation.js =====
+  ok   union: the two-package build succeeds
+  ok   union: it serves iso-alpha
+  ok   union: the one-package build succeeds
+  ok   🔴 UNION: a differing build into the SAME out dir KEEPS the carried name
+  ok   🔴 UNION: ...including its payload bytes
+  ok   union: the build's own name is served too
+  ok   prune: the --prune build succeeds
+  ok   RED CONTROL (--prune): drops the carried name
+  ok   RED CONTROL (--prune): ...and DELETES its payload bytes
+  ok   prune: the build's own name survives the prune
+  ok   servable: carrying an entry whose bytes are gone refuses (exit 1)
+  ok   servable: ...naming the entry and the --prune fix
+  ok   servable: the refused run left the previous index in place (no partial write)
+  ok   isolated: the two-package repo builds
+  ok   isolated: repo A serves iso-alpha
+  ok   isolated: the one-package repo builds
+  ok   isolated: repo B serves iso-common
+  ok   isolated: repo B correctly does NOT list iso-alpha
+  ok   🔴 repo A STILL serves iso-alpha after B built (index + payload bytes)
+  ok   🔴 repo A still serves iso-common too
+  ok   the shared pool store keeps iso-alpha (append-only, never pruned by a partial build)
+  ok   the per-repo pool/ is a HARDLINKED view of the store, not a byte copy
+  ok   both repos reference the SAME content-addressed payload (warm cache shared)
+  ok   a shared store keeps BOTH shas of one version (append-only)
+  ok   the index advertises the NEW payload after the content change
+  ok   ...and the new payload is readable
+  ok   an unchanged rebuild REUSES the newest payload (no third sha)
+  ok   a build into a dir another LIVE build owns exits 1
+  ok   ...and names the holder and the --out/--pool fix
+  ok   ...and does not clobber the lock it refused
+  ok   a STALE lock (dead pid 999999) is stolen, not obeyed
+  ok   ...and the build completes normally
+  ok   the lock is released when the build exits
+All mkpkg isolation checks passed
+
+===== ../serve/test_mkpkg_minbase.js =====
+  ok   green build succeeds
+  ok   declared minBase rides into the index verbatim
+  ok   declared minBase 0 (the ungated sentinel) survives — not eaten by a truthiness check
+  ok   undeclared minBase defaults to the current image version
+  ok   minBase a string refuses the build
+  ok   minBase a string refusal names the package and the field
+  ok   minBase a negative number refuses the build
+  ok   minBase a negative number refusal names the package and the field
+  ok   minBase a non-integer refuses the build
+  ok   minBase a non-integer refusal names the package and the field
+  ok   minBase above the current image version refuses the build
+  ok   minBase above the current image version refusal names the package and the field
+  ok   classifier control: a pure-data def is not code-bearing
+  ok   classifier control: a project def is code-bearing
+  ok   classifier control: a srclib def is code-bearing
+  ok   the packages/ scan is non-empty
+  ok   pure-data package netsurf-demos declares an explicit minBase
+  ok   netsurf-demos: declared minBase is an integer in [1, 288]
+  ok   the lint saw at least one pure-data package (else it is vacuous)
+
+All minBase checks passed
+
+===== ../serve/test_mkpkg_version_guard.js =====
+  ok   fresh publish 1.0 (no prev entry) publishes (exit 0)
+  ok   fresh publish 1.0 (no prev entry): index now serves 1.0
+  ok   equal republish 1.0 (the routine rebuild) publishes (exit 0)
+  ok   equal republish 1.0 (the routine rebuild): index now serves 1.0
+  ok   publish 0.9 refuses (exit 1)
+  ok   publish 0.9 names the package and BOTH versions
+  ok   publish 0.9 names the --allow-downgrade override
+  ok   publish 0.9 leaves the published index untouched (still 1.0)
+  ok   stated rollback to 0.9 publishes (exit 0)
+  ok   stated rollback to 0.9: index now serves 0.9
+  ok   two-digit increase 0.9 -> 0.10 publishes (exit 0)
+  ok   two-digit increase 0.9 -> 0.10: index now serves 0.10
+  ok   two-digit downgrade 0.10 -> 0.9 refuses (exit 1)
+  ok   two-digit downgrade 0.10 -> 0.9 names the package and BOTH versions
+  ok   two-digit downgrade 0.10 -> 0.9 names the --allow-downgrade override
+  ok   two-digit downgrade 0.10 -> 0.9 leaves the published index untouched (still 0.10)
+  ok   prefix increase 0.10 -> 0.10.1 publishes (exit 0)
+  ok   prefix increase 0.10 -> 0.10.1: index now serves 0.10.1
+  ok   prefix downgrade 0.10.1 -> 0.10 refuses (exit 1)
+  ok   prefix downgrade 0.10.1 -> 0.10 names the package and BOTH versions
+  ok   prefix downgrade 0.10.1 -> 0.10 names the --allow-downgrade override
+  ok   prefix downgrade 0.10.1 -> 0.10 leaves the published index untouched (still 0.10.1)
+  ok   increase 0.10.1 -> 2.4 publishes (exit 0)
+  ok   increase 0.10.1 -> 2.4: index now serves 2.4
+  ok   equal republish 2.4 as 2.004 (leading zeros) publishes (exit 0)
+  ok   equal republish 2.4 as 2.004 (leading zeros): index now serves 2.004
+
+All version-guard checks passed
+
+===== ../serve/test_mkpkg_baseline.js =====
+  ok   bare mkpkg refuses without an explicit baseline decision
+  ok   refusal names all three choices
+  ok   served baseline downgrade refuses with no warm index
+  ok   served refusal names both versions
+  ok   carried-floor setup builds a two-row warm index
+  ok   served floor refuses a lower carried warm row
+  ok   carried-row refusal names row and both versions
+  ok   file baseline construction succeeds
+  ok   candidate records source, retrieval time, and content hash
+  ok   file provenance does not ship an absolute local path
+  ok   URL baseline construction succeeds
+  ok   published companion history without sourcesVersion refuses loudly
+  ok   omission refusal names companion, old version, and sourcesVersion
+All mkpkg baseline checks passed
+
+===== ../serve/test_mkpkg_defs.js =====
+  ok   positive: mkpkg --defs builds a compiled sibling def
+  ok   positive: index carries the sibling package + its -sources companion
+  ok   positive: payload has the compiled binary member
+  ok   positive: payload carries wasm magic
+  ok   positive: payload carries the sibling asset bytes
+  ok   positive: payload carries the inlined text entry
+  ok   positive: -sources companion mirrors the SIBLING tree (design §5d)
+  ok   positive: unchanged sibling inputs reuse the pool payload
+  ok   positive: a touched sibling source rebuilds
+  ok   newestPkgInput: the newest input is the touched SIBLING source
+  ok   collision: sibling-vs-sibling duplicate refuses
+  ok   collision: the refusal names BOTH files
+  ok   collision fixture: the repo has at least one real package
+  ok   collision: a sibling shadowing a source-0 package refuses
+  ok   collision: names the source-0 file and the sibling file
+  ok   collision: a GATED duplicate still refuses (pre-gating check)
+  ok   preflight: missing --defs root exits 1 naming it
+  ok   preflight: --defs root without packages/ exits 1
+  ok   preflight: the same root twice exits 1
+  ok   fold: the compiled entry is claimed with a RELOCATED project path
+  ok   fold: the bin entry relocates to a ROOT-resolvable path
+  ok   fold: the text entry inlines as content
+  ok   fold: /usr/bin symlink + control.json planted as for any package
+  ok   fold: buildProject over the folded path yields wasm via ROOT-bound readers
+  ok   fold: a sibling `c` entry refuses with the named `project` fix
+PASS
+
+===== ../serve/test_image_determinism.js =====
+  ok   first bake exits 0 (post-bake seal+version check passed)
+  ok   second bake exits 0
+  ok   two bakes of an identical tree are byte-identical
+  ok   output seal verifies
+  ok   bakedVersion reads back the manifest version
+PASS
+
+===== ../serve/test_sibling_guard.js =====
+  ok   GUCOS_PACKAGES pointing nowhere refuses (exit 1)
+  ok     …naming the variable and the fix
+  ok   an index missing a sibling package refuses (exit 1)
+  ok     …naming the package and the mkpkg --defs fix
+  ok   a covering index serves
+  ok     …and reports the merged coverage
+  ok   --minimal with sibling packages and no index refuses (exit 1)
+  ok     …naming the mkpkg --defs fix
+  ok   the fat shape with no index serves anyway
+  ok     …with a loud warning naming the 404s to come
+  ok   --no-extra-packages opts out entirely (even a bad override is moot)
+  ok   a cross-source duplicate name refuses at serve start
+  ok     …citing both definition sources
+sibling guard OK
+
+========================================
+All host tests passed
+
+[1m━━━ blockfs suite ━━━[0m
+$ node -r /Users/jku/git/c-compiler-small-callbacks/tests/lib/parent-watch.js tests/blockfs/run.js
+
+registry: 15 declared + 0 excluded == 15 on disk (tests/blockfs/run.js)
+--- blockfs suite (15 files, 8 jobs) ---
+ok   test_tlsf.js  0.0s
+ok   test_dev.js  0.1s
+ok   test_v4.js  0.1s
+ok   test_openworkspace.js  0.1s
+ok   test_migrate.js  0.1s
+ok   test_mounts.js  0.1s
+ok   test_readonly.js  0.1s
+ok   test_fsck.js  0.1s
+ok   test_posix.js  0.1s
+ok   test_fsck_v4.js  0.5s
+ok   test_blockfs.js  0.5s
+ok   test_stdin_sab.js  0.5s
+ok   test_e2e.js  3.7s
+ok   test_tlsf64.js  5.0s
+ok   test_fuzz.js  84.2s
+evidence: 15/15 selected members have logs post-dating the run start
+
+blockfs suite: 15 passed, 0 failed  (84.3s)  [15/15 selected, 15/15 recorded]  summary: build/test-blockfs/summary.json
+
+[1m━━━ run.py: ast,extra,ext,projects,zlib,lua,freetype,libpng,libjpeg,cairo,micropython,micropython-upstream,sqlite,tcc,libc,fuzz,fakegit ━━━[0m
+$ /Users/jku/git/c-compiler/.venv/bin/python tests/run.py --types=ast,extra,ext,projects,zlib,lua,freetype,libpng,libjpeg,cairo,micropython,micropython-upstream,sqlite,tcc,libc,fuzz,fakegit
+
+--- ast ---
+......
+    (3.1s)
+--- extra ---
+..............
+    (1.9s)
+--- ext ---
+.
+    (1.1s)
+--- projects ---
+  skip projects/cpython-clang — compiler.js cannot build CPython yet: todos/0327 (the GNU __extension__ keyword, which Modules/_hacl's krml headers use and which blocks the whole hashlib family) and todos/0336 (startup cost) both gate it. This bin.json is NOT dead — the sibling clang-simplified manifest reads its `sources` to build the shipped cpython-clang payload (the sibling's own project/app name is still `python-clang` until its manifest renames — todos/0374 merge-time step). Drop these two keys when 0327/0336 land; todos/CPYTHON.md §4.3 is the two-consumers contract.
+.............................
+    (235.5s)
+--- zlib ---
+...
+    (1.0s)
+--- lua ---
+..........................
+    (6.3s)
+--- freetype ---
+.
+    (1.6s)
+--- libpng ---
+...........................
+    (2.1s)
+--- libjpeg ---
+.............
+    (1.3s)
+--- cairo ---
+...
+    (34.5s)
+--- micropython ---
+..........
+    (7.8s)
+--- micropython-upstream ---
+..............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+    (40.6s)
+--- sqlite ---
+..........
+    (4.7s)
+--- tcc ---
+Building tcc-native...
+tcc-native build complete.
+........
+    (2.6s)
+--- libc ---
+......................................
+    (8.9s)
+--- fuzz ---
+..........................................................................................................
+    (28.0s)
+--- fakegit ---
+...........................
+    (24.7s)
+
+896 passed, 0 failed, 111 skipped
+
+[1m━━━ kernel suite ━━━[0m
+$ node -r /Users/jku/git/c-compiler-small-callbacks/tests/lib/parent-watch.js tests/kernel/run.js
+
+registry: 202 declared + 0 excluded == 202 on disk (tests/kernel/run.js)
+registry: 2 declared + 0 excluded == 2 on disk (gucos-packages/tests/manifest.json)
+sibling tests: gucos-packages at /Users/jku/git/gucos-packages (via main-clone sibling) — 2 member(s) join the suite
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 74.7 GB free
+[fixture] os/os-system.img fresh (v288)
+[gucman] baking the minimal (no-packages) system blob…
+--- kernel suite (204 files, 6 jobs) ---
+ok   test_trap_report_delivery.js  0.0s
+ok   test_small_e2e.js  0.8s
+ok   test_wm.js  2.9s
+ok   test_readdir_page.js  1.0s
+ok   test_foundation_e2e.js  4.5s
+ok   test_http.js  0.8s
+ok   test_hush_errexit_e2e.js  0.6s
+ok   test_keybind_registry.js  0.5s
+ok   test_kernel.js  0.8s
+ok   test_wm_policy.js  0.4s
+ok   test_wm_aero.js  0.3s
+ok   test_win32rc.js  0.1s
+ok   test_pipes_spsc.js  0.1s
+ok   test_objc_e2e.js  6.1s
+ok   test_audio.js  0.0s
+ok   test_sockets.js  0.0s
+ok   test_wm_anchored.js  0.0s
+ok   test_keybind.js  0.0s
+ok   test_pty.js  0.0s
+ok   test_zerolen_read.js  0.0s
+ok   test_pipes.js  0.0s
+ok   test_strace.js  0.0s
+ok   test_rofs.js  0.0s
+ok   test_vsync.js  0.0s
+ok   test_tty.js  0.0s
+ok   test_vdso.js  0.0s
+ok   test_start_failure_e2e.js  0.5s
+ok   test_syscall_restart_e2e.js  0.4s
+ok   test_spawn_build_e2e.js  3.3s
+ok   test_null_trap_e2e.js  0.7s
+ok   test_shell_restart_e2e.js  1.3s
+ok   test_abort_backtrace_e2e.js  1.1s
+ok   test_gamepad_e2e.js  1.2s
+ok   test_sdl_events_e2e.js  0.7s
+ok   test_frame_lifecycle_e2e.js  1.6s
+ok   test_wgpu_loopguard_headless_e2e.js  0.8s
+ok   test_loopguard_headless_e2e.js  1.1s
+ok   test_sdl_util_e2e.js  1.5s
+ok   test_sleep_overshoot_e2e.js  3.1s
+ok   test_sdl_raster_e2e.js  1.3s
+ok   test_render_vsync_e2e.js  9.7s
+ok   test_sedit_e2e.js  14.2s
+ok   test_wm_service_e2e.js  59.5s
+ok   test_netsurf_mutation_e2e.js  117.1s
+ok   test_netsurf_demos_e2e.js  52.9s
+ok   test_notepad_menu_e2e.js  27.9s
+ok   test_netsurf_http_e2e.js  35.7s
+ok   test_recycle_e2e.js  22.1s
+ok   test_sameboy_e2e.js  20.9s
+ok   test_user32_e2e.js  20.0s
+ok   test_mgpp_e2e.js  19.6s
+ok   test_present_e2e.js  197.1s
+ok   test_netsurf_select_e2e.js  17.9s
+ok   test_netsurf_select_reconvert_e2e.js  17.3s
+ok   test_deck_e2e.js  19.1s
+ok   test_term_e2e.js  221.6s
+ok   test_os_apps_e2e.js  18.5s
+ok   test_sounds_e2e.js  14.7s
+ok   test_keymap_e2e.js  18.1s
+ok   test_saver_e2e.js  13.8s
+ok   test_ctxmenu_e2e.js  13.1s
+ok   test_snap_e2e.js  12.4s
+ok   test_mgp_livereload_e2e.js  12.6s
+ok   test_gcode_native.js  14.6s
+ok   test_clipboard_e2e.js  12.0s
+ok   test_fileman_ops_e2e.js  12.2s
+ok   test_overview_e2e.js  9.8s
+ok   test_gcode_timeout_e2e.js  10.0s
+ok   test_gcode_intr_chatty_e2e.js  10.0s
+ok   test_multiface_font_e2e.js  9.8s
+ok   test_gcode_intr_honesty_e2e.js  10.0s
+ok   test_netsurf_pointer_e2e.js  8.2s
+ok   test_hostpaste_e2e.js  7.6s
+ok   test_openwith_e2e.js  8.4s
+ok   test_netsurf_filegadget_e2e.js  8.8s
+ok   test_winmine_e2e.js  8.0s
+ok   test_paint_e2e.js  7.7s
+ok   test_ksvc_e2e.js  7.4s
+ok   test_micropython_stdlib_e2e.js  7.8s
+ok   test_sdl_delay_e2e.js  7.3s
+ok   test_notepad_e2e.js  7.2s
+ok   test_micropython_script_e2e.js  7.6s
+ok   test_calc_e2e.js  7.5s
+ok   test_ctlpanel_e2e.js  7.1s
+ok   test_cairo_e2e.js  6.6s
+ok   test_lb_vscroll_e2e.js  6.5s
+ok   test_jobctl_tty_e2e.js  6.1s
+ok   test_rust_e2e.js  7.1s
+ok   test_netsurf_events_e2e.js  5.4s
+ok   test_netsurf_content_e2e.js  5.2s
+ok   test_heavylock_e2e.js  6.5s
+ok   test_comdlg_diag_e2e.js  5.7s
+ok   test_mgba_e2e.js  5.2s
+ok   test_menubox_e2e.js  5.6s
+ok   test_netsurf_e2e.js  4.8s
+ok   test_edit_punct_repro.js  5.0s
+ok   test_fileman_nav_e2e.js  4.7s
+ok   test_vi_e2e.js  4.2s
+ok   test_gdi32_e2e.js  4.7s
+ok   test_netsurf_layout_e2e.js  4.2s
+ok   test_netsurf_img_reconvert_e2e.js  3.8s
+ok   test_netsurf_js_e2e.js  3.8s
+ok   test_waitevent_e2e.js  3.8s
+ok   test_listview_e2e.js  3.5s
+ok   test_rust_std_e2e.js  4.2s
+ok   test_ticketbridge_e2e.js  3.5s
+ok   test_curl_e2e.js  10.0s
+ok   test_fileman_e2e.js  3.5s
+ok   test_pbcopy_e2e.js  3.8s
+ok   test_http_e2e.js  3.4s
+ok   test_vsync_boot_e2e.js  3.6s
+ok   test_wait_e2e.js  3.0s
+ok   test_itimer_e2e.js  2.8s
+ok   test_spawn_budget_kill_honesty.js  3.0s
+ok   test_desk_icons_e2e.js  2.8s
+ok   test_netsurf_restyle_e2e.js  2.7s
+ok   test_signals_e2e.js  2.9s
+ok   test_netsurf_console_e2e.js  2.6s
+ok   test_kernel32_e2e.js  2.6s
+ok   test_desktop_defaults_e2e.js  2.8s
+ok   test_netsurf_dragslop_e2e.js  2.3s
+ok   test_jobctl_e2e.js  2.2s
+ok   test_wm_fatal_e2e.js  2.2s
+ok   test_comp_park_e2e.js  2.0s
+ok   test_cursor_e2e.js  2.0s
+ok   test_os_boot_kill_honesty.js  1.9s
+ok   test_gcode_intr_flush_e2e.js  1.9s
+ok   test_gpubox_menu_e2e.js  1.8s
+ok   test_gpubox_dawn_e2e.js  1.9s
+ok   test_netbridge_e2e.js  2.3s
+ok   test_minesweeper_sample_e2e.js  1.8s
+ok   test_spsc_e2e.js  1.8s
+ok   test_gcode_step2_e2e.js  1.6s
+ok   test_fileman_watch_e2e.js  1.7s
+ok   test_module_cache.js  1.8s
+ok   test_fswatch_e2e.js  1.7s
+ok   test_skey_e2e.js  1.5s
+ok   test_fs_e2e.js  1.3s
+ok   test_sdl_render_e2e.js  1.4s
+ok   test_sockwake_e2e.js  1.5s
+ok   test_cc_srclib_e2e.js  1.6s
+ok   test_strace_e2e.js  1.2s
+ok   test_symlink_create_e2e.js  1.3s
+ok   test_boot_guard_e2e.js  1.4s
+ok   test_code_e2e.js  1.4s
+ok   test_pipes_e2e.js  1.2s
+ok   test_sockets_e2e.js  1.1s
+ok   test_e2e.js  1.2s
+ok   test_hostclip_e2e.js  1.3s
+ok   test_rofs_e2e.js  0.7s
+ok   test_wm_e2e.js  0.7s
+ok   test_realpath_e2e.js  1.0s
+ok   test_pty_e2e.js  0.8s
+ok   test_gdiplus_e2e.js  0.6s
+ok   test_gpu_multiwin_dawn_e2e.js  0.6s
+ok   test_vdso_e2e.js  0.6s
+ok   test_read_fill_e2e.js  0.4s
+ok   test_audio_e2e.js  2.0s
+ok   test_taskbar_owner_e2e.js  3.7s
+ok   test_gucedit.js  2.8s
+ok   test_sedit_core.js  0.9s
+ok   test_sdl_rendertarget_e2e.js  1.4s
+ok   test_sdl_debugtext_e2e.js  1.4s
+ok   test_sdl_rotated_e2e.js  1.4s
+ok   gucos-packages/test_repo_contract.js  0.0s
+ok   test_sdlttf_e2e.js  2.3s
+ok   test_win32_ports.js  24.6s
+ok   test_repl_pty_e2e.js  11.9s
+ok   test_egress_e2e.js  2.2s
+ok   test_cc_srclib.js  0.5s
+ok   test_cfgstore_e2e.js  0.4s
+ok   test_tty_e2e.js  0.4s
+ok   test_overlays.js  0.1s
+ok   test_mounts.js  0.1s
+ok   test_procfs.js  0.0s
+ok   test_os_boot.js  705.9s
+ok   test_cc_imagelibs_e2e.js  226.3s
+ok   test_cc_cjson_e2e.js  3.1s
+ok   test_cc_lua_sqlite_e2e.js  10.4s
+ok   test_cc_freetype_e2e.js  5.8s
+ok   test_gucman_scripts_e2e.js  4.0s
+ok   test_gucman_upgrade_e2e.js  4.7s
+ok   gucos-packages/test_fontpkg_e2e.js  19.3s
+ok   test_git_net_e2e.js  4.8s
+ok   test_seed_e2e.js  38.1s
+ok   test_gucman_libgit2_e2e.js  19.7s
+ok   test_punes_e2e.js  14.7s
+ok   test_software_e2e.js  15.4s
+ok   test_cc_win32_e2e.js  12.4s
+ok   test_gucman_e2e.js  20.8s
+ok   test_defaults_sync_e2e.js  8.4s
+ok   test_cpython_clang_e2e.js  7.0s
+ok   test_symbolfont_e2e.js  5.5s
+ok   test_clang_pkgs_e2e.js  4.4s
+FAIL test_cmdalt_e2e.js  5.2s  → build/test-kernel/test_cmdalt_e2e.js.log
+     |   ok   before install, python exits 127
+     |   ok   gucman install micropython succeeded
+     |   ok   install APPENDS the commands claim to /etc/cmdalt
+     |   ok   install still plants the IMPLEMENTATION link
+     |   ok   install plants NO /usr/local/bin/python (the shadow is gone for good)
+     |   ok   cmdalt which reports the claimed implementation, no shadow
+     |   ok   python -c runs MicroPython through the dispatcher
+     |   ok   python FILE runs it with sys.argv intact
+     |   ok   ...and the exit status propagates through the dispatcher
+     |   ok   a #!/bin/python script runs
+     |   ok   cmdalt set switches the default
+     |   ok   cmdalt reset reverts to the package claim
+     |   ok   gucman remove succeeded
+     |   ok   remove deletes the claim line (last line -> no file)
+     |   ok   ...and python is back to the 127 install hint
+     |   ok   CONTROL: in-OS, /usr/bin/python really is the dispatcher link
+     |   ok   the hand-built shadow payload is REFUSED at install (exit 1)
+     |   ok   ...by the bin-plant guard, naming package, bin and dispatcher
+     |   ok   ...pointing at the `commands` claim as the right declaration
+     |   ok   the refused install plants NO /usr/local/bin/python
+     |   ok   ...and writes NO install-DB record
+     |   ok   ...and leaves NO /opt/shadowpkg residue
+     | 
+     | FAILED (4)
+     | 
+ok   test_git_e2e.js  5.0s
+ok   test_gucman_apps_e2e.js  5.2s
+ok   test_gucman_doom_e2e.js  3.7s
+ok   test_gucman_quake_e2e.js  3.1s
+ok   test_cc_libpng_e2e.js  6.7s
+ok   test_stdinc_e2e.js  2.5s
+ok   test_cc_libjpeg_e2e.js  4.1s
+ok   test_gucman_sources_e2e.js  2.2s
+ok   test_rust_pkgs_e2e.js  2.2s
+evidence: 204/204 selected members have logs post-dating the run start
+
+kernel suite: 203 passed, 1 failed  (1534.8s)  [204/204 selected, 204/204 recorded]  summary: build/test-kernel/summary.json
+
+[1m━━━ sweep suite ━━━[0m
+$ node -r /Users/jku/git/c-compiler-small-callbacks/tests/lib/parent-watch.js tests/browser/os-sweep.mjs
+
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 74.5 GB free
+[fixture] os/os-system.img fresh (v288)
+--- browser os sweep (72 files, 1 jobs) ---
+ok   os-abort-backtrace.mjs  3.6s
+ok   os-aero.mjs  3.4s
+ok   os-boots.mjs  6.2s
+ok   os-cairo.mjs  3.1s
+ok   os-clang.mjs  221.4s
+ok   os-clipboard.mjs  9.4s
+ok   os-compositor.mjs  23.8s
+ok   os-ctxmenu.mjs  18.9s
+ok   os-debugtext.mjs  3.5s
+ok   os-deck.mjs  9.5s
+ok   os-devloss.mjs  15.0s
+ok   os-doom.mjs  13.3s
+ok   os-doompage-motion.mjs  14.1s
+ok   os-doompage-renders.mjs  3.7s
+ok   os-drop.mjs  5.8s
+ok   os-edittab.mjs  4.8s
+ok   os-egress.mjs  15.5s
+ok   os-fileman.mjs  80.9s
+ok   os-foundation.mjs  12.7s
+ok   os-frame-lifecycle.mjs  3.5s
+ok   os-fsbtn.mjs  3.1s
+ok   os-gamepad.mjs  3.4s
+ok   os-gcode.mjs  70.4s
+ok   os-gdi.mjs  2.9s
+ok   os-git-cli.mjs  248.2s
+ok   os-git-net.mjs  10.8s
+ok   os-gpubox.mjs  15.0s
+ok   os-gucman.mjs  11.0s
+ok   os-harness-unit.mjs  0.1s
+ok   os-hires.mjs  8.0s
+ok   os-hush-errexit.mjs  3.0s
+ok   os-keybind.mjs  15.9s
+ok   os-loopguard.mjs  5.4s
+ok   os-mgpp.mjs  74.7s
+ok   os-minimal.mjs  13.7s
+ok   os-mobile2x.mjs  6.1s
+ok   os-netbridge-https.mjs  0.5s
+ok   os-null-trap.mjs  2.9s
+ok   os-objc.mjs  11.7s
+ok   os-osk.mjs  127.3s
+ok   os-overview.mjs  5.3s
+ok   os-paint.mjs  3.2s
+ok   os-paste-mac.mjs  6.5s
+ok   os-pollball.mjs  7.5s
+ok   os-present.mjs  9.4s
+ok   os-quake.mjs  11.2s
+ok   os-recycle.mjs  50.5s
+ok   os-rendertarget.mjs  5.8s
+ok   os-rust.mjs  4.9s
+ok   os-sameboy.mjs  8.1s
+ok   os-saver.mjs  15.4s
+ok   os-scale.mjs  3.7s
+ok   os-screen.mjs  4.6s
+FAIL os-sedit.mjs  3.2s  → build/test-browser/os-sedit.mjs.log
+     |   ok   boots to ready
+     |   ok   headed syntax palette distinguishes C categories
+     |   FAIL Ctrl+F selects the match and returns focus to the editor  "> /r\r\noot/headed.c\n~ # sedit /root/headed.c:2 & wmctl wait label EDIT:0 12000 && echo SEDIT-WINDOW-RE''ADY\n[1] 4 sedit /root/headed.c:2\nSEDIT-WINDOW-READY\n~ # wmctl wait label 'Find text:' 8000 && echo SEDIT-FIND-O''PEN\nSEDIT-FIND-OPEN\n~ # wmctl wait nolabel 'Find text:' 8000 && echo SEDIT-FIND-CLO''SED\nSEDIT-FIND-CLOSED\n~ # wmctl wait text EDIT:0 'XFINDX' 6000 && wmctl gettext EDIT:0 && echo SEDIT-FIND-D''ONE\n#include <stdio.h>\nint main(void) { /* gXFINDXeen */ return 0; }\n\nSEDIT-FIND-DONE\n~ # "
+     |   ok   real keyboard edit/save round trip
+     | 
+     | os sedit (browser): 1 FAILED
+     | 
+ok   os-shell.mjs  111.6s
+ok   os-small.mjs  5.6s
+ok   os-snap.mjs  4.3s
+ok   os-sounds.mjs  10.8s
+ok   os-spawn-build.mjs  10.5s
+ok   os-spawntrace.mjs  2.9s
+ok   os-term.mjs  11.5s
+ok   os-touch.mjs  37.6s
+ok   os-undo.mjs  6.8s
+ok   os-user32.mjs  7.8s
+ok   os-vsync.mjs  6.5s
+ok   os-vt.mjs  5.1s
+ok   os-vt1mobile.mjs  32.9s
+ok   os-vt2zoom.mjs  4.7s
+ok   os-warmpool.mjs  18.1s
+ok   os-wheel.mjs  43.9s
+ok   os-winmine.mjs  5.7s
+ok   os-wm.mjs  6.3s
+evidence: 72/72 selected members have logs post-dating the run start
+
+browser os sweep: 71 passed, 1 failed  (1577.8s)  [72/72 selected, 72/72 recorded]  summary: build/test-browser/summary.json
+
+[1m━━━ tests/run.js summary ━━━[0m
+  [32mok  [0m todos                        7.4s
+  [32mok  [0m unit                         16.6s
+  [32mok  [0m host                         493.3s
+  [32mok  [0m blockfs                      84.6s  [15/15 files]  [15P/0F/0S]  → build/test-blockfs/summary.json
+  [32mok  [0m py[ast,extra,ext,projects,zlib,lua,freetype,libpng,libjpeg,cairo,micropython,micropython-upstream,sqlite,tcc,libc,fuzz,fakegit] 405.7s  [896P/0F/[33m111S[0m]  → build/test-py/summary.json
+  [31mFAIL[0m kernel                       1569.8s  [204/204 files]  [203P/1F/0S]  → build/test-kernel/summary.json
+  [31mFAIL[0m sweep                        1578.2s  [72/72 files]  [71P/1F/0S]  → build/test-browser/summary.json
+
+  5 passed, 2 failed  (4155.6s)  → build/test-run/summary.json
+  [33mtier: diff — NOT a full gate (deliberately not run: netsurf-patch, disw, sourcemap)[0m

@@ -1,0 +1,56 @@
+  ok   mkpkg refuses a bin that shadows a dispatched name (exit 1)
+  ok   ...naming the dispatcher and pointing at `commands`
+  ok   CONTROL: the base image still dispatches at least one command name
+  ok   CONTROL: `python` is still a dispatched name (the shadow fixture claims it)
+  ok   a fresh image exits 127 for python
+  ok   ...and says no python implementation is installed
+  ok   ...naming the baked suggestion in a gucman install hint
+  ok   the baked store carries exactly the python suggestion
+  ok   dispatch forwards plain args
+  ok   dispatch forwards flag-shaped args verbatim
+  ok   a SECOND dispatched name needs no C change (bar -> pwd)
+  ok   ...and both names dispatch independently at the same time
+  ok   a nonzero child exit propagates
+  ok   a signalled child reports 128+sig
+  ok   an unresolvable pick exits 127
+  ok   ...with the install hint for the picked implementation
+  ok   an unresolvable pick with other candidates names them
+  ok   ...and still exits 127 rather than silently running the other one
+  ok   an /etc claim beats the baked layer
+  ok   a user pick beats the /etc claim
+  ok   cmdalt reset falls back to the /etc claim
+  ok   a #! script on a dispatch link runs the implementation
+  ok   self-dispatch is refused, not forked
+  ok   ...loudly, naming the dispatcher
+  ok   cmdalt list shows every key and its effective value
+  ok   cmdalt which prints the resolved program
+  FAIL cmdalt which names a shadowing /usr/local/bin path  "python: no python implementation is installed\n       install one:  gucman install cpython-clang\nRC=1\n"
+  FAIL ...and reports the shadow as what python REALLY runs  "python: no python implementation is installed\n       install one:  gucman install cpython-clang\nRC=1\n"
+  FAIL cmdalt SET warns at the moment of the ineffective switch  ""
+  FAIL cmdalt list marks the shadowed key  "bar          -> /bin/pwd\nfoo          -> /bin/echo\npython       -> /bin/echo\n             available: /bin/echo\n"
+  ok   the shadow really does win (the bug the diagnostics point at)
+[cmdalt] repo :51150 (micropython 1.28-3)
+  ok   before install, python exits 127
+  ok   gucman install micropython succeeded
+  ok   install APPENDS the commands claim to /etc/cmdalt
+  ok   install still plants the IMPLEMENTATION link
+  ok   install plants NO /usr/local/bin/python (the shadow is gone for good)
+  ok   cmdalt which reports the claimed implementation, no shadow
+  ok   python -c runs MicroPython through the dispatcher
+  ok   python FILE runs it with sys.argv intact
+  ok   ...and the exit status propagates through the dispatcher
+  ok   a #!/bin/python script runs
+  ok   cmdalt set switches the default
+  ok   cmdalt reset reverts to the package claim
+  ok   gucman remove succeeded
+  ok   remove deletes the claim line (last line -> no file)
+  ok   ...and python is back to the 127 install hint
+  ok   CONTROL: in-OS, /usr/bin/python really is the dispatcher link
+  ok   the hand-built shadow payload is REFUSED at install (exit 1)
+  ok   ...by the bin-plant guard, naming package, bin and dispatcher
+  ok   ...pointing at the `commands` claim as the right declaration
+  ok   the refused install plants NO /usr/local/bin/python
+  ok   ...and writes NO install-DB record
+  ok   ...and leaves NO /opt/shadowpkg residue
+
+FAILED (4)

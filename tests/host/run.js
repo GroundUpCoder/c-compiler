@@ -65,6 +65,7 @@ var tests = [
   ['test_unknown_type_diag.js', []],     // #708: an unknown type name in a DECLARATION names the identifier ("unknown type name 'Zzz'") across the ticket's case table (file scope, static, const, pointer, function decl); the bare implicit-int shape and the expression path's "Undeclared identifier" keep their wording; positive control: a real typedef still compiles
   ['test_null_trap.js', []],             // #709: default-off byte identity; semantic null-use coverage/exemptions; generated noinline V8 frame; in-OS flag honesty
   ['test_async_lifecycle.js', []], // #782 timer failure settlement and drain
+  ['test_callback_capture.js', []], // #784: capture once, direct refs, cancellation and teardown
   ['test_frame_lifecycle.js', []], // #764: frame settlement and drain on success/failure
   ['test_abort_backtrace.js', []], // #760: abort/assert fd2 backtraces, plain exit134 quiet
   ['test_debug_image.js', []], // #761: source-built distribution binaries symbolicate

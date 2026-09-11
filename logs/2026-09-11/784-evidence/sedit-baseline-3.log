@@ -1,0 +1,6 @@
+  ok   boots to ready
+  ok   headed syntax palette distinguishes C categories
+  FAIL Ctrl+F selects the match and returns focus to the editor  "' > /root/headed.c\n~ # sedit /root/headed.c:2 & wmctl wait label EDIT:0 12000 && echo SEDIT-WINDOW-RE''ADY\n[1] 4 sedit /root/headed.c:2\nSEDIT-WINDOW-READY\n~ # wmctl wait label 'Find text:' 8000 && echo SEDIT-FIND-O''PEN\nSEDIT-FIND-OPEN\n~ # wmctl wait nolabel 'Find text:' 8000 && echo SEDIT-FIND-CLO''SED\nSEDIT-FIND-CLOSED\n~ # wmctl wait text EDIT:0 'XFINDX' 6000 && wmctl gettext EDIT:0 && echo SEDIT-FIND-D''ONE\n#include <stdio.h>\nint main(void) { /* gXFINDXeen */ return 0; }\n\nSEDIT-FIND-DONE\n~ # "
+  ok   real keyboard edit/save round trip
+
+os sedit (browser): 1 FAILED

@@ -7274,7 +7274,22 @@ function sdlDelayUnsupported() {
 // throw-only import is retired (a host throw unwound out of wasm and killed
 // the process on a legal SDL3 call).
 
-function createNullSDL() {
+// Callback registration captures the callable, not a live table slot. Prepare
+// the JSPI entry once; invocation loops must not repeat either operation.
+function captureWasmCallback(callback, nullable) {
+  if (nullable && callback === null) return null;
+  if (typeof callback !== 'function') throw new TypeError('Wasm callback must be a function');
+  return typeof WebAssembly.Suspending === 'function'
+    ? WebAssembly.promising(callback) : callback;
+}
+function captureTableCallback(ctx, index, nullable) {
+  if (nullable && index === 0) return null;
+  const exports = ctx.getExports ? ctx.getExports() : null;
+  const callback = exports && exports['__guc_objc_callback_' + index];
+  return captureWasmCallback(callback || ctx.getIndirectFunctionTable().get(index), false);
+}
+
+function createNullSDL(ctx) {
   let animationFrameFunc = null;
   let sdlTicksBase = null;   // ms baseline captured at SDL_Init (see __sdl_get_ticks)
   const nullTextures = [];   // 1-based; tracks per-texture state observable headless
@@ -7333,7 +7348,12 @@ function createNullSDL() {
       // #500: no display, no display clock — vsync=0 (the default) is
       // accepted, anything else reports unsupported (C sets SDL_GetError).
       __sdl_set_render_vsync: function (r, n) { return n === 0 ? 1 : 0; },
-      __sdl_set_animation_frame_func: function (callbackPtr) { animationFrameFunc = callbackPtr; },
+      __sdl_set_animation_frame_func: function (callbackPtr) {
+        animationFrameFunc = captureTableCallback(ctx, callbackPtr, true);
+      },
+      __sdl_set_animation_frame_func_ref: function (callback) {
+        animationFrameFunc = captureWasmCallback(callback, true);
+      },
       __sdl_push_key_event: function () {},
       __sdl_push_mouse_button_event: function () {},
       __sdl_push_mouse_motion_event: function () {},
@@ -9092,7 +9112,12 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         const win = windows[handle - 1];
         return win ? shmPresent(win, pixelsPtr, w, h, pitch) : -1;
       },
-      __sdl_set_animation_frame_func: function (callbackPtr) { animationFrameFunc = callbackPtr; },
+      __sdl_set_animation_frame_func: function (callbackPtr) {
+        animationFrameFunc = captureTableCallback(ctx, callbackPtr, true);
+      },
+      __sdl_set_animation_frame_func_ref: function (callback) {
+        animationFrameFunc = captureWasmCallback(callback, true);
+      },
       __sdl_push_key_event: function () {},
       __sdl_push_mouse_button_event: function () {},
       __sdl_push_mouse_motion_event: function () {},
@@ -9978,7 +10003,10 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       // wrap). Lazily baseline if ticks are read before SDL_Init.
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return performance.now() - sdlTicksBase; },
       __sdl_set_animation_frame_func: function (callbackPtr) {
-        animationFrameFunc = callbackPtr;
+        animationFrameFunc = captureTableCallback(ctx, callbackPtr, true);
+      },
+      __sdl_set_animation_frame_func_ref: function (callback) {
+        animationFrameFunc = captureWasmCallback(callback, true);
       },
     },
     getAnimationFrameFunc: function () { return animationFrameFunc; },
@@ -13110,6 +13138,18 @@ async function runModule({
   function failAsyncCallback(error) {
     if (!asyncStopped) terminateInvocation(error);
   }
+  function scheduleAsyncCallback(callback, argPtr, millis) {
+    const timer = setTimeout(async function () {
+      asyncTimers.delete(timer);
+      if (asyncStopped) return;
+      try {
+        await callback(argPtr);
+      } catch (error) {
+        failAsyncCallback(error);
+      }
+    }, Math.max(millis, 0));
+    asyncTimers.add(timer);
+  }
 
 
   /* log(Γ(x)) for x >= 0.5 — Lanczos approximation, g=7, n=9. Hoisted out
@@ -13358,19 +13398,11 @@ async function runModule({
       /* Emscripten compatibility stubs */
       __emscripten_async_call: function (funcPtr, argPtr, millis) {
         if (asyncStopped) return;
-        const timer = setTimeout(async function () {
-          asyncTimers.delete(timer);
-          if (asyncStopped) return;
-          try {
-            const fn = instance.exports['__guc_objc_callback_' + funcPtr] ||
-              instance.exports.__indirect_function_table.get(funcPtr);
-            if (hasJSPI) await WebAssembly.promising(fn)(argPtr);
-            else fn(argPtr);
-          } catch (error) {
-            failAsyncCallback(error);
-          }
-        }, Math.max(millis, 0));
-        asyncTimers.add(timer);
+        scheduleAsyncCallback(captureTableCallback(ctx, funcPtr, false), argPtr, millis);
+      },
+      __emscripten_async_call_ref: function (callback, argPtr, millis) {
+        if (asyncStopped) return;
+        scheduleAsyncCallback(captureWasmCallback(callback, false), argPtr, millis);
       },
       __emscripten_random: function () {
         return Math.random();
@@ -13468,7 +13500,7 @@ async function runModule({
   }
   // No canvas, no override → null stubs so __sdl_* imports still resolve
   // (Node CLI, headless tests). Browser host always sets getBrowserSDL.
-  if (!sdl) sdl = createNullSDL();
+  if (!sdl) sdl = createNullSDL(ctx);
   Object.assign(imports[ENV_KEY], sdl[ENV_KEY]);
   // Expose the live SDL object to the host so an embedder can push input events
   // into it (sdl.pushKeyEvent / pushMouseButtonEvent / …). Used when the canvas
@@ -13907,6 +13939,10 @@ async function runModule({
     drained = true;
     // Once teardown begins, no timer may add work while drain is awaiting.
     stopAsyncCallbacks();
+    // Drop the captured frame reference even when termination bypassed SDL_Quit.
+    if (sdl[ENV_KEY].__sdl_set_animation_frame_func_ref) {
+      sdl[ENV_KEY].__sdl_set_animation_frame_func_ref(null);
+    }
     if (ctx.gpuDrain) { try { await ctx.gpuDrain(); } catch (e) {} }
   }
   // Cover every terminal path, including a main failure after scheduling
@@ -14075,7 +14111,6 @@ async function runModule({
   }
 
   if (!entryExited && sdl && sdl.getAnimationFrameFunc()) {
-    const table = ctx.getIndirectFunctionTable();
     const raf = sdl.requestAnimationFrame;
     const FRAME_MS = 1000 / 60;
     let nextDue = 0;
@@ -14095,12 +14130,7 @@ async function runModule({
               if (sdl.drainInput) {
                 try { sdl.drainInput(); } catch (e) { /* exports gone mid-teardown */ }
               }
-              const callback = instance.exports['__guc_objc_callback_' + animFunc] || table.get(animFunc);
-              if (hasJSPI) {
-                await WebAssembly.promising(callback)();
-              } else {
-                callback();
-              }
+              await animFunc();
               if (sdl.getAnimationFrameFunc()) scheduleFrame();
               else resolve();
             } catch (e) {

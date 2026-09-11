@@ -1,0 +1,6 @@
+  ok   boots to ready
+  ok   headed syntax palette distinguishes C categories
+  ok   Ctrl+F selects the match and returns focus to the editor
+  ok   real keyboard edit/save round trip
+
+os sedit (browser): PASS
