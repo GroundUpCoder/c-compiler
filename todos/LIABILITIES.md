@@ -285,19 +285,9 @@ thing this file exists to kill.
 - file: os/doc/publish.md
 - anchor: - The maintainer intake is manual. There is no automatic pipeline
 
-### L81 — Foundation NSObject/pools need the authorized real Unicode string implementation
-- ticket: #778
-- file: os/foundation/README.md
-- anchor: Unicode NSString/NSConstantString is the next authorized increment (#778).
-
 ### L82 — Foundation collections and compiler fast enumeration follow strings
 - ticket: #779
 - file: os/foundation/README.md
 - anchor: Collections follow together with fast enumeration (#779).
-
-### L83 — Objective-C literal ABI still requires the separately implemented real string provider
-- ticket: #778
-- file: tests/objc/README.md
-- anchor: The small Foundation library now supplies NSObject and pools; real NSString/NSConstantString is the next authorized increment (#778). AppKit is outside this subset.
 
 <!-- END ENTRIES -->

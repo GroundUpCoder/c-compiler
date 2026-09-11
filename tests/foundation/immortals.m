@@ -1,16 +1,6 @@
 #include <Foundation/Foundation.h>
 #include <limits.h>
 #include <stdio.h>
-/* ABI provider fixture solely for runtime provenance testing. This is NOT
-   the real NSString/NSConstantString implementation funded by #778. */
-@interface NSString : NSObject @end
-@implementation NSString @end
-@interface NSConstantString : NSString {
-  unsigned flags, length, bytes, hash;
-  const void *data;
-}
-@end
-@implementation NSConstantString @end
 static int loaded;
 @interface LoadProbe : NSObject
 + (void)load;

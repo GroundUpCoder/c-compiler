@@ -136,3 +136,91 @@ Source observation at `5fb9f091`: `compiler.js`'s `objcInit` injects
 `calloc(cls->size)`/isa and `free(object)` in guc_objc_alloc/dispose; there is
 no reference count or pool state. The constant payload and linked layout
 validator are already separate from those allocation primitives.
+
+## #778 implementation contract (in progress)
+
+User selected Apple-compatible strict UTF8String output on 2026-09-10:
+preserve all stored UTF16 units, return NULL for unpaired surrogates during
+UTF8 conversion. No replacement or normalization. Independent review
+01a08ad5-5eb0-7b51-8d47-e30372066adc confirmed the small API and native Apple
+NULL/zero-length and sizing behavior; native observations are distinct from
+claims about guc tests. NSString is an isa-only cluster root; only exact-root
+allocation redirects to private owned UTF16 storage. Arbitrary subclasses keep
+their actual class and implement length/characterAtIndex plus, for inherited
+construction, initWithCharacters:length:. Base init preserves the receiver.
+This construction funnel is the supported guc subclass convention, not a claim
+that Apple specifies one unique designated NSString initializer.
+
+NSConstantString provides the existing 24-byte layout and permanent compiler
+literal identity. Ordinary allocated constant-class initializers consume their
+mortal placeholder and return an owned string. Shared equality/hash/conversion
+use public primitives, not assumptions about subclass storage. Equality is
+literal UTF16-unit equality. Hashes agree for equal contents across backing
+representations; numerical Apple hash compatibility is not promised.
+
+Selected API: string/new/init; UTF8String, characters:length:, string: constructor
+families; initWithBytes:length:encoding: for ASCII1 and UTF84; length,
+characterAtIndex:, UTF8String, lengthOfBytesUsingEncoding:, isEqual:,
+isEqualToString:, hash and description. No copy/formatting/other encodings in
+this increment. Input buffers are copied. Explicit byte counts preserve NUL;
+C-string construction stops at NUL. UTF8 byte input consumes one leading BOM;
+character arrays and compiler literals preserve FEFF. NULL buffers with zero
+length produce empty strings. Unsupported nonempty encodings and malformed
+bytes return nil; empty byte input needs no conversion. Sizing returns0 for
+unrepresentable strings or sizes above NSIntegerMax, without a terminator.
+UTF8String is borrowed, terminated, may contain embedded NUL, and may be backed
+by a private autoreleased owner. Retaining the string does not extend that
+owner past pool drain. No global scratch buffer or pointer-identity promise.
+
+### Exception dependency — #781
+
+The user's subsequent request for real exceptions supersedes treating an
+abort-only policy as the final #778 contract. #781 implements the Objective-C
+language/runtime EH substrate over existing Wasm EH. #778 then integrates real
+NSException and catchable range/argument errors, including cleanup of temporary
+constructor/conversion allocations when a subclass method throws. These are
+required before #778 completion; current private implementation diagnostics are
+not approved for merge. #777's historical exception-free scope is recorded
+above, not silently rewritten. #779 collections remain after #778.
+
+### #778 exception integration (unmerged)
+
+The implementation now provides NSException with initWithName:reason:userInfo:,
+exceptionWithName:reason:userInfo:, name/reason/userInfo getters, raise and dealloc.
+It snapshots nonnil name/reason with real NSString construction and retains an
+opaque NSDictionary pointer; this increment does not fabricate a collection.
+Nil fields are preserved, and default init consumes the receiver and returns nil.
+Ordinary construction exhaustion returns nil after releasing partial state.
+The initializer's transaction describes fresh initialization, not a guarantee
+about reinitializing an object whose old userInfo deallocation throws.
+
+Invalid nil UTF8/source-string arguments raise real NSInvalidArgumentException.
+NULL/nonzero byte/character buffers are outside the valid pointer precondition;
+the catchable invalid-argument diagnostic for these is a defensive guc extension,
+not observed Apple behavior (the preserved native probes crashed). Abstract
+string primitives also raise NSInvalidArgumentException. If an exception itself
+cannot be allocated, reporting terminates with a named diagnostic, without
+recursively trying to allocate another exception. Bounds raise catchable NSRangeException for both heap and constant strings,
+including empty strings and indices at or beyond length. The user selected
+Apple's documented contract on 2026-09-11; preserved native Mac probes named
+NSInvalidArgumentException, a differing observation that is not copied.
+
+Library string initializers own their receivers during preparation. Failure or
+throw during that phase consumes the receiver and frees local temporaries. Just
+before delegating to another initializer, they transfer receiver responsibility;
+after delegation they clean only their own temporary data. Thus inherited
+factories cannot lose a receiver when a source accessor throws, and consuming
+subclass initializers are never released a second time by the caller. Arbitrary
+subclasses remain responsible for their own overrides and must follow this
+library construction convention; this is not implicit compiler/ARC cleanup or
+a claim about every Apple initializer. Direct callers must not release a receiver
+already consumed by a failed library initialization.
+
+NSException snapshots consequently need no duplicate receiver-rescue wrapper.
+NSConstantString always consumes its original placeholder, while the separately
+allocated replacement initializer owns that replacement. Borrowed UTF8 owners
+are released on exceptional conversion or transferred once to autorelease on
+success. In-flight exception lifetime belongs to #781, which remains a hard
+unmerged dependency. Bounded independent review01a08af6-be72-71dd-b014-6cf68a9619ee found no new
+ownership defect and verified matching focused/broader Node records. This is
+not final backend, #781 or merge approval.

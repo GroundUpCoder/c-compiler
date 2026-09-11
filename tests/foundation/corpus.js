@@ -2,13 +2,17 @@
 (function(root) {
   'use strict';
   const programs = [
-    ...['ownership','pools','identity','scope','immortals','reentrant-growth','scope-flow','scope-snapshot'].map(name=>({name,inputs:[name+'.m']})),
+    ...['ownership','pools','identity','scope','immortals','reentrant-growth','scope-flow','scope-snapshot','strings','strings-codec','string-exceptions','string-cleanup','string-bounds'].map(name=>({name,inputs:[name+'.m']})),
     {name:'missing-pool',inputs:['missing-pool.m'],stderr:/autorelease without a pool/},
     {name:'cross-forward',inputs:['cross-main.m','cross-a.m','cross-b.m']},
     {name:'cross-reverse',inputs:['cross-b.m','cross-a.m','cross-main.m']},
     {name:'literal-forward',inputs:['literal-a.m','literal-b.m','literal-inspect.m','literal-main.m']},
     {name:'literal-reverse',inputs:['literal-main.m','literal-inspect.m','literal-b.m','literal-a.m']},
     {name:'exhaustion',inputs:['exhaustion.m'],limitMemory:true},
+    {name:'strings-exhaustion',inputs:['strings-exhaustion.m'],limitMemory:true},
+    {name:'string-exception-exhaustion',inputs:['string-exception-exhaustion.m'],limitMemory:true},
+    {name:'string-diagnostic-exhaustion',inputs:['string-diagnostic-exhaustion.m'],limitMemory:true,failureExit:134,failure:/NSString: cannot allocate exception/},
+    {name:'string-bounds-diagnostic-exhaustion',inputs:['string-diagnostic-exhaustion.m'],args:['bounds'],limitMemory:true,failureExit:134,failure:/NSString: cannot allocate exception/},
     {name:'bookkeeping-failure',inputs:['bookkeeping-failure.m'],limitMemory:true,failure:/cannot allocate autorelease bookkeeping/},
     {name:'scoped-failure',inputs:['scoped-failure.m'],limitMemory:true,failure:/cannot allocate scoped autorelease pool/},
     ...['pools cannot be retained','pools cannot be autoreleased','recursive drain'].map((message,i)=>({name:'misuse-'+i,inputs:['misuse.m'],args:[String(i)],failure:new RegExp(message)}))
@@ -64,7 +68,7 @@
         const exit=await runModule({bytes,args:[program.name,...(program.args||[])],...environment(),writeOut:s=>{stdout+=text(s);},writeErr:s=>{stderr+=text(s);}});
         Object.assign(record,{exit,stdout,stderr});
         if(program.failure) {
-          if(exit===0 || exit===2 || !program.failure.test(stderr)) throw Error(program.name+': wrong failure '+exit+' '+stderr);
+          if(exit===0 || exit===2 || (program.failureExit!==undefined && exit!==program.failureExit) || !program.failure.test(stderr)) throw Error(program.name+': wrong failure '+exit+' '+stderr);
         } else if(exit!==0 || !/FOUNDATION .* PASS/.test(stdout) || (program.stderr ? !program.stderr.test(stderr) : !!stderr)) {
           throw Error(program.name+': exit '+exit+' stdout='+stdout+' stderr='+stderr);
         }
