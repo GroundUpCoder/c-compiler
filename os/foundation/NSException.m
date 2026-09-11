@@ -1,6 +1,7 @@
 #include <Foundation/NSException.h>
 NSString * const NSInvalidArgumentException=@"NSInvalidArgumentException";
 NSString * const NSRangeException=@"NSRangeException";
+NSString * const NSGenericException=@"NSGenericException";
 @implementation NSException
 + (id)exceptionWithName:(NSString *)name reason:(NSString *)reason userInfo:(NSDictionary *)info {
   return [[[self alloc] initWithName:name reason:reason userInfo:info] autorelease];

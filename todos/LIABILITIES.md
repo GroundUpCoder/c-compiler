@@ -285,9 +285,4 @@ thing this file exists to kill.
 - file: os/doc/publish.md
 - anchor: - The maintainer intake is manual. There is no automatic pipeline
 
-### L82 — Foundation collections and compiler fast enumeration follow strings
-- ticket: #779
-- file: os/foundation/README.md
-- anchor: Collections follow together with fast enumeration (#779).
-
 <!-- END ENTRIES -->

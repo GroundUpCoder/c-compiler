@@ -4,4 +4,5 @@
 #include <Foundation/NSAutoreleasePool.h>
 #include <Foundation/NSString.h>
 #include <Foundation/NSException.h>
+#include <Foundation/NSArray.h>
 #endif

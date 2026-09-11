@@ -179,8 +179,8 @@ abort-only policy as the final #778 contract. #781 implements the Objective-C
 language/runtime EH substrate over existing Wasm EH. #778 then integrates real
 NSException and catchable range/argument errors, including cleanup of temporary
 constructor/conversion allocations when a subclass method throws. These are
-required before #778 completion; current private implementation diagnostics are
-not approved for merge. #777's historical exception-free scope is recorded
+required before #778 completion. The earlier private diagnostic-only behavior
+was not approved for merge and is superseded by the implementation below. #777's historical exception-free scope is recorded
 above, not silently rewritten. #779 collections remain after #778.
 
 ### #778 exception integration (unmerged)
@@ -224,3 +224,18 @@ success. In-flight exception lifetime belongs to #781, which remains a hard
 unmerged dependency. Bounded independent review01a08af6-be72-71dd-b014-6cf68a9619ee found no new
 ownership defect and verified matching focused/broader Node records. This is
 not final backend, #781 or merge approval.
+
+## #779 array contract (unmerged implementation)
+
+Approved V1 plus V2 review `01a08d60-98fc-7c13-bb81-f717a38460dd` governs
+real NSArray/NSMutableArray ownership, catchable enumeration mutation, custom
+storage obligations, balanced exceptional cleanup and one-loop MRC lowering.
+The supported methods and callback/error boundaries are documented in
+`os/foundation/README.md`; exact declarations are in `NSArray.h` and
+`NSEnumerator.h`. This does not add dictionaries, NSCopying, ARC or literals.
+Focused shared collection tests live in `tests/foundation/arrays-corpus.js`.
+Node, Chromium and actual /bin/cc entrypoints preserve separate evidence under
+`build/779`. Backend launches and the final combined five-ticket gate require
+the coordinator's serialized windows; their existence is not execution evidence.
+The user resolved NSString bounds to documented NSRangeException on 2026-09-11;
+the integrated dependency implements that contract for heap and constant strings.

@@ -11633,6 +11633,11 @@ class Parser {
     }
     while (this.matchText(',')) args.push(this.parseAssignmentExpression());
     this.expect(']');
+    return this.objcBuildMessage(tok, receiver, start, cls, classMethod, name, args);
+  }
+
+  objcMessageSignature(tok, receiver, cls, classMethod, name) {
+    const receiverType = receiver.type.removeQualifiers();
     const key = (classMethod ? '+' : '-') + name;
     let sig;
     if (cls) {
@@ -11649,6 +11654,12 @@ class Parser {
       if (!sig) this.error(tok, `Objective-C method '${key}' has no declared signature`);
       this.objc.sends.push({tok, name, key, dynamicId: receiverType instanceof Types.ObjcObjectPointerType, protocols: receiverType.protocols || [], sig});
     }
+    return sig;
+  }
+
+  objcBuildMessage(tok, receiver, start, cls, classMethod, name, args, signature = null) {
+    const loc = Lexer.Loc.fromTok(tok);
+    const sig = signature || this.objcMessageSignature(tok, receiver, cls, classMethod, name);
     const call = AST.makeCall(loc, new AST.EIdent(loc, sig.decl.type, sig.decl), [receiver, start, ...args]);
     if (sig.type.isVarArg) {
       // Specialize the forwarding helper to this promoted argument list. The
@@ -11665,6 +11676,82 @@ class Parser {
       return AST.makeCall(loc, new AST.EIdent(loc, type, helper.decl), call.arguments);
     }
     return call;
+  }
+
+  // #779: ordinary typed message dispatch and one SFor preserve the existing
+  // break/continue and protected-cleanup semantics. MRC adds no hidden retains.
+  objcParseEnumeration(tok, target, declaration) {
+    const loc = Lexer.Loc.fromTok(tok), O = this.objc;
+    const objectType = type => {
+      const t = type.removeQualifiers();
+      return t instanceof Types.ObjcObjectPointerType ||
+        (t.isPointer() && objcClassTypes.has(t.baseType.removeQualifiers()));
+    };
+    if (!objectType(target.type) || target.type.isConst)
+      this.error(tok, 'Objective-C for-in target must be a modifiable object pointer');
+    const collection = this.parseExpression(); this.expect(')');
+    if (!objectType(collection.type)) this.error(tok, 'Objective-C for-in collection must be an object pointer');
+    const cls = objcClassTypes.get(collection.type.removeQualifiers().baseType?.removeQualifiers()) || null;
+    const name = 'countByEnumeratingWithState:objects:count:';
+    const sig = this.objcMessageSignature(tok, collection, cls, false, name);
+    const params = sig.type.paramTypes.slice(2), uint = t => t === Types.TUINT || t === Types.TULONG;
+    const stateType = params[0]?.isPointer() ? params[0].baseType : null;
+    const fields = stateType?.isStruct() ? getVarMembers(stateType.tagDecl) : [];
+    if (sig.type.isVarArg || params.length !== 3 || !uint(sig.type.returnType) || !uint(params[2]) ||
+        !params[1].isCompatibleWith(O.id.pointer()) || !stateType || stateType.isConst ||
+        stateType.size !== 32 || fields.length !== 4 ||
+        fields.some((f,i) => f.name !== ['state','itemsPtr','mutationsPtr','extra'][i] || f.byteOffset !== [0,4,8,12][i]) ||
+        fields[0].type !== Types.TULONG || !fields[1].type.isCompatibleWith(O.id.pointer()) ||
+        !fields[2].type.isCompatibleWith(Types.TULONG.pointer()) ||
+        !fields[3].type.isArray() || fields[3].type.arraySize !== 5 || fields[3].type.baseType !== Types.TULONG)
+      this.error(tok, 'Objective-C for-in requires the NSFastEnumeration state and method ABI');
+    const ref = v => new AST.EIdent(loc, v.type, v);
+    const integer = n => new AST.EInt(loc, Types.TULONG, BigInt(n));
+    const expr = e => new AST.SExpr(loc, e);
+    const binary = (op,a,b) => AST.makeBinary(loc, op, a, b);
+    const assign = (a,b) => binary('ASSIGN',a,b);
+    const comma = expressions => new AST.EComma(loc, expressions[expressions.length-1].type, expressions);
+    const member = (v,n) => AST.makeMember(loc,ref(v),n);
+    const state = this.objcEHVar(stateType,loc,new AST.EInitList(loc,stateType,[]));
+    const buffer = this.objcEHVar(Types.arrayOf(O.id,16),loc);
+    const receiver = this.objcEHVar(collection.type,loc,collection);
+    const index = this.objcEHVar(Types.TULONG,loc,integer(0));
+    const count = this.objcEHVar(Types.TULONG,loc);
+    const generation = this.objcEHVar(Types.TULONG,loc,integer(0));
+    const fetch = () => this.objcBuildMessage(tok,ref(receiver),integer(0),cls,false,name,
+      [AST.makeUnary(loc,'OP_ADDR',ref(state)),ref(buffer),integer(16)],sig);
+    count.initExpr = fetch();
+    const mutation = () => AST.makeUnary(loc,'OP_DEREF',member(state,'mutationsPtr'));
+    const providerType = Types.functionType(Types.TVOID,[O.id],false,false);
+    let provider = this.varScope.stack[0].get('objc_enumerationMutation');
+    if (provider && (!(provider instanceof AST.DFunc) || !provider.type.isCompatibleWith(providerType)))
+      this.error(tok, 'Objective-C for-in requires void objc_enumerationMutation(id)');
+    if (!provider) {
+      provider = new AST.DFunc(loc,'objc_enumerationMutation',providerType,[],Types.StorageClass.EXTERN,false,null);
+      this.varScope.stack[0].set(provider.name,provider);
+      O.unit.declaredFunctions.push(provider);
+    }
+    const check = new AST.SIf(loc,binary('NE',mutation(),ref(generation)),
+      expr(AST.makeCall(loc,ref(provider),[ref(receiver)])),null);
+    // A zero batch assigns nil even for a nil/empty collection; break never
+    // reaches this expression. Reusing the AST lvalue reevaluates it each time.
+    const condition = new AST.ETernary(loc,Types.TULONG,ref(count),integer(1),
+      comma([assign(target,AST.makeCast(loc,target.type,integer(0))),integer(0)]));
+    const increment = comma([
+      assign(ref(index),binary('ADD',ref(index),integer(1))),
+      new AST.ETernary(loc,Types.TULONG,binary('EQ',ref(index),ref(count)),
+        comma([assign(ref(index),integer(0)),assign(ref(count),fetch())]),integer(0))
+    ]);
+    const userBody = this.parseStatement();
+    const loopBody = new AST.SCompound(loc,[check,
+      expr(assign(target,AST.makeSubscript(loc,member(state,'itemsPtr'),ref(index)))),userBody]);
+    const result = new AST.SCompound(loc,[...(declaration ? [declaration] : []),
+      new AST.SDecl(loc,[receiver,state,buffer,index,count,generation]),
+      new AST.SIf(loc,ref(count),expr(assign(ref(generation),mutation())),null),
+      new AST.SFor(loc,null,condition,increment,loopBody)]);
+    // Entry barrier only: stack locals have no new ownership cleanup.
+    O.ehBarriers.add(result); O.hasEnumeration = true;
+    return result;
   }
 
   objcFinish() {
@@ -14273,7 +14360,7 @@ class Parser {
   // A synthetic loop would steal break/continue; an end-of-block call would
   // miss directed exits. No exception or longjmp unwinding is implied here.
   objcLowerPools(fn) {
-    if (this.objc.hasEH) { this.objcLowerEHScopes(fn); return; }
+    if (this.objc.hasEH || this.objc.hasEnumeration) { this.objcLowerEHScopes(fn); return; }
     const scopes = this.objc.poolScopes, labels = new Map();
     let hasPools = false;
     const collect = (node, stack, switchStack) => {
@@ -14560,10 +14647,24 @@ class Parser {
       let init = null, cond = null, incr = null;
       if (!this.matchText(";")) {
         if (this.isTypeName()) {
-          init = this.parseDeclarationStatement();
+          init = this.parseDeclarationStatement(true);
+          if (this.objc && this.matchText('in')) {
+            if (init.declarations.length !== 1 || init.declarations[0].initExpr ||
+                ![Types.StorageClass.AUTO, Types.StorageClass.NONE, Types.StorageClass.REGISTER].includes(init.declarations[0].storageClass))
+              this.error(kwTok, 'Objective-C for-in requires one uninitialized object declaration');
+            const v = init.declarations[0];
+            const result = this.objcParseEnumeration(kwTok, new AST.EIdent(loc, v.type, v), init);
+            this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
+            return result;
+          }
         } else {
           const eTok = this.peek();
           const e = this.parseExpression();
+          if (this.objc && this.matchText('in')) {
+            const result = this.objcParseEnumeration(kwTok, e, null);
+            this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
+            return result;
+          }
           this.expect(";");
           init = new AST.SExpr(Lexer.Loc.fromTok(eTok), e);
         }
@@ -14912,7 +15013,7 @@ class Parser {
     return compound;
   }
 
-  parseDeclarationStatement() {
+  parseDeclarationStatement(forHeader = false) {
     const startTok = this.peek();
     const startLoc = Lexer.Loc.fromTok(startTok);
     const declarations = [];
@@ -15133,7 +15234,7 @@ class Parser {
         declarations.push(dvar);
       }
     }
-    this.expect(";");
+    if (!(forHeader && this.objc && this.atText('in'))) this.expect(";");
     return new AST.SDecl(startLoc, declarations);
   }
 

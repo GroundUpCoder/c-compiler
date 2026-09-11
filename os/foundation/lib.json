@@ -1,6 +1,17 @@
 {
   "type": "lib",
-  "includes": ["."],
-  "srcRoots": {"foundation": "."},
-  "sources": ["NSObject.m", "NSAutoreleasePool.m", "NSString.m", "NSException.m"]
+  "includes": [
+    "."
+  ],
+  "srcRoots": {
+    "foundation": "."
+  },
+  "sources": [
+    "NSObject.m",
+    "NSAutoreleasePool.m",
+    "NSString.m",
+    "NSException.m",
+    "NSArray.m",
+    "NSEnumerator.m"
+  ]
 }

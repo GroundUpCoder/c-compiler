@@ -1,15 +1,14 @@
-# Small Foundation: objects, Unicode strings and exceptions (#777, #778)
+# Small Foundation: objects, strings, exceptions and arrays (#777–#779)
 
 This is a real Objective-C source library for gucOS's static-link, single-threaded
 Wasm runtime. It provides NSObject, NSAutoreleasePool, scoped autorelease pools,
-immutable NSString/NSConstantString and NSException. It does not claim full
+immutable NSString/NSConstantString, NSException, NSArray and NSMutableArray. It does not claim full
 Foundation or Apple/GNU runtime binary compatibility.
-Collections follow together with fast enumeration (#779).
+Arrays implement the NSFastEnumeration protocol and genuine compiler `for-in`.
 
-**Current work-in-progress prerequisite:** the #778 sources below require the
-#781 Objective-C exception compiler, which is not yet accepted or merged. The
-normal Node and installed-OS commands are pending validation against the completed
-chain; current integration evidence uses a pinned WIP compiler snapshot.
+The #778/#779 batch awaits final combined validation and landing. Focused
+source, Node and browser/installed-OS evidence has its own recorded input pins;
+API documentation below is not a final gate or landing acceptance record.
 
 On a minimal gucOS image, install the source library with `gucman install
 foundation`; the fat development/test image includes it. Then:
@@ -164,17 +163,78 @@ nil. Fresh construction rolls back partial state on exhaustion or exception;
 ordinary allocation exhaustion returns nil. This transaction does not promise
 safe reinitialization when old userInfo destruction throws.
 
-NSDictionary is only forward-declared here; its real implementation belongs to
-#779. NSException does not supply a placeholder collection. Raise uses real
+NSDictionary is only forward-declared here and is outside this array subset. NSException does not supply a placeholder collection. Raise uses real
 Objective-C @throw and runtime exception ownership from #781. String diagnostics
 release their own exception reference as it propagates. If the diagnostic
 exception cannot itself be allocated, reporting terminates with a named message
 without recursively allocating another exception.
 
+## Owning arrays and fast enumeration
+
+`NSArray.h` declares the exact supported methods: empty/single/buffer/array
+factories and initializers; count/index/first/last queries; contains/equality/hash;
+copy/mutableCopy; capacity initialization and individual insertion/removal/
+replacement/removeAll for mutable arrays. Every stored slot owns one retain,
+including duplicates; getters borrow. Factories autorelease; init/copy/mutableCopy
+return owned objects. Copies are shallow independent containers except exact
+private immutable copy, which retains self. Hash is count, with collisions.
+No NSCopying/copyWithZone protocol or general NSString copying is claimed.
+Variadic constructors, dictionaries/sets, sorting/Blocks, collection literals,
+subscripting, serialization and thread safety are outside this declared subset.
+
+Nil elements raise NSInvalidArgumentException. Indexed access/removal/replacement
+requires index below count; insertion allows index equal to count. Violations
+raise NSRangeException. NSString bounds also follow the documented NSRangeException contract. Nil initWithArray source is invalid; empty first/last is nil.
+Capacity is only a hint. Checked vector overflow/allocation exhaustion terminates
+with `NSArray: allocation or capacity exhausted`; ordinary object alloc still
+returns nil on exhaustion. Reinitializing a concrete receiver is rejected without
+changing its state. A failed fresh initialization consumes its receiver.
+
+The public classes contain no storage ivars. Exact root alloc selects private
+concrete storage; subclass alloc preserves the dynamic class. Custom immutable
+storage must supply count/objectAtIndex, init/initWithObjects:count:/initWithArray:
+and dealloc. Mutable storage additionally supplies initWithCapacity:, insertion,
+removal, replacement and enumeration with a stable mutation token. Abstract
+operations fail loudly when required overrides are absent. Derived operations
+use public primitives. Generic immutable enumeration uses a per-state stable
+counter under an immutable-content contract; subclasses which mutate must supply
+their own tracking. Generic mutable removeAll uses removal primitives and does
+not promise reentrant snapshot semantics; custom storage must override it for
+that guarantee.
+
+Private mutation publishes valid state before releasing removed elements. Retain
+callbacks may reenter: index, current occupant, capacity and generation are
+revalidated after retain. An invalidated index releases the candidate hold and
+raises; earlier reentrant changes remain. removeAll detaches the old vector first,
+so callback additions survive. Dealloc detaches first, exposes zero count to
+callbacks and rejects further mutation. Release exceptions propagate with the
+committed mutation intact. Balanced try/finally cleanup attempts every owned slot
+and frees storage even when ordinary release calls throw; a later throw replaces
+an earlier one under #781. Termination, cancellation boundaries and infinite user
+recursion do not promise completion. The source recursion bound is logarithmic;
+linear-memory stack readings and actual engine call-stack samples are separate
+test evidence, not native-byte-stack measurements.
+
+Enumeration uses the conventional target-layout state, a fresh buffer per loop,
+and each returned itemsPtr. Mutable tokens advance for successful changes,
+including equal-count replacement, and refuse generation overflow before commit.
+The compiler checks before consuming each element, not after an unconditional
+break. Mutation raises a real NSGenericException through the Foundation-provided
+`objc_enumerationMutation` symbol. Apple's documentation establishes a catchable
+exception; the name comes from GNUstep's implementation, not a locally observed
+Apple exception name. A Foundation-free conformer may provide its own function;
+omission is a named link error, without an implicit fatal fallback.
+
+Primary contract references: Apple [memory management](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/MemoryMgmt/Articles/mmPractical.html),
+[fast enumeration](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/ObjectiveC/Chapters/ocFastEnumeration.html),
+[class clusters](https://developer.apple.com/library/archive/documentation/General/Conceptual/CocoaEncyclopedia/ClassClusters/ClassClusters.html),
+and GNUstep [mutation provider](https://github.com/gnustep/libs-base/blob/master/Source/NSObject.m).
+The approved V1/V2 design pins its observed upstream snapshots in the #779 ledger.
+
 ## Boundary and evidence
 
 Manual ownership only: no ARC, weak references, Blocks or Objective-C++.
-Collections follow under #779. Zones, general object copying/descriptions,
+Zones, general object copying/descriptions,
 formatting, other string encodings, proxies, runtime protocol reflection and
 dynamic method mutation are outside this declared API set; unsupported calls
 are not success stubs.

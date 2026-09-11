@@ -1,13 +1,21 @@
 {
   "name": "foundation",
-  "version": "0.2.0",
-  "summary": "Small Foundation source library — objects, ownership, pools and Unicode strings",
+  "version": "0.3.0",
+  "summary": "Small Foundation source library \u2014 objects, Unicode strings, exceptions and arrays",
   "files": {
-    "include/Foundation": { "tree": "os/foundation/Foundation" },
-    "src": { "tree": "os/foundation" }
+    "include/Foundation": {
+      "tree": "os/foundation/Foundation"
+    },
+    "src": {
+      "tree": "os/foundation"
+    }
   },
   "srclib": {
-    "include": ["include"],
-    "src": { "foundation": "src" }
+    "include": [
+      "include"
+    ],
+    "src": {
+      "foundation": "src"
+    }
   }
 }

@@ -5,6 +5,7 @@ __require_source("foundation/NSException.m");
 @class NSDictionary;
 extern NSString * const NSInvalidArgumentException;
 extern NSString * const NSRangeException;
+extern NSString * const NSGenericException;
 @interface NSException : NSObject {
   NSString *_name;
   NSString *_reason;

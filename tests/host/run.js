@@ -16,6 +16,7 @@ require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/r
 var tests = [
   ['test_small.js', []], // optional Small sibling and shared process ABI
   ['test_foundation.js', []], // #777 real manual-ownership library
+  ['test_foundation_arrays.js', []], // #779 owning arrays and fast enumeration
   ['test_objc_exceptions.js', []], // #781 native Wasm EH and cleanup
   ['test_objc.js', []], // #772 Objective-C compiler/runtime experiment
   ['test_epipe_listeners.js', []],       // runModule must not stack stream 'error' listeners

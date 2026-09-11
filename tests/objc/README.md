@@ -119,9 +119,24 @@ Chromium entry: `exceptions-browser.mjs`; actual `/bin/cc` on each OS host:
 `build/objc781` pin source and preserve failed attempts. These entrypoints are
 validation mechanisms, not claims that a particular gate has run.
 
+## Fast enumeration (#779)
+
+`for (id object in collection)` and assignable object-pointer expression targets
+use the declared NSFastEnumeration method ABI. Collection evaluation occurs once;
+state and a 16-slot buffer are per loop. Returned itemsPtr is authoritative.
+Continue advances/refills; break leaves the current element; exhaustion assigns
+nil. Expression targets are reevaluated on each assignment, including final nil.
+Mutation is checked before consuming each item against the first nonempty batch's
+token. MRC inserts no collection/element ownership operations. Existing finally,
+pool and transfer rules apply; goto/case entry into hidden state is rejected.
+The external `void objc_enumerationMutation(id)` provider is required at link
+time. Foundation supplies a catchable exception; custom conformers can provide
+their own compatible implementation without Foundation. See
+`tests/foundation/arrays-corpus.js` and `os/foundation/README.md`.
+
 ## Explicit boundaries
 
-Categories/extensions, properties/dot messaging, synthesis, fast enumeration,
+Categories/extensions, properties/dot messaging, synthesis,
 optional protocol requirements and runtime protocol objects are not implemented.
 Synchronization, ARC, Blocks and Objective-C++ remain outside
 this compiler round. Packed classes, bitfield/incomplete/function ivars and
