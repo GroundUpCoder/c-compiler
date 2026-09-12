@@ -8,7 +8,7 @@ if (!require('../../tools/small-sibling.js').snapshot(ROOT)) {
 const s = await openOsSession({port:3387, readyLabel:'Small image boots', serverTries:600, serverInterval:500});
 try {
   await s.setVt(1);
-  await s.page.keyboard.type(`cat > /root/browser-small.wc <<'SMALL_SOURCE'\nvoid main() { System.out.println("small browser".toUpperCase()); }\nSMALL_SOURCE\nsmall /root/browser-small.wc -o /root/sapp && /root/sapp | cat > /root/small.out && grep -q 'SMALL BROWSER' /root/small.out && echo SMALL""-BROWSER-OK\n`);
+  await s.page.keyboard.type(`cat > /root/browser-small.wc <<'SMALL_SOURCE'\nimport java.util.ArrayList;\nvoid main() { try { new ArrayList<String>().get(0); } catch (Exception error) { System.out.println("small browser".toUpperCase()); } }\nSMALL_SOURCE\nsmall /root/browser-small.wc -o /root/sapp && /root/sapp | cat > /root/small.out && grep -q 'SMALL BROWSER' /root/small.out && echo SMALL""-BROWSER-OK\n`);
   await s.waitOut('SMALL-BROWSER-OK', 60000);
   s.check('Small compiles inside browser kernel and output reaches a pipe', true);
   await s.context.close();

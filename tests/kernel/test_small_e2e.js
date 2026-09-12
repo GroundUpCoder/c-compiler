@@ -11,9 +11,12 @@ if (!sibling.snapshot(ROOT)) {
 const r = driveBoot([
   "cat > /root/small-test.wc <<'SMALL_SOURCE'",
   'import std.Memory;',
+  'import java.util.ArrayList;',
   '@import("c", "getpid") int getpid();',
   'int main(int argc, int argv, int envp) {',
   '  System.out.println("SMALL-runtime");',
+  '  int caught = 0; try { new ArrayList<String>().get(0); } catch (RuntimeException error) { caught++; } finally { caught += 10; }',
+  '  if (caught != 11) return 98;',
   '  System.err.println("SMALL-error");',
   '  return argc == 2 && Memory.loadInt(argv) != 0 && envp != 0 && getpid() > 0 ? 23 : 99;',
   '}',
