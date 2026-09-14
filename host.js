@@ -7274,6 +7274,107 @@ function sdlDelayUnsupported() {
 // throw-only import is retired (a host throw unwound out of wasm and killed
 // the process on a legal SDL3 call).
 
+// #791: one auxiliary memory-only FreeType instance per application. Font file
+// reads use the application's existing filesystem; glyph/run calls never RPC.
+// All returned bitmap handles own copies, so cache eviction/memory.grow cannot
+// invalidate caller results. No module is loaded for processes that omit fonts.
+function createFontBridge(ctx) {
+  let E = null;
+  const results = new Map();
+  let nextResult = 1, resultBytes = 0;
+  const MAX_FILE = 64 * 1024 * 1024, MAX_RESULTS = 32, MAX_RESULT_BYTES = 32 * 1024 * 1024;
+  function readFile(path) {
+    if (!ctx.fs) throw new Error('fontbridge: requires the process filesystem');
+    const fs = ctx.fs, fd = fs.open(path, 0, 0);
+    if (fd === null || fd < 0) return null;
+    try {
+      const st = fs.fstat(fd);
+      if (!st || !Number.isSafeInteger(st.size) || st.size <= 0 || st.size > MAX_FILE) return null;
+      const bytes = new Uint8Array(st.size);
+      for (let off = 0; off < bytes.length;) {
+        const n = fs.read(fd, bytes.subarray(off), bytes.length - off);
+        if (!Number.isInteger(n) || n <= 0 || n > bytes.length - off) return null;
+        off += n;
+      }
+      return bytes;
+    } finally { fs.close(fd); }
+  }
+  function load() {
+    if (E) return;
+    const bytes = readFile('/usr/lib/fontbridge.wasm');
+    if (!bytes) throw new Error('fontbridge: /usr/lib/fontbridge.wasm is not installed');
+    const mod = new WebAssembly.Module(bytes), env = {};
+    // The source linker retains FreeType's file/stdio TUs. Memory-backed faces
+    // do not use them. Refuse any attempted external operation, naming it.
+    for (const im of WebAssembly.Module.imports(mod)) {
+      if (im.module !== 'c' || im.kind !== 'function') throw new Error('fontbridge: unexpected import ' + im.module + '.' + im.name);
+      env[im.name] = function () { throw new Error('fontbridge memory-only module attempted ' + im.name); };
+    }
+    const exports = new WebAssembly.Instance(mod, { c: env }).exports;
+    if (!exports.fb_abi || exports.fb_abi() !== 1) throw new Error('fontbridge: module ABI mismatch (expected 1)');
+    E = exports;
+  }
+  function stage(bytes, fn) {
+    const p = bytes.length ? E.fb_alloc(bytes.length) : 0;
+    if (!p && bytes.length) return -2;
+    try { if (bytes.length) new Uint8Array(E.memory.buffer, p, bytes.length).set(bytes); return fn(p); }
+    finally { if (p) E.fb_free(p); }
+  }
+  function capture(ptr) {
+    if (!ptr) return -3;
+    const d = new Int32Array(E.memory.buffer, ptr, 7);
+    const bytes = d[5];
+    if (results.size >= MAX_RESULTS || nextResult === 2147483647 || bytes < 0 || bytes > MAX_RESULT_BYTES - resultBytes) return -2;
+    const record = { fields: Array.from(d.subarray(0, 6)), pixels: new Uint8Array(E.memory.buffer, d[6], bytes).slice() };
+    record.fields[5] = bytes * 4; // result-copy exports straight-alpha RGBA8
+    const id = nextResult++; results.set(id, record); resultBytes += bytes; return id;
+  }
+  return {
+    __font_abi: function () { return 1; },
+    __font_open: function (path, px, flags) {
+      load();
+      const bytes = path ? readFile(ctx.readString(path)) :
+        (readFile('/etc/fonts/mono.ttf') || readFile('/usr/share/fonts/mono.ttf'));
+      return bytes ? stage(bytes, p => E.fb_open(p, bytes.length, px, flags)) : -4;
+    },
+    __font_add_fallback: function (font, path) {
+      load(); if (!path) return -1;
+      const bytes = readFile(ctx.readString(path));
+      return bytes ? stage(bytes, p => E.fb_add_face(font, p, bytes.length)) : -4;
+    },
+    __font_close: function (font) { return E ? E.fb_close(font) : -1; },
+    __font_metric: function (font, field) { return E ? E.fb_metric(font, field) : -1; },
+    __font_glyph: function (font, cp) { return E ? capture(E.fb_glyph(font, cp)) : -1; },
+    __font_codepoint_run: function (font, ptr, len) {
+      if (!E || len < 0 || len > 16384) return -1;
+      let text;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(ctx.getMemory().buffer, ptr >>> 0, len)); }
+      catch (_) { return -5; }
+      const cps = Uint32Array.from(text, ch => ch.codePointAt(0));
+      if (cps.length > 4096) return -2;
+      return stage(new Uint8Array(cps.buffer), p => capture(E.fb_run(font, p, cps.length)));
+    },
+    __font_result_field: function (id, field) {
+      const r = results.get(id); return r && field >= 0 && field < 6 ? r.fields[field] : -1;
+    },
+    __font_result_copy: function (id, ptr, cap, rgba) {
+      const r = results.get(id); if (!r) return -1;
+      const n = r.fields[5], offset = ptr >>> 0, memory = ctx.getMemory().buffer;
+      if (cap < n || offset > memory.byteLength || n > memory.byteLength - offset) return -2;
+      const out = new Uint8Array(memory, offset, n), red = rgba >>> 24, green = (rgba >>> 16) & 255, blue = (rgba >>> 8) & 255, alpha = rgba & 255;
+      for (let i = 0, j = 0; i < r.pixels.length; i++, j += 4) {
+        out[j] = red; out[j + 1] = green; out[j + 2] = blue; out[j + 3] = Math.round(r.pixels[i] * alpha / 255);
+      }
+      return n;
+    },
+    __font_result_release: function (id) {
+      const r = results.get(id); if (!r) return -1;
+      resultBytes -= r.pixels.length; results.delete(id); return 0;
+    },
+    __font_dispose: function () { results.clear(); resultBytes = 0; if (E) E.fb_dispose(); },
+  };
+}
+
 // #791: immutable clip snapshots also serve queued GPU draws. Coordinates are
 // target pixels (the supported renderer has no viewport/scale transform).
 function sdlSetClip(view, enabled, x, y, w, h) {
@@ -13487,6 +13588,8 @@ async function runModule({
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
   }
 
+  Object.assign(imports[ENV_KEY], createFontBridge(ctx));
+
   let sdl = sdlOverride || null;
   if (!sdl && getBrowserSDL) {
     sdl = createBrowserSDL({ canvas: getBrowserSDL, ctx: ctx, sharedAudioBuffer: sharedAudioBuffer, notifyAudio: notifyAudio, notifyWindow: notifyWindow });
@@ -14422,6 +14525,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   module.exports.createSharedAudioBuffer = createSharedAudioBuffer;
   module.exports.createBrowserSDL = createBrowserSDL;
   module.exports.createNullSDL = createNullSDL;
+  module.exports.createFontBridge = createFontBridge;
   // Test export: the OS kernel-surface SDL flavor (per-window GPU present, A4)
   module.exports.createSurfaceSDL = createSurfaceSDL;
 }

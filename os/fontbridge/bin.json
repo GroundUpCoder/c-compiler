@@ -1,0 +1,7 @@
+{
+  "name": "fontbridge",
+  "description": "Process-local FreeType/fontcore glyph and codepoint-run module",
+  "deps": ["../../vendor/freetype/lib.json"],
+  "includes": ["../../vendor/freetype/demo", "../../vendor/freetype/include"],
+  "sources": ["fontbridge.c"]
+}

@@ -49,6 +49,7 @@ SDL_AppResult SDL_AppIterate(void *s){
  clip(1000,1000,20,20);color(255,0,255);rect(0,0,192,128);
  clip(0,0,0,128);rect(0,0,192,128);
  SDL_RenderPresent(r);
+ static int announced; if(!announced){announced=1;puts("CLIP-FRAME");fflush(stdout);}
  return SDL_APP_CONTINUE;
 }
 SDL_AppResult SDL_AppEvent(void *s,SDL_Event *e){(void)s;return e->type==SDL_EVENT_QUIT?SDL_APP_SUCCESS:SDL_APP_CONTINUE;}

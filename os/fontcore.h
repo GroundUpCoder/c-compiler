@@ -247,7 +247,12 @@ static FT_Int32 fc_load_flags(FT_Face face) {
 /* Load glyph `gi` from `face` into `g` (the caller already resolved the
  * covering face + set g->loaded). The one FT_Load / embolden / advance /
  * FT_Render / copy / threshold sequence the three consumers shared. */
-static FcGlyph *fc_render_face(FcGlyph *g, FT_Face face, FT_UInt gi, FcRenderOpts o) {
+/* Checked adapter seam (#791): status distinguishes a blank glyph from a
+ * failed load/render/allocation; max_bytes bounds allocation BEFORE malloc.
+ * The historical wrapper below keeps existing consumers' return contract. */
+static FcGlyph *fc_render_face_checked(FcGlyph *g, FT_Face face, FT_UInt gi,
+                                       FcRenderOpts o, int max_bytes, int *ok) {
+    if (ok) *ok = 0;
     if (FT_Load_Glyph(face, gi, fc_load_flags(face))) return g;
     FT_GlyphSlot slot = face->glyph;
     if (o.bold_xdelta) {
@@ -270,6 +275,7 @@ static FcGlyph *fc_render_face(FcGlyph *g, FT_Face face, FT_UInt gi, FcRenderOpt
     g->left = slot->bitmap_left;
     g->top = slot->bitmap_top;
     if (g->w > 0 && g->h > 0) {
+        if (max_bytes > 0 && (long long)g->w * g->h > max_bytes) return g;
         g->bmp = (unsigned char *)malloc((size_t)g->w * g->h);
         if (!g->bmp) { g->w = g->h = 0; return g; }
         for (int y = 0; y < g->h; y++)
@@ -279,7 +285,11 @@ static FcGlyph *fc_render_face(FcGlyph *g, FT_Face face, FT_UInt gi, FcRenderOpt
                 g->bmp[i] = g->bmp[i] >= o.mono_threshold ? 255 : 0;
         }
     }
+    if (ok) *ok = 1;
     return g;
+}
+static FcGlyph *fc_render_face(FcGlyph *g, FT_Face face, FT_UInt gi, FcRenderOpts o) {
+    return fc_render_face_checked(g, face, gi, o, 0, NULL);
 }
 
 #endif /* FONTCORE_H */
