@@ -1,0 +1,777 @@
+{
+  "runtimeCommit": "0d31aa17e84e14c4e1bbdc28ac5b1351da4e9311",
+  "acceptanceCommit": "4a03977894acd9b561bcaff32a7c4cf88da279fa",
+  "scope": "Versioned local artifacts relative to c-compiler-791; historical failures preserved. 4a039778 runs are under CPU load x10.",
+  "records": [
+    {
+      "directory": "build/renderclip/2026-09-14T09-06-52-594Z",
+      "commit": "0d31aa17e84e14c4e1bbdc28ac5b1351da4e9311",
+      "outcome": "failed",
+      "failure": "page.waitForFunction: Timeout 30000ms exceeded.\n    at waitOut (/Users/jku/git/c-compiler-791/tests/browser/lib/os-harness.mjs:358:16)\n    at /Users/jku/git/c-compiler-791/tests/browser/os-renderclip.mjs:37:9",
+      "files": [
+        {
+          "path": "build/renderclip/2026-09-14T09-06-52-594Z/evidence.json",
+          "sha256": "1a5ba6d3961ac0ee05ba931cca7cbf42deaa4e9cafd639c9fcc7941975f10f72"
+        }
+      ],
+      "runs": []
+    },
+    {
+      "directory": "build/renderclip/2026-09-14T09-12-24-475Z",
+      "commit": "0d31aa17e84e14c4e1bbdc28ac5b1351da4e9311",
+      "outcome": "failed",
+      "failure": "page.waitForFunction: Timeout 30000ms exceeded.\n    at waitOut (/Users/jku/git/c-compiler-791/tests/browser/lib/os-harness.mjs:358:16)\n    at /Users/jku/git/c-compiler-791/tests/browser/os-renderclip.mjs:39:9",
+      "image": {
+        "local": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c",
+        "served": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c"
+      },
+      "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1",
+      "files": [
+        {
+          "path": "build/renderclip/2026-09-14T09-12-24-475Z/evidence.json",
+          "sha256": "eaee305dd430df3a3eaca7eda01908cbf2720d9588d7c1e4f9f9e1ca60676f4c"
+        }
+      ],
+      "runs": []
+    },
+    {
+      "directory": "build/renderclip/2026-09-14T09-13-10-323Z",
+      "commit": "0d31aa17e84e14c4e1bbdc28ac5b1351da4e9311",
+      "outcome": "passed",
+      "failure": null,
+      "browser": "149.0.7827.55",
+      "image": {
+        "local": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c",
+        "served": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c"
+      },
+      "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1",
+      "files": [
+        {
+          "path": "build/renderclip/2026-09-14T09-13-10-323Z/CPU-screen.png",
+          "sha256": "2fc5fb40d7b64d502c32c623cc66dff18deadb6df99ef0b028b2b95d397a0e4b"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-13-10-323Z/CPU.png",
+          "sha256": "a988b5826b03101f4c534b5ba650742140edf02715aef75312dfb77e1dab6268"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-13-10-323Z/GPU-screen.png",
+          "sha256": "25ede20d95fc786b5833fe5b03871e2abbcb1f0d7b12004210a19a7e1ebe2887"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-13-10-323Z/GPU.png",
+          "sha256": "fc37311e6a63662fa919d61dc2d3cee3389373e518cd09cfc33672d397c9efdb"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-13-10-323Z/evidence.json",
+          "sha256": "86af775e48f1e9d0bdbd0ac74a6ced72502e15ebbd26fe42bde85be8c42fcf5f"
+        }
+      ],
+      "runs": [
+        {
+          "mode": "CPU",
+          "transport": {
+            "sid": 3,
+            "pid": 10,
+            "title": "cliptest",
+            "width": 192,
+            "height": 128,
+            "frameSeq": 42,
+            "bitmap": false,
+            "bitmapWidth": 0,
+            "bitmapHeight": 0,
+            "transport": "CPU shared memory",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "probes": 16
+        },
+        {
+          "mode": "GPU",
+          "transport": {
+            "sid": 4,
+            "pid": 23,
+            "title": "cliptest",
+            "width": 192,
+            "height": 128,
+            "frameSeq": 42,
+            "bitmap": true,
+            "bitmapWidth": 192,
+            "bitmapHeight": 128,
+            "transport": "GPU ImageBitmap",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "probes": 16
+        }
+      ]
+    },
+    {
+      "directory": "build/renderclip/2026-09-14T09-16-15-802Z",
+      "commit": "4a03977894acd9b561bcaff32a7c4cf88da279fa",
+      "outcome": "passed",
+      "failure": null,
+      "browser": "149.0.7827.55",
+      "image": {
+        "local": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c",
+        "served": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c"
+      },
+      "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1",
+      "files": [
+        {
+          "path": "build/renderclip/2026-09-14T09-16-15-802Z/CPU-screen.png",
+          "sha256": "d3ccb475e953693b2442776b6de74dde8b14004a845975ab7cc34911596826f5"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-15-802Z/CPU.png",
+          "sha256": "a988b5826b03101f4c534b5ba650742140edf02715aef75312dfb77e1dab6268"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-15-802Z/GPU-screen.png",
+          "sha256": "5fcad3153c9f7025a2a4be3ac89d88b51d8dbf6399fc1911a4c1652c810643fc"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-15-802Z/GPU.png",
+          "sha256": "fc37311e6a63662fa919d61dc2d3cee3389373e518cd09cfc33672d397c9efdb"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-15-802Z/evidence.json",
+          "sha256": "560e3505967068f85b25e4765e142f3541f3d84c916bde14954e6994c84a4802"
+        }
+      ],
+      "runs": [
+        {
+          "mode": "CPU",
+          "transport": {
+            "sid": 3,
+            "pid": 10,
+            "title": "cliptest",
+            "width": 192,
+            "height": 128,
+            "frameSeq": 50,
+            "bitmap": false,
+            "bitmapWidth": 0,
+            "bitmapHeight": 0,
+            "transport": "CPU shared memory",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "probes": 16
+        },
+        {
+          "mode": "GPU",
+          "transport": {
+            "sid": 4,
+            "pid": 23,
+            "title": "cliptest",
+            "width": 192,
+            "height": 128,
+            "frameSeq": 75,
+            "bitmap": true,
+            "bitmapWidth": 192,
+            "bitmapHeight": 128,
+            "transport": "GPU ImageBitmap",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "probes": 16
+        }
+      ]
+    },
+    {
+      "directory": "build/renderclip/2026-09-14T09-16-21-582Z",
+      "commit": "4a03977894acd9b561bcaff32a7c4cf88da279fa",
+      "outcome": "passed",
+      "failure": null,
+      "browser": "149.0.7827.55",
+      "image": {
+        "local": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c",
+        "served": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c"
+      },
+      "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1",
+      "files": [
+        {
+          "path": "build/renderclip/2026-09-14T09-16-21-582Z/CPU-screen.png",
+          "sha256": "d3ccb475e953693b2442776b6de74dde8b14004a845975ab7cc34911596826f5"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-21-582Z/CPU.png",
+          "sha256": "a988b5826b03101f4c534b5ba650742140edf02715aef75312dfb77e1dab6268"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-21-582Z/GPU-screen.png",
+          "sha256": "5fcad3153c9f7025a2a4be3ac89d88b51d8dbf6399fc1911a4c1652c810643fc"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-21-582Z/GPU.png",
+          "sha256": "fc37311e6a63662fa919d61dc2d3cee3389373e518cd09cfc33672d397c9efdb"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-21-582Z/evidence.json",
+          "sha256": "000718c91581793d19e411b17876a224dc089e8f680104494928089ac2481edd"
+        }
+      ],
+      "runs": [
+        {
+          "mode": "CPU",
+          "transport": {
+            "sid": 3,
+            "pid": 10,
+            "title": "cliptest",
+            "width": 192,
+            "height": 128,
+            "frameSeq": 53,
+            "bitmap": false,
+            "bitmapWidth": 0,
+            "bitmapHeight": 0,
+            "transport": "CPU shared memory",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "probes": 16
+        },
+        {
+          "mode": "GPU",
+          "transport": {
+            "sid": 4,
+            "pid": 23,
+            "title": "cliptest",
+            "width": 192,
+            "height": 128,
+            "frameSeq": 95,
+            "bitmap": true,
+            "bitmapWidth": 192,
+            "bitmapHeight": 128,
+            "transport": "GPU ImageBitmap",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "probes": 16
+        }
+      ]
+    },
+    {
+      "directory": "build/renderclip/2026-09-14T09-16-27-849Z",
+      "commit": "4a03977894acd9b561bcaff32a7c4cf88da279fa",
+      "outcome": "passed",
+      "failure": null,
+      "browser": "149.0.7827.55",
+      "image": {
+        "local": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c",
+        "served": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c"
+      },
+      "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1",
+      "files": [
+        {
+          "path": "build/renderclip/2026-09-14T09-16-27-849Z/CPU-screen.png",
+          "sha256": "d3ccb475e953693b2442776b6de74dde8b14004a845975ab7cc34911596826f5"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-27-849Z/CPU.png",
+          "sha256": "a988b5826b03101f4c534b5ba650742140edf02715aef75312dfb77e1dab6268"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-27-849Z/GPU-screen.png",
+          "sha256": "5fcad3153c9f7025a2a4be3ac89d88b51d8dbf6399fc1911a4c1652c810643fc"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-27-849Z/GPU.png",
+          "sha256": "fc37311e6a63662fa919d61dc2d3cee3389373e518cd09cfc33672d397c9efdb"
+        },
+        {
+          "path": "build/renderclip/2026-09-14T09-16-27-849Z/evidence.json",
+          "sha256": "640ef64bb3cec487bd79aa37f6e07b1cee2423a6c60afe21cc36a8a2b618c069"
+        }
+      ],
+      "runs": [
+        {
+          "mode": "CPU",
+          "transport": {
+            "sid": 3,
+            "pid": 10,
+            "title": "cliptest",
+            "width": 192,
+            "height": 128,
+            "frameSeq": 47,
+            "bitmap": false,
+            "bitmapWidth": 0,
+            "bitmapHeight": 0,
+            "transport": "CPU shared memory",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "probes": 16
+        },
+        {
+          "mode": "GPU",
+          "transport": {
+            "sid": 4,
+            "pid": 23,
+            "title": "cliptest",
+            "width": 192,
+            "height": 128,
+            "frameSeq": 120,
+            "bitmap": true,
+            "bitmapWidth": 192,
+            "bitmapHeight": 128,
+            "transport": "GPU ImageBitmap",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "probes": 16
+        }
+      ]
+    },
+    {
+      "directory": "build/fontbridge-browser/2026-09-14T09-13-38-413Z",
+      "commit": "0d31aa17e84e14c4e1bbdc28ac5b1351da4e9311",
+      "outcome": "failed",
+      "failure": "2539 differing channels on baseline rows63/64",
+      "browser": "149.0.7827.55",
+      "image": {
+        "local": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c",
+        "served": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c"
+      },
+      "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1",
+      "files": [
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-13-38-413Z/CPU-screen.png",
+          "sha256": "b2304f907dca2e19bb02645236d849f0d9733cff05ed6c11ad65c7accdddbc1b"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-13-38-413Z/CPU.png",
+          "sha256": "f840353aa934989653d579827957eb1c3bd995e4075e7f65025dfecde0e8d9a1"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-13-38-413Z/GPU-screen.png",
+          "sha256": "c3957b3f07a7978efaca051a510c5f1861e6402557c20a1eb832447e52f81c90"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-13-38-413Z/GPU.png",
+          "sha256": "421dbcf6b32423dda026e7d44ac034df15a7c92e91cd2f69969c3fe5de8051a1"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-13-38-413Z/evidence.json",
+          "sha256": "c60799a7fee74a884f6689e22f4e84cd6c5c7ebda55d371f4b72ee0b0a952189"
+        }
+      ],
+      "runs": [
+        {
+          "mode": "CPU",
+          "transport": {
+            "sid": 3,
+            "pid": 10,
+            "title": "fontbridge",
+            "width": 512,
+            "height": 192,
+            "frameSeq": 160,
+            "bitmap": false,
+            "bitmapWidth": 0,
+            "bitmapHeight": 0,
+            "transport": "CPU shared memory",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "ink": 1998,
+          "childInk": 866,
+          "leaked": 0,
+          "performance": [
+            "FONT-PERF CPU cold-open-raster-upload-submit n=32 p50=2.275 p95=15.850 p99=26.270 ms",
+            "FONT-PERF CPU warm-cached-texture-submit n=128 p50=0.410 p95=0.455 p99=0.470 ms"
+          ]
+        },
+        {
+          "mode": "GPU",
+          "transport": {
+            "sid": 4,
+            "pid": 23,
+            "title": "fontbridge",
+            "width": 512,
+            "height": 192,
+            "frameSeq": 160,
+            "bitmap": true,
+            "bitmapWidth": 512,
+            "bitmapHeight": 192,
+            "transport": "GPU ImageBitmap",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "ink": 1991,
+          "childInk": 866,
+          "leaked": 0,
+          "performance": [
+            "FONT-PERF GPU cold-open-raster-upload-submit n=32 p50=2.110 p95=6.735 p99=7.375 ms",
+            "FONT-PERF GPU warm-cached-texture-submit n=128 p50=0.025 p95=0.040 p99=0.065 ms"
+          ]
+        }
+      ]
+    },
+    {
+      "directory": "build/fontbridge-browser/2026-09-14T09-14-38-185Z",
+      "commit": "0d31aa17e84e14c4e1bbdc28ac5b1351da4e9311",
+      "outcome": "passed",
+      "failure": null,
+      "browser": "149.0.7827.55",
+      "image": {
+        "local": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c",
+        "served": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c"
+      },
+      "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1",
+      "files": [
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-14-38-185Z/CPU-screen.png",
+          "sha256": "acb9ad5d7ce2c4d7ca46c2dc8b6f135186098585acb48c821d1ef168278dc175"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-14-38-185Z/CPU.png",
+          "sha256": "f840353aa934989653d579827957eb1c3bd995e4075e7f65025dfecde0e8d9a1"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-14-38-185Z/GPU-screen.png",
+          "sha256": "039c3ab60cd76f87fa769429adde3abf991514738eebb4bc71365594cf2fc4ee"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-14-38-185Z/GPU.png",
+          "sha256": "1498da478d38d696eb3ad34c2d551a0f19bb029136ba9c01204c60a357fed2d2"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-14-38-185Z/evidence.json",
+          "sha256": "6cff774614e72b58bddac859c5866a3a5f8d92a5189c5efc18d69ebe922bc6a0"
+        }
+      ],
+      "runs": [
+        {
+          "mode": "CPU",
+          "transport": {
+            "sid": 3,
+            "pid": 10,
+            "title": "fontbridge",
+            "width": 512,
+            "height": 192,
+            "frameSeq": 160,
+            "bitmap": false,
+            "bitmapWidth": 0,
+            "bitmapHeight": 0,
+            "transport": "CPU shared memory",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "ink": 1998,
+          "childInk": 866,
+          "leaked": 0,
+          "performance": [
+            "FONT-PERF CPU cold-open-raster-upload-submit n=32 p50=2.450 p95=6.930 p99=41.315 ms",
+            "FONT-PERF CPU warm-cached-texture-submit n=128 p50=0.385 p95=0.425 p99=0.435 ms"
+          ]
+        },
+        {
+          "mode": "GPU",
+          "transport": {
+            "sid": 4,
+            "pid": 23,
+            "title": "fontbridge",
+            "width": 512,
+            "height": 192,
+            "frameSeq": 160,
+            "bitmap": true,
+            "bitmapWidth": 512,
+            "bitmapHeight": 192,
+            "transport": "GPU ImageBitmap",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "ink": 1999,
+          "childInk": 866,
+          "leaked": 0,
+          "performance": [
+            "FONT-PERF GPU cold-open-raster-upload-submit n=32 p50=2.035 p95=5.540 p99=6.935 ms",
+            "FONT-PERF GPU warm-cached-texture-submit n=128 p50=0.050 p95=0.075 p99=0.095 ms"
+          ]
+        }
+      ]
+    },
+    {
+      "directory": "build/fontbridge-browser/2026-09-14T09-15-42-479Z",
+      "commit": "4a03977894acd9b561bcaff32a7c4cf88da279fa",
+      "outcome": "passed",
+      "failure": null,
+      "browser": "149.0.7827.55",
+      "image": {
+        "local": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c",
+        "served": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c"
+      },
+      "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1",
+      "files": [
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-15-42-479Z/CPU-screen.png",
+          "sha256": "f2e2907058b574c87ec02a23c985d134899f9ed2fb61b0b4590cd05ae88c2b58"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-15-42-479Z/CPU.png",
+          "sha256": "f840353aa934989653d579827957eb1c3bd995e4075e7f65025dfecde0e8d9a1"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-15-42-479Z/GPU-screen.png",
+          "sha256": "3b5fee0f53aaa3652dfad6ec67dd223dbd1cf88e8970028a10f5686dcb657a5d"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-15-42-479Z/GPU.png",
+          "sha256": "1498da478d38d696eb3ad34c2d551a0f19bb029136ba9c01204c60a357fed2d2"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-15-42-479Z/evidence.json",
+          "sha256": "500d596a5ff255314439d8a59c92a125a1050eee6fa0ff6782bbabc2b1f7abaf"
+        }
+      ],
+      "runs": [
+        {
+          "mode": "CPU",
+          "transport": {
+            "sid": 3,
+            "pid": 10,
+            "title": "fontbridge",
+            "width": 512,
+            "height": 192,
+            "frameSeq": 160,
+            "bitmap": false,
+            "bitmapWidth": 0,
+            "bitmapHeight": 0,
+            "transport": "CPU shared memory",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "ink": 1998,
+          "childInk": 866,
+          "leaked": 0,
+          "performance": [
+            "FONT-PERF CPU cold-open-raster-upload-submit n=32 p50=3.240 p95=20.155 p99=30.655 ms",
+            "FONT-PERF CPU warm-cached-texture-submit n=128 p50=0.400 p95=0.815 p99=0.830 ms"
+          ]
+        },
+        {
+          "mode": "GPU",
+          "transport": {
+            "sid": 4,
+            "pid": 23,
+            "title": "fontbridge",
+            "width": 512,
+            "height": 192,
+            "frameSeq": 160,
+            "bitmap": true,
+            "bitmapWidth": 512,
+            "bitmapHeight": 192,
+            "transport": "GPU ImageBitmap",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "ink": 1999,
+          "childInk": 866,
+          "leaked": 0,
+          "performance": [
+            "FONT-PERF GPU cold-open-raster-upload-submit n=32 p50=2.460 p95=9.820 p99=115.945 ms",
+            "FONT-PERF GPU warm-cached-texture-submit n=128 p50=0.095 p95=0.170 p99=0.185 ms"
+          ]
+        }
+      ]
+    },
+    {
+      "directory": "build/fontbridge-browser/2026-09-14T09-15-53-803Z",
+      "commit": "4a03977894acd9b561bcaff32a7c4cf88da279fa",
+      "outcome": "passed",
+      "failure": null,
+      "browser": "149.0.7827.55",
+      "image": {
+        "local": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c",
+        "served": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c"
+      },
+      "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1",
+      "files": [
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-15-53-803Z/CPU-screen.png",
+          "sha256": "ea30d937ea92775a0f12b55ab6ee785e2bc39d347358e48e419fb185b501d185"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-15-53-803Z/CPU.png",
+          "sha256": "f840353aa934989653d579827957eb1c3bd995e4075e7f65025dfecde0e8d9a1"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-15-53-803Z/GPU-screen.png",
+          "sha256": "b96e7233c0bfecd4ce9afd61b6ba14c92615a9ad3f8e7175c26066c20b81302d"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-15-53-803Z/GPU.png",
+          "sha256": "1498da478d38d696eb3ad34c2d551a0f19bb029136ba9c01204c60a357fed2d2"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-15-53-803Z/evidence.json",
+          "sha256": "5339769e3ae0795223719fd8aed7550965cfbc50a21905f9b8f0517385e15fd2"
+        }
+      ],
+      "runs": [
+        {
+          "mode": "CPU",
+          "transport": {
+            "sid": 3,
+            "pid": 10,
+            "title": "fontbridge",
+            "width": 512,
+            "height": 192,
+            "frameSeq": 160,
+            "bitmap": false,
+            "bitmapWidth": 0,
+            "bitmapHeight": 0,
+            "transport": "CPU shared memory",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "ink": 1998,
+          "childInk": 866,
+          "leaked": 0,
+          "performance": [
+            "FONT-PERF CPU cold-open-raster-upload-submit n=32 p50=2.915 p95=15.780 p99=37.230 ms",
+            "FONT-PERF CPU warm-cached-texture-submit n=128 p50=0.390 p95=0.725 p99=0.800 ms"
+          ]
+        },
+        {
+          "mode": "GPU",
+          "transport": {
+            "sid": 4,
+            "pid": 23,
+            "title": "fontbridge",
+            "width": 512,
+            "height": 192,
+            "frameSeq": 160,
+            "bitmap": true,
+            "bitmapWidth": 512,
+            "bitmapHeight": 192,
+            "transport": "GPU ImageBitmap",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "ink": 1999,
+          "childInk": 866,
+          "leaked": 0,
+          "performance": [
+            "FONT-PERF GPU cold-open-raster-upload-submit n=32 p50=2.385 p95=7.545 p99=10.805 ms",
+            "FONT-PERF GPU warm-cached-texture-submit n=128 p50=0.035 p95=0.080 p99=0.090 ms"
+          ]
+        }
+      ]
+    },
+    {
+      "directory": "build/fontbridge-browser/2026-09-14T09-16-05-990Z",
+      "commit": "4a03977894acd9b561bcaff32a7c4cf88da279fa",
+      "outcome": "passed",
+      "failure": null,
+      "browser": "149.0.7827.55",
+      "image": {
+        "local": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c",
+        "served": "97ab49af836d9bc6a421f66f38f218d853e4b46ecaedd66a1c4f7f3e22d0a51c"
+      },
+      "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1",
+      "files": [
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-16-05-990Z/CPU-screen.png",
+          "sha256": "ea30d937ea92775a0f12b55ab6ee785e2bc39d347358e48e419fb185b501d185"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-16-05-990Z/CPU.png",
+          "sha256": "f840353aa934989653d579827957eb1c3bd995e4075e7f65025dfecde0e8d9a1"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-16-05-990Z/GPU-screen.png",
+          "sha256": "b96e7233c0bfecd4ce9afd61b6ba14c92615a9ad3f8e7175c26066c20b81302d"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-16-05-990Z/GPU.png",
+          "sha256": "1498da478d38d696eb3ad34c2d551a0f19bb029136ba9c01204c60a357fed2d2"
+        },
+        {
+          "path": "build/fontbridge-browser/2026-09-14T09-16-05-990Z/evidence.json",
+          "sha256": "d6a948718162cd57b9b22654387cea61f8c6c523670e481b989e5813f5d8d413"
+        }
+      ],
+      "runs": [
+        {
+          "mode": "CPU",
+          "transport": {
+            "sid": 3,
+            "pid": 10,
+            "title": "fontbridge",
+            "width": 512,
+            "height": 192,
+            "frameSeq": 160,
+            "bitmap": false,
+            "bitmapWidth": 0,
+            "bitmapHeight": 0,
+            "transport": "CPU shared memory",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "ink": 1998,
+          "childInk": 866,
+          "leaked": 0,
+          "performance": [
+            "FONT-PERF CPU cold-open-raster-upload-submit n=32 p50=2.770 p95=14.225 p99=28.270 ms",
+            "FONT-PERF CPU warm-cached-texture-submit n=128 p50=0.400 p95=0.825 p99=0.840 ms"
+          ]
+        },
+        {
+          "mode": "GPU",
+          "transport": {
+            "sid": 4,
+            "pid": 23,
+            "title": "fontbridge",
+            "width": 512,
+            "height": 192,
+            "frameSeq": 160,
+            "bitmap": true,
+            "bitmapWidth": 512,
+            "bitmapHeight": 192,
+            "transport": "GPU ImageBitmap",
+            "scope": "Kernel surface after completed frame; bitmap presence distinguishes GPU transport from software fallback."
+          },
+          "ink": 1999,
+          "childInk": 866,
+          "leaked": 0,
+          "performance": [
+            "FONT-PERF GPU cold-open-raster-upload-submit n=32 p50=2.190 p95=7.030 p99=97.095 ms",
+            "FONT-PERF GPU warm-cached-texture-submit n=128 p50=0.045 p95=0.085 p99=0.095 ms"
+          ]
+        }
+      ]
+    }
+  ],
+  "gates": {
+    "focused": {
+      "executedPassed": 6,
+      "executedFailed": 0,
+      "selected": 2,
+      "totalMembers": 76,
+      "repeat": 3,
+      "underLoad": 10
+    },
+    "standardKernel": {
+      "executedPassed": 12,
+      "executedFailed": 0,
+      "selected": 4,
+      "totalMembers": 206,
+      "repeat": 3,
+      "underLoad": 10
+    },
+    "standardBrowser": {
+      "executedPassed": 18,
+      "executedFailed": 0,
+      "selected": 6,
+      "totalMembers": 76,
+      "repeat": 3,
+      "underLoad": 10,
+      "additionalCarriedRuns": 6
+    }
+  },
+  "gateFiles": [
+    {
+      "path": "build/791-acceptance/focused-repeat.log",
+      "sha256": "6a7620bbf6694a977ade17ec77207092fab4fea93297656a80a6825a395b378a"
+    },
+    {
+      "path": "build/791-acceptance/focused-repeat-summary.json",
+      "sha256": "6646fd326e9f8ca6ae844b184151b00b7002b143edb471565ada2f426b927fdb"
+    },
+    {
+      "path": "build/791-acceptance/standard-flake.log",
+      "sha256": "e12e069154067c2eb5552034d6a2a4ba9b39cf09fbedf0b5a012d2e8ed737b01"
+    },
+    {
+      "path": "build/791-acceptance/standard-flake-kernel-summary.json",
+      "sha256": "df83c8541a03226afff116401011c684855a1500ca27b854a533ec8becd84464"
+    },
+    {
+      "path": "build/791-acceptance/standard-flake-browser-summary.json",
+      "sha256": "68738028ca852f6d9c0db5adad8ba4dc776e72aeda9ba8bca885f60a998d814e"
+    }
+  ]
+}
