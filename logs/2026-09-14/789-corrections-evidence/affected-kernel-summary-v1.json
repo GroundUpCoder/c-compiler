@@ -1,0 +1,144 @@
+{
+  "suite": "kernel suite",
+  "startedAt": "2026-09-14T11:01:43.002Z",
+  "node": "v25.8.2",
+  "jobs": 1,
+  "repeat": 1,
+  "underLoad": 0,
+  "done": true,
+  "elapsedMs": 369145,
+  "filter": "test_sameboy_e2e.js,test_notepad_menu_e2e.js,test_ctxmenu_e2e.js,test_keymap_e2e.js,test_hostpaste_e2e.js,test_calc_e2e.js,test_edit_punct_repro.js,test_notepad_e2e.js,test_gpubox_menu_e2e.js,test_fontpkg_e2e.js,test_symbolfont_e2e.js,test_ui_lifecycle_e2e.js,test_user32_lifecycle_policy.js,test_wm_lifecycle.js,test_wm_lifecycle_policy.js,test_gpubox_dawn_e2e.js",
+  "files": {
+    "total": 210,
+    "selected": 16,
+    "executed": 16,
+    "resumed": 0,
+    "carried": 0,
+    "recorded": 16
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-14T11:01:43.002Z",
+      "filter": "test_sameboy_e2e.js,test_notepad_menu_e2e.js,test_ctxmenu_e2e.js,test_keymap_e2e.js,test_hostpaste_e2e.js,test_calc_e2e.js,test_edit_punct_repro.js,test_notepad_e2e.js,test_gpubox_menu_e2e.js,test_fontpkg_e2e.js,test_symbolfont_e2e.js,test_ui_lifecycle_e2e.js,test_user32_lifecycle_policy.js,test_wm_lifecycle.js,test_wm_lifecycle_policy.js,test_gpubox_dawn_e2e.js",
+      "total": 210,
+      "selected": 16,
+      "executed": 16,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 369145
+    }
+  ],
+  "results": [
+    {
+      "file": "test_user32_lifecycle_policy.js",
+      "status": "pass",
+      "ms": 3094,
+      "log": "build/test-kernel/test_user32_lifecycle_policy.js.log"
+    },
+    {
+      "file": "test_wm_lifecycle_policy.js",
+      "status": "pass",
+      "ms": 1921,
+      "log": "build/test-kernel/test_wm_lifecycle_policy.js.log"
+    },
+    {
+      "file": "test_wm_lifecycle.js",
+      "status": "pass",
+      "ms": 41,
+      "log": "build/test-kernel/test_wm_lifecycle.js.log"
+    },
+    {
+      "file": "test_ui_lifecycle_e2e.js",
+      "status": "pass",
+      "ms": 2695,
+      "log": "build/test-kernel/test_ui_lifecycle_e2e.js.log"
+    },
+    {
+      "file": "gucos-packages/test_fontpkg_e2e.js",
+      "status": "pass",
+      "ms": 242104,
+      "log": "build/test-kernel/gucos-packages_test_fontpkg_e2e.js.log"
+    },
+    {
+      "file": "test_notepad_menu_e2e.js",
+      "status": "pass",
+      "ms": 30575,
+      "log": "build/test-kernel/test_notepad_menu_e2e.js.log"
+    },
+    {
+      "file": "test_sameboy_e2e.js",
+      "status": "pass",
+      "ms": 21358,
+      "log": "build/test-kernel/test_sameboy_e2e.js.log"
+    },
+    {
+      "file": "test_keymap_e2e.js",
+      "status": "pass",
+      "ms": 17737,
+      "log": "build/test-kernel/test_keymap_e2e.js.log"
+    },
+    {
+      "file": "test_ctxmenu_e2e.js",
+      "status": "pass",
+      "ms": 13454,
+      "log": "build/test-kernel/test_ctxmenu_e2e.js.log"
+    },
+    {
+      "file": "test_hostpaste_e2e.js",
+      "status": "pass",
+      "ms": 7944,
+      "log": "build/test-kernel/test_hostpaste_e2e.js.log"
+    },
+    {
+      "file": "test_notepad_e2e.js",
+      "status": "pass",
+      "ms": 6798,
+      "log": "build/test-kernel/test_notepad_e2e.js.log"
+    },
+    {
+      "file": "test_calc_e2e.js",
+      "status": "pass",
+      "ms": 7466,
+      "log": "build/test-kernel/test_calc_e2e.js.log"
+    },
+    {
+      "file": "test_symbolfont_e2e.js",
+      "status": "pass",
+      "ms": 5548,
+      "log": "build/test-kernel/test_symbolfont_e2e.js.log"
+    },
+    {
+      "file": "test_edit_punct_repro.js",
+      "status": "pass",
+      "ms": 4827,
+      "log": "build/test-kernel/test_edit_punct_repro.js.log"
+    },
+    {
+      "file": "test_gpubox_menu_e2e.js",
+      "status": "pass",
+      "ms": 1668,
+      "log": "build/test-kernel/test_gpubox_menu_e2e.js.log"
+    },
+    {
+      "file": "test_gpubox_dawn_e2e.js",
+      "status": "pass",
+      "ms": 1903,
+      "log": "build/test-kernel/test_gpubox_dawn_e2e.js.log"
+    }
+  ],
+  "evidence": {
+    "expected": 16,
+    "fresh": 16,
+    "resumedExistenceOnly": 0
+  },
+  "sibling": {
+    "repo": "gucos-packages",
+    "status": "ok",
+    "root": "/Users/jku/git/gucos-packages",
+    "via": "main-clone sibling",
+    "members": 2
+  }
+}

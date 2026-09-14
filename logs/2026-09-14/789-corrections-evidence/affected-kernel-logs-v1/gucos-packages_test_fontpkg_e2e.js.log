@@ -1,0 +1,31 @@
+[fontpkg] repo :58364
+  ok   minimal image carries no fallback config
+  ok   pre/post/post2 term shots written
+  ok   gdi32 tofu report: pre-install notepad only (1 total, U+65E5)
+  ok   font-unifont installs (exit 0)
+  ok   /etc/fonts/fallback lists the packaged face
+  ok   the packaged ttf landed under /opt
+  ok   DB records the planted font face line
+  ok   second font package installs (exit 0)
+  ok   fallback chain holds BOTH faces in install order
+  ok   removing font-unifont keeps the other face line
+  ok   removing font-unifont reclaims its /opt tree
+  ok   removing the last font package unlinks the fallback file
+  ok   second /opt tree reclaimed
+  ok   pre shot parses
+  ok   post + post2 shots parse
+  ok   tofu: the three CJK cell-pairs render ink
+  ok   tofu: one box, three times (pairs byte-identical)
+  ok   installed: real glyphs render ink
+  ok   installed: 日/本/語 are DISTINCT glyphs (pairs differ)
+  ok   installed: glyphs are not the tofu box
+  ok   removed: back to the identical tofu box
+  ok   title leg: reinstall font-noto-cjk-mono (exit 0)
+  ok   title leg: install demos for winbox (exit 0)
+  ok   title leg: CJK-title shot written
+  ok   title leg: shot parses
+  ok   title leg: window listed with geometry
+  ok   title leg: CJK title strip is bit-exact ksvc bytes (real glyphs)
+  ok   title leg: the three CJK title glyphs are DISTINCT (not tofu)
+
+fontpkg e2e: PASS

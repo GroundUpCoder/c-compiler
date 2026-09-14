@@ -1,0 +1,17 @@
+  ok   boots to ready
+  ok   right-click on the empty desktop raises the context menu
+  ok   raised edge at the menu corner
+  ok   ArrowDown highlights row 0 (New)
+  ok   ArrowRight cascades the New flyout (Folder pre-highlighted)
+  ok   Enter fires the row and dismisses the popup
+  ok   keyboard-selected New > Folder created the directory
+  ok   Esc dismisses the desktop menu
+  ok   outside left-click dismisses it
+  ok   right-click on a taskbar button raises the window menu above the bar
+  ok   Esc dismisses the taskbar menu
+  ok   right-click in the EDIT raises the user32 popup in-surface
+  ok   Enter closed the popup (EDIT repainted)
+  ok   keyboard-selected Paste landed the clipboard text in the EDIT
+  ok   shell alive after the run
+
+os ctxmenu (browser): PASS

@@ -1,0 +1,20 @@
+  ok   boots to ready
+  ok   focus sync read the host clipboard (__osClipFromHost)
+  ok   clip -o prints the host copy (host -> gucOS)
+  ok   gucOS copy reached the page (__osClipLast)
+  ok   host clipboard holds the gucOS copy (gucOS -> host)
+  ok   focus sync de-dups its own writeText (loop guard)
+  ok   notepad listed
+  ok   FIRST paste delivered the fresh host text (the seam, not the stale slot)
+  ok   first paste is NOT the stale slot text
+  ok   the parked CLIP_GET drove a clip-read round-trip (probe)
+  ok   a second process's first paste takes its own clip-read round-trip (#562)
+  ok   the second paste reads the rewritten host clipboard, not the prior refresh (#562)
+  ok   OSK Ctrl+V tap pasted the fresh host text through the seam
+  ok   paste event with files took the staging path (__osPasteFiles)
+  ok   the desktop pasted the staged host file (bytes intact)
+  ok   the staging dir holds the pasted file
+  ok   paste-twice re-pastes via the belt timer ("Copy of" uniquifier)
+  ok   the shadow memo suppresses the file-name text read
+
+os-clipboard: PASS

@@ -1,0 +1,22 @@
+  ok   boots to ready
+  ok   gpubox cube composited (GPU frame through the gpu transport)
+  ok   client corner is the render-pass clear color (real 3D scene, not a fill)
+  ok   menu bar strip composites over the LIVE cube (COLOR_MENU)
+  ok   cube animates (webgpu.h present loop is live)
+  ok   bar click opened a popup child over the live GPU client
+  ok   ESC dismissed the popup; client pixels back
+  ok   Options>Spin froze the cube (time-separated frame probes equal)
+  ok   guest GPU shot has live cube pixels matching the page
+  ok   guest GPU shot preserves clear color
+  ok   guest GPU thumbnail contains cube pixels
+  ok   GPU thumbnail includes anchored menu strip
+  ok   guest screen capture includes the GPU cube
+  ok   guest screen capture retains shm menu content
+  ok   wmctl resize renegotiated the gpu-transport window to 321x200
+  ok   GPU capture tracks resize with padded readback rows
+  ok   real WebGPU map failure returns error and creates no PNG
+  ok   capture succeeds after a failed map (staging resources reclaimed)
+  ok   wmctl close quit gpubox; desktop restored
+  ok   shell alive after the GPU app exits
+
+os gpubox (browser): PASS

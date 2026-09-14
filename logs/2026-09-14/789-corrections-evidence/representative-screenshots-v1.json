@@ -1,0 +1,134 @@
+[
+  {
+    "directory": "installed-v293-initial-v1",
+    "drivers": {
+      "software": {
+        "01-hidden": {
+          "file": "software-01-hidden.png",
+          "targetPixels": 0
+        },
+        "02-shown": {
+          "file": "software-02-shown-1.png",
+          "targetPixels": 28600
+        },
+        "04-hidden": {
+          "file": "software-04-hidden-0.png",
+          "targetPixels": 0
+        }
+      },
+      "gpu": {
+        "01-hidden": {
+          "file": "gpu-01-hidden.png",
+          "targetPixels": 0
+        },
+        "02-shown": {
+          "file": "gpu-02-shown-1.png",
+          "targetPixels": 28600
+        },
+        "04-hidden": {
+          "file": "gpu-04-hidden-0.png",
+          "targetPixels": 0
+        }
+      }
+    }
+  },
+  {
+    "directory": "installed-v293-under-load-v1",
+    "drivers": {
+      "software": {
+        "01-hidden": {
+          "file": "software-01-hidden.png",
+          "targetPixels": 0
+        },
+        "02-shown": {
+          "file": "software-02-shown-1.png",
+          "targetPixels": 28600
+        },
+        "04-hidden": {
+          "file": "software-04-hidden-0.png",
+          "targetPixels": 0
+        }
+      },
+      "gpu": {
+        "01-hidden": {
+          "file": "gpu-01-hidden.png",
+          "targetPixels": 0
+        },
+        "02-shown": {
+          "file": "gpu-02-shown-1.png",
+          "targetPixels": 28600
+        },
+        "04-hidden": {
+          "file": "gpu-04-hidden-0.png",
+          "targetPixels": 0
+        }
+      }
+    }
+  },
+  {
+    "directory": "installed-v293-under-load-v2",
+    "drivers": {
+      "software": {
+        "01-hidden": {
+          "file": "software-01-hidden.png",
+          "targetPixels": 0
+        },
+        "02-shown": {
+          "file": "software-02-shown-0.png",
+          "targetPixels": 28600
+        },
+        "04-hidden": {
+          "file": "software-04-hidden-1.png",
+          "targetPixels": 0
+        }
+      },
+      "gpu": {
+        "01-hidden": {
+          "file": "gpu-01-hidden.png",
+          "targetPixels": 0
+        },
+        "02-shown": {
+          "file": "gpu-02-shown-1.png",
+          "targetPixels": 28600
+        },
+        "04-hidden": {
+          "file": "gpu-04-hidden-0.png",
+          "targetPixels": 0
+        }
+      }
+    }
+  },
+  {
+    "directory": "installed-v293-under-load-v3",
+    "drivers": {
+      "software": {
+        "01-hidden": {
+          "file": "software-01-hidden.png",
+          "targetPixels": 0
+        },
+        "02-shown": {
+          "file": "software-02-shown-1.png",
+          "targetPixels": 28600
+        },
+        "04-hidden": {
+          "file": "software-04-hidden-1.png",
+          "targetPixels": 0
+        }
+      },
+      "gpu": {
+        "01-hidden": {
+          "file": "gpu-01-hidden.png",
+          "targetPixels": 0
+        },
+        "02-shown": {
+          "file": "gpu-02-shown-0.png",
+          "targetPixels": 28600
+        },
+        "04-hidden": {
+          "file": "gpu-04-hidden-1.png",
+          "targetPixels": 0
+        }
+      }
+    }
+  }
+]

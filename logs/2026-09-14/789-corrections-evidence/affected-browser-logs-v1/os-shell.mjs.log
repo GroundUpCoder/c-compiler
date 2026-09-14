@@ -1,0 +1,82 @@
+  ok   boots to ready
+  ok   taskbar strip composited
+  ok   taskbar clock digits present (black-pixel histogram)
+  ok   Start button face at the taskbar left
+  ok   menu spot is desktop before the click
+  ok   Start click opens the single-column root (face fill above the taskbar)
+  ok   no first-frame teleport: nothing composited in the cascade band (todos/0069)
+  ok   gucOS branding band is a blue gradient down the left
+  ok   search box is a white field at the foot of the column
+  ok   All Programs cascades the tree flyout
+  ok   tree flyout right edge found
+  ok   the Demos group cascades its leaves
+  ok   nested flyout click launched winbox (orange fill at the WM placement)
+  ok   selection dismissed the whole cascade
+  ok   menu re-opens
+  ok   recent MRU entry relaunches the program (winbox +1)
+  ok   search highlights the top hit (navy row 0)
+  ok   Esc clears the search but keeps the menu open
+  ok   Enter launches the search top hit (winbox +1)
+  ok   Run... click opens the run dialog
+  ok   Run... click dismisses the menu behind the dialog
+  ok   focus change dismisses the menu
+  ok   Start click toggles the menu closed
+  ok   Esc dismisses the menu
+  ok   Ctrl+Esc opens the Start menu (the chord)
+  ok   Ctrl+Esc toggles it closed again
+  ok   override tree is searched (solo hit highlights)
+  ok   override search hit launches (winbox +1)
+  ok   override removed: `solo` no longer hits the search
+  ok   ...and the search box was live throughout (baked `winbox` still hits)
+  ok   desktop icon tile composited (calc, cell 0,1)
+  ok   icon glyph navy center
+  ok   folder glyph on the Presentations icon (white tab notch, navy body)
+  ok   single click selects (navy label strip)
+  ok   ctrl+click adds to the selection (paint strip navy)
+  ok   ...and calc stays selected
+  ok   marquee selects the intersected icons (fileman strip navy)
+  ok   notepad caught by the marquee too
+  ok   marquee replaces: paint deselected
+  ok   drag repositions the icon (tile at col 2)
+  ok   the old cell is teal again
+  ok   moved icon stays selected (strip navy at the new cell)
+  ok   Esc clears the selection
+  ok   double-click launched term (window composited)
+  ok   desktop layer recreated at the live screen size (EV_SCREEN)
+  ok   desktop layer at the bottom of z
+  ok   minimize reveals the desktop
+  ok   Run... place opens the run dialog
+  ok   the menu closed behind it
+  ok   Enter closes the dialog
+  ok   run-dialog command spawned (winbox +1)
+  ok   ctlpanel hub listed
+  ok   hub composites as an icon folder (white interior)
+  ok   default selection strip navy (Sound label)
+  ok   Sound applet opened as its own window
+  ok   Sound applet composites (face interior)
+  ok   Vol + through the applet steps the kernel gain (110%)
+  ok   System applet shows os-release
+  ok   close box closes only the applet: hub + System alive, Sound gone
+  ok   first notepad listed
+  ok   Ctrl+C filled the kernel slot (clip -o)
+  ok   second notepad listed at its own position
+  ok   Ctrl+V renders the pasted text in the second notepad
+  ok   Ctrl+X emptied the source EDIT and the slot keeps the text
+  ok   a winbox is parked over the sample point (orange)
+  ok   right-click the taskbar strip opens the menu (face gray above the bar)
+  ok   outside-click dismisses the strip menu
+  ok   Esc also dismisses the strip menu
+  ok   clock hover shows the date tooltip
+  ok   Show Desktop reveals the desktop (covered point now teal)
+  ok   ...and the sliver reads pressed
+  ok   Show Desktop restores the windows (point covered again)
+  ok   ...and the sliver is raised
+  ok   top-left icon selected (navy label strip)
+  ok   F2 opens the inline editor (white box over the label)
+  ok   editor closes after commit (box gone)
+  ok   inline rename committed on disk (aaa -> bbb)
+  ok   short spaced Desktop name launches on dblclick (winbox +1)
+  ok   36-char spaced Desktop name launches on dblclick (no name[32] truncation)
+  ok   VT1 shell alive after menu driving
+
+os shell (browser): PASS

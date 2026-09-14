@@ -1,0 +1,16 @@
+  ok   boots to ready
+  ok   long-press on the empty desktop raises the context menu
+  ok   raised edge at the menu corner
+  ok   tap outside dismisses it (tap = left click)
+  ok   long-press on the notepad icon raises the icon menu
+  ok   Esc dismisses the icon menu
+  ok   double-tap on the icon launched notepad
+  ok   EDIT shows the dense head lines after settext (view at start)
+  ok   two-finger pan scrolled the dense lines out (wheel -> EDIT)
+  ok   touch title-drag moved winbox by the exact delta (+100,+80)
+  ok   old spot back to desktop
+  ok   long-press on the taskbar button raises the window menu
+  ok   Esc dismisses the taskbar menu
+  ok   shell alive after the run
+
+os touch (browser): PASS

@@ -1,0 +1,28 @@
+registry: 208 declared + 0 excluded == 208 on disk (tests/kernel/run.js)
+registry: 2 declared + 0 excluded == 2 on disk (gucos-packages/tests/manifest.json)
+sibling tests: gucos-packages at /Users/jku/git/gucos-packages (via main-clone sibling) — 2 member(s) join the suite
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 52.9 GB free
+[fixture] os/os-system.img missing — baking once (node tools/mkimage.js --packages=all)…
+[fixture] baked in 239.6s
+[gucman] baking the minimal (no-packages) system blob…
+[33m⚠ kernel suite: --filter=test_sameboy_e2e.js,test_notepad_menu_e2e.js,test_ctxmenu_e2e.js,test_keymap_e2e.js,test_hostpaste_e2e.js,test_calc_e2e.js,test_edit_punct_repro.js,test_notepad_e2e.js,test_gpubox_menu_e2e.js,test_fontpkg_e2e.js,test_symbolfont_e2e.js,test_ui_lifecycle_e2e.js,test_user32_lifecycle_policy.js,test_wm_lifecycle.js,test_wm_lifecycle_policy.js,test_gpubox_dawn_e2e.js selected 16 of 210 files — this run covers PART of the suite.[0m
+--- kernel suite (16 files, 1 jobs) ---
+ok   test_user32_lifecycle_policy.js  3.1s
+ok   test_wm_lifecycle_policy.js  1.9s
+ok   test_wm_lifecycle.js  0.0s
+ok   test_ui_lifecycle_e2e.js  2.7s
+ok   gucos-packages/test_fontpkg_e2e.js  242.1s
+ok   test_notepad_menu_e2e.js  30.6s
+ok   test_sameboy_e2e.js  21.4s
+ok   test_keymap_e2e.js  17.7s
+ok   test_ctxmenu_e2e.js  13.5s
+ok   test_hostpaste_e2e.js  7.9s
+ok   test_notepad_e2e.js  6.8s
+ok   test_calc_e2e.js  7.5s
+ok   test_symbolfont_e2e.js  5.5s
+ok   test_edit_punct_repro.js  4.8s
+ok   test_gpubox_menu_e2e.js  1.7s
+ok   test_gpubox_dawn_e2e.js  1.9s
+evidence: 16/16 selected members have logs post-dating the run start
+
+kernel suite: 16 passed, 0 failed  (369.1s)  [16/210 selected, 16/210 recorded]  summary: build/test-kernel/summary.json

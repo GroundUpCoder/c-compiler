@@ -1,0 +1,13 @@
+  ok   boots to ready
+  ok   gpubox composited a GPU frame at its spot
+  ok   ENTER: the overview TOOK OVER (gpubox gone from its own spot)
+  ok   ENTER: the gpu miniature is LIVE, not a black snapshot (Option B)
+  ok   PICK: clicking the gpu miniature restores gpubox and exits
+  ok   winbox composited at its spot (orange)
+  ok   ENTER: the overview TOOK OVER (winbox gone from its own spot)
+  ok   ENTER: winbox miniature shows its orange fill
+  ok   LIVE: injecting a key flips winbox's fill and the miniature follows
+  ok   Esc dismisses the overview (winbox restored to its spot)
+  ok   Task-View button ENTERS the overview
+  ok   Task-View ENTER also TOOK OVER (winbox gone from its own spot)
+  ok   Task-View button again EXITS the overview

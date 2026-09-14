@@ -1,0 +1,12 @@
+  ok   boots to ready
+  ok   GB client composited in exact GB_PALETTE_GREY shades (shm transport)
+  ok   menu bar strip composites over the live emulator (COLOR_MENU)
+  ok   checkerboard animates (GDI present loop is live)
+  ok   bar click opened a popup child over the live GB client
+  ok   ESC dismissed the popup; client pixels back
+  ok   Emulation>Pause froze the client (time-separated probes equal)
+  ok   Palette>DMG Green visibly re-colored the live client (nested submenu action)
+  ok   File>Quit closed sameboy; desktop restored
+  ok   shell alive after the emulator exits
+
+os sameboy (browser): PASS

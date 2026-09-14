@@ -1,0 +1,37 @@
+  ok   sameboy boots the built-in test ROM on DMG-B
+  ok   sameboy opens a window titled "SameBoy"
+  ok   sameboy window is 480x462 (160x144 tripled + the menu bar strip)
+  ok   DMG shot series written
+  ok   File popup in the tree
+  ok   Open ROM... present and ENABLED (real comdlg32 behind it)
+  ok   Quit item present
+  ok   Emulation popup in the tree
+  ok   Pause starts unchecked
+  ok   Auto Model starts CHECKED (header-derived model)
+  ok   Palette is a NESTED submenu popup under Options
+  ok   Greyscale starts CHECKED (the SameBoy default palette)
+  ok   SameBoy window listed at 100,100
+  ok   menubar strip is an anchored child at the window origin
+  ok   strip spans the window width at MENU_BAR_H
+  ok   bar click opened a real "#32768" popup child
+  ok   popup hangs off the bar (anchored below MENU_BAR_H)
+  ok   menu screen shot written
+  ok   both pause shots written
+  ok   palette shot written
+  ok   Open ROM... loaded the picked file through the live-reload path
+  ok   sameboy survived the reload and quit cleanly through the menu
+  skip CGB leg (vendor/gameboy/roms/SuperMarioDeluxe.gbc absent)
+  ok   the .gb/.gbc association points at /bin/sameboy (0072 default = SameBoy)
+  ok   all 8 DMG series shots parse as PNG at full window size 480x462
+  ok   a series frame reaches the checkerboard (>=3 exact GB_PALETTE_GREY shades)
+  ok   every frame from there on contains ONLY grey-palette shades (real LCD render)
+  ok   the test ROM animates (adjacent series shots differ — SCX scroll)
+  ok   pause shots parse at 480x462
+  ok   Emulation>Pause froze the client (shots 2s apart byte-identical)
+  ok   all 3 palette shots parse at 480x462
+  ok   a palette shot is fully DMG Green (>=3 exact GB_PALETTE_DMG shades, no others)
+  ok   menu screen shot parses
+  ok   bar strip composites COLOR_MENU over the emulator window
+  ok   popup child composites COLOR_MENU over the live client
+
+sameboy e2e: PASS

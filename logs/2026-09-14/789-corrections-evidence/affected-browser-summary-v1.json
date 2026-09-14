@@ -1,0 +1,107 @@
+{
+  "suite": "browser os sweep",
+  "startedAt": "2026-09-14T11:08:32.767Z",
+  "node": "v25.8.2",
+  "jobs": 1,
+  "repeat": 1,
+  "underLoad": 0,
+  "done": true,
+  "elapsedMs": 268300,
+  "filter": "os-clipboard.mjs,os-ctxmenu.mjs,os-gpubox.mjs,os-overview.mjs,os-paste-mac.mjs,os-sameboy.mjs,os-shell.mjs,os-touch.mjs,os-undo.mjs,os-wheel.mjs,os-ui-lifecycle.mjs",
+  "files": {
+    "total": 75,
+    "selected": 11,
+    "executed": 11,
+    "resumed": 0,
+    "carried": 0,
+    "recorded": 11
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-14T11:08:32.767Z",
+      "filter": "os-clipboard.mjs,os-ctxmenu.mjs,os-gpubox.mjs,os-overview.mjs,os-paste-mac.mjs,os-sameboy.mjs,os-shell.mjs,os-touch.mjs,os-undo.mjs,os-wheel.mjs,os-ui-lifecycle.mjs",
+      "total": 75,
+      "selected": 11,
+      "executed": 11,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 268300
+    }
+  ],
+  "results": [
+    {
+      "file": "os-clipboard.mjs",
+      "status": "pass",
+      "ms": 9352,
+      "log": "build/test-browser/os-clipboard.mjs.log"
+    },
+    {
+      "file": "os-ctxmenu.mjs",
+      "status": "pass",
+      "ms": 18888,
+      "log": "build/test-browser/os-ctxmenu.mjs.log"
+    },
+    {
+      "file": "os-gpubox.mjs",
+      "status": "pass",
+      "ms": 15075,
+      "log": "build/test-browser/os-gpubox.mjs.log"
+    },
+    {
+      "file": "os-overview.mjs",
+      "status": "pass",
+      "ms": 5441,
+      "log": "build/test-browser/os-overview.mjs.log"
+    },
+    {
+      "file": "os-paste-mac.mjs",
+      "status": "pass",
+      "ms": 5495,
+      "log": "build/test-browser/os-paste-mac.mjs.log"
+    },
+    {
+      "file": "os-sameboy.mjs",
+      "status": "pass",
+      "ms": 8140,
+      "log": "build/test-browser/os-sameboy.mjs.log"
+    },
+    {
+      "file": "os-shell.mjs",
+      "status": "pass",
+      "ms": 112626,
+      "log": "build/test-browser/os-shell.mjs.log"
+    },
+    {
+      "file": "os-touch.mjs",
+      "status": "pass",
+      "ms": 37586,
+      "log": "build/test-browser/os-touch.mjs.log"
+    },
+    {
+      "file": "os-ui-lifecycle.mjs",
+      "status": "pass",
+      "ms": 4862,
+      "log": "build/test-browser/os-ui-lifecycle.mjs.log"
+    },
+    {
+      "file": "os-undo.mjs",
+      "status": "pass",
+      "ms": 6825,
+      "log": "build/test-browser/os-undo.mjs.log"
+    },
+    {
+      "file": "os-wheel.mjs",
+      "status": "pass",
+      "ms": 44006,
+      "log": "build/test-browser/os-wheel.mjs.log"
+    }
+  ],
+  "evidence": {
+    "expected": 11,
+    "fresh": 11,
+    "resumedExistenceOnly": 0
+  }
+}

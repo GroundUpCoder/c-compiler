@@ -1,0 +1,18 @@
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 52.2 GB free
+[fixture] os/os-system.img fresh (v293)
+[33m⚠ browser os sweep: --filter=os-clipboard.mjs,os-ctxmenu.mjs,os-gpubox.mjs,os-overview.mjs,os-paste-mac.mjs,os-sameboy.mjs,os-shell.mjs,os-touch.mjs,os-undo.mjs,os-wheel.mjs,os-ui-lifecycle.mjs selected 11 of 75 files — this run covers PART of the suite.[0m
+--- browser os sweep (11 files, 1 jobs) ---
+ok   os-clipboard.mjs  9.4s
+ok   os-ctxmenu.mjs  18.9s
+ok   os-gpubox.mjs  15.1s
+ok   os-overview.mjs  5.4s
+ok   os-paste-mac.mjs  5.5s
+ok   os-sameboy.mjs  8.1s
+ok   os-shell.mjs  112.6s
+ok   os-touch.mjs  37.6s
+ok   os-ui-lifecycle.mjs  4.9s
+ok   os-undo.mjs  6.8s
+ok   os-wheel.mjs  44.0s
+evidence: 11/11 selected members have logs post-dating the run start
+
+browser os sweep: 11 passed, 0 failed  (268.3s)  [11/75 selected, 11/75 recorded]  summary: build/test-browser/summary.json

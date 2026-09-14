@@ -1,0 +1,9 @@
+[server] [server] http://localhost:3176/ — serving /Users/jku/git/c-compiler-ui-lifecycle-fix/tests/browser/www
+[test] opening http://localhost:3176/doom.html
+[test] clicking #overlay (Click to Start)…
+[test] waiting for #canvas-container to show…
+[test] canvas visible. Polling for a rendered Doom frame…
+[test] frame rendered after ~3.0s
+[test] canvas frame saved to /Users/jku/git/c-compiler-ui-lifecycle-fix/tests/browser/shot-doom.png
+[test] canvas pixel stats: {"w":640,"h":400,"total":256000,"opaque":256000,"nonBlack":256000,"distinct":["116,1,1","139,1,1","155,1,1","48,48,48","80,80,80","72,72,72","100,100,100","139,139,139","167,167,167","179,179,179","159,159,159","227,1,1","191,1,1","215,1,1","179,1,1","203,1,1"]}
+[test] PASS (doom.html) — screenshot: /Users/jku/git/c-compiler-ui-lifecycle-fix/tests/browser/shot-doom.png

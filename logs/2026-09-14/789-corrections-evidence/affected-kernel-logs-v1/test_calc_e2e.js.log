@@ -1,0 +1,43 @@
+  ok   window titled "Calculator"
+  ok   standard surface is 464x478 (template client + 30px menu bar; 20px sans stock)
+  ok   window is fixed-size (no R flag)
+  ok   template MENU attached (WRES v2): Edit popup
+  ok   View popup with Standard checked
+  ok   display STATIC starts at 0.
+  ok   owner-draw keypad buttons in the tree (7 present)
+  ok   empty clipboard: Paste grayed at WM_ENTERMENULOOP
+  ok   after Copy: Paste enabled
+  ok   7 + 3 = -> 10. (BM_CLICK by numeric label)
+  ok   Copy filled the clipboard slot (trailing separator trimmed)
+  ok   keyboard 9,1 -> 91. (ToAsciiEx path)
+  ok   Paste of 250 -> 250.
+  ok   right-click opens the context popup (agent-visible)
+  ok   popup item fires by label and the popup closes
+  ok   View->Scientific recreates the dialog (869x600 surface; the 316-DLU template at sans avgw 11)
+  ok   scientific template has the base radios
+  ok   #311: NOT WS_VISIBLE width radios arrive hidden (Dword vis=0)
+  ok   #311: the angle radios stay visible (Degrees vis=1)
+  ok   #310 recreate 1 (scientific): Calculator dialog in the tree
+  ok   #310 recreate 1 (scientific): controls parsed
+  ok   #310 recreate 1 (scientific): no visible control clips the 869x570 client
+  ok   #310 recreate 2 (standard): Calculator dialog in the tree
+  ok   #310 recreate 2 (standard): controls parsed
+  ok   #310 recreate 2 (standard): no visible control clips the 464x448 client
+  ok   #310 recreate 3 (scientific): Calculator dialog in the tree
+  ok   #310 recreate 3 (scientific): controls parsed
+  ok   #310 recreate 3 (scientific): no visible control clips the 869x570 client
+  ok   #310: standard recreate keeps the created 464x478 surface (no MENU_BAR_H shrink)
+  ok   #310: scientific recreate keeps the created 869x600 surface
+  ok   Sta opens the Statistics box (reachable in scientific mode)
+  ok   six data points landed in the stat LISTBOX
+  ok   n=6 tallied
+  ok   stats box scrolls with the mouse (first visible row is item 1)
+  ok   Statistics box dialog in the tree
+  ok   stat dialog has its 6 controls in the tree
+  ok   no stat-dialog control clips the 448x297 surface
+  ok   no two stat-dialog controls overlap
+  ok   #740: the Calculator window is NOT transient (an unowned dialog is a real app window)
+  ok   #740: the OWNED Statistics box stays transient (no second taskbar button)
+  ok   #740: wmctl cycle returns focus to Calculator once a second app covers it
+  ok   #740: wmctl cycle never lands on the owned Statistics box
+ALL OK

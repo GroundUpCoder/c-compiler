@@ -1,0 +1,30 @@
+registry: 208 declared + 0 excluded == 208 on disk (tests/kernel/run.js)
+registry: 2 declared + 0 excluded == 2 on disk (gucos-packages/tests/manifest.json)
+sibling tests: gucos-packages at /Users/jku/git/gucos-packages (via main-clone sibling) — 2 member(s) join the suite
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 51.9 GB free
+[fixture] os/os-system.img fresh (v293)
+[33m⚠ kernel suite: --filter=test_ui_lifecycle_e2e.js,test_sameboy_e2e.js,test_notepad_e2e.js,test_gpubox_dawn_e2e.js selected 4 of 210 files — this run covers PART of the suite.[0m
+--- kernel suite (12 runs = 4×3 repeat, UNDER LOAD ×10, 1 jobs) ---
+ok   test_sameboy_e2e.js #1  23.2s
+ok   test_sameboy_e2e.js #2  22.9s
+ok   test_sameboy_e2e.js #3  23.0s
+ok   test_notepad_e2e.js #1  10.8s
+ok   test_notepad_e2e.js #2  10.6s
+ok   test_notepad_e2e.js #3  10.6s
+ok   test_ui_lifecycle_e2e.js #1  5.2s
+ok   test_ui_lifecycle_e2e.js #2  5.3s
+ok   test_ui_lifecycle_e2e.js #3  5.2s
+ok   test_gpubox_dawn_e2e.js #1  2.6s
+ok   test_gpubox_dawn_e2e.js #2  2.6s
+ok   test_gpubox_dawn_e2e.js #3  2.7s
+
+flake report (3× each, under load ×10):
+  [32mstable[0m test_sameboy_e2e.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_notepad_e2e.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_ui_lifecycle_e2e.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_gpubox_dawn_e2e.js  3/3 passed  (flake 0%)
+
+  [32mall 4 file(s) stable across 3 runs.[0m
+evidence: 4/4 selected members have logs post-dating the run start
+
+kernel suite: 12 passed, 0 failed, 12 carried from earlier run(s)  (124.8s)  [4/210 selected, 16/210 recorded]  summary: build/test-kernel/summary.json

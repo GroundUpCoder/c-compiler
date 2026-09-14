@@ -1,0 +1,5 @@
+[server] [server] http://localhost:3177/ — serving /Users/jku/git/c-compiler-ui-lifecycle-fix/tests/browser/www
+[motion] first frame after ~3.0s sig=2409449803
+[motion] signatures over time: 2409449803 2409449803 2409449803 2409449803 595062772 133262660 1555802649
+[motion] distinct frames: 4
+[motion] PASS — Doom animates over real time (4 distinct frames); callback-model timing is correct without SDL_Delay

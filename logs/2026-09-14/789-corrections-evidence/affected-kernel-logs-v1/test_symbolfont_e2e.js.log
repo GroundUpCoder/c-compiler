@@ -1,0 +1,36 @@
+  ok   baked image carries /usr/share/fonts/symbols2.ttf
+  ok   baked image carries /usr/share/fonts/symbols.ttf
+  ok   baked /usr/share/fonts/fallback lists the Symbols 2 face
+  ok   baked /usr/share/fonts/fallback lists the Symbols (1) face
+  ok   clean boot has no /etc fallback delta
+  ok   term shot written
+  ok   gdi32: exactly one tofu report and it names the U+0378 control
+  ok   gdi32: no modifier symbol reports as tofu
+  ok   gdi32: the baked symbol face loads (no cannot-load report)
+  ok   shot parses
+  ok   tofu control: both unassigned cells render ink
+  ok   tofu control: one box, twice (cells byte-identical)
+  ok   symbols: all six glyphs render ink
+  ok   symbols: U+2318 cmd is not the tofu box
+  ok   symbols: U+2325 option is not the tofu box
+  ok   symbols: U+21E7 shift is not the tofu box
+  ok   symbols: U+232B delete-left is not the tofu box
+  ok   symbols: U+23CE return is not the tofu box
+  ok   symbols: U+2303 control is not the tofu box
+  ok   symbols: U+2318 cmd != U+2325 option
+  ok   symbols: U+2318 cmd != U+21E7 shift
+  ok   symbols: U+2318 cmd != U+232B delete-left
+  ok   symbols: U+2318 cmd != U+23CE return
+  ok   symbols: U+2318 cmd != U+2303 control
+  ok   symbols: U+2325 option != U+21E7 shift
+  ok   symbols: U+2325 option != U+232B delete-left
+  ok   symbols: U+2325 option != U+23CE return
+  ok   symbols: U+2325 option != U+2303 control
+  ok   symbols: U+21E7 shift != U+232B delete-left
+  ok   symbols: U+21E7 shift != U+23CE return
+  ok   symbols: U+21E7 shift != U+2303 control
+  ok   symbols: U+232B delete-left != U+23CE return
+  ok   symbols: U+232B delete-left != U+2303 control
+  ok   symbols: U+23CE return != U+2303 control
+
+symbolfont e2e: PASS

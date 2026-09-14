@@ -1,0 +1,94 @@
+  ok   menu popup File
+  ok   menu popup Edit
+  ok   menu popup Format
+  ok   menu popup View
+  ok   menu popup Help
+  ok   menu item New
+  ok   menu item New Window
+  ok   menu item Open...
+  ok   menu item Save
+  ok   menu item Save As...
+  ok   menu item Page Setup...
+  ok   menu item Print...
+  ok   menu item Exit
+  ok   menu item Undo
+  ok   menu item Cut
+  ok   menu item Copy
+  ok   menu item Paste
+  ok   menu item Delete
+  ok   menu item Find...
+  ok   menu item Find Next
+  ok   menu item Replace...
+  ok   menu item Go To...
+  ok   menu item Select All
+  ok   menu item Time/Date
+  ok   menu item Word Wrap
+  ok   menu item Font...
+  ok   menu item Status Bar
+  ok   menu item View Help
+  ok   menu item About Notepad
+  ok   View Help grayed at startup (no HTML Help)
+  ok   bar strip child width-follows the parent resize (A5)
+  ok   WM_SETTEXT puts the caret at the START (typed x prepends)
+  ok   Time/Date inserts a timestamp (GetTime/DateFormatW)
+  ok   New on a modified buffer prompts Yes/No/Cancel
+  ok   New + No empties the buffer
+  ok   Select All + Cut fills the clipboard
+  ok   Cut empties the buffer
+  ok   Paste restores the cut text
+  ok   Select All + Copy fills the clipboard
+  ok   Select All + Delete empties the buffer
+  ok   Undo enabled once the Edit popup computes state (EM_CANUNDO armed)
+  ok   menu Undo click fires (no longer grayed)
+  ok   ^Z (KA_UNDO chord) re-applies the Delete — the undo/undo toggle
+  ok   a programmatic WM_SETTEXT clears the record and re-grays Undo
+  ok   Find Next (dialog) selects the first match (typed x replaces it)
+  ok   Find Next (menu) continues to the line-2 match
+  ok   Replace All rewrites both matches
+  ok   Go To dialog is a #32770 with the line-number EDIT
+  ok   Go To 3 moves the caret to line 3 (typed z lands there)
+  ok   Word Wrap checks its menu item
+  ok   Word Wrap grays Go To
+  ok   agent click on grayed Go To refused while wrapped
+  ok   buffer survives the wrap EDIT re-create
+  ok   Word Wrap unchecks on the second toggle
+  ok   Status Bar toggle hides the bar (vis=0)
+  ok   Status Bar toggle shows it again (vis=1)
+  ok   Font... loud-cancel report is GONE (real ChooseFontW)
+  ok   Font dialog opens (WCFontDlg, the file_dialog shape)
+  ok   family rows enumerated, row 0 selected (incoming face is not a family name)
+  ok   CF_INITTOLOGFONTSTRUCT preselects notepad's real default (10pt)
+  ok   live sample STATIC present (WM_SETFONT-driven preview)
+  ok   font-change shots captured
+  ok   font shots decode as valid PNGs at matching dims
+  info fontink {"ink0":84,"ink1":176}
+  ok   EDIT line height visibly grew (last ink row moved down >= 30px)
+  ok   bold shot captured
+  info boldink {"cnt1":2742,"cnt2":4197}
+  ok   EDIT renders visibly BOLDER at the same 28pt (ink count grew >5%)
+  ok   reopened dialog preselects the Bold style row (#330)
+  ok   reopened dialog holds the 28pt size
+  ok   lfWeight=700 landed in the registry hive on exit (#330)
+  ok   persist shot captured
+  info persistink {"cnt1":2742,"cnt3":4197}
+  ok   a FRESH notepad renders the registry-held bold (ink > Regular baseline)
+  ok   fresh notepad Font dialog preselects Bold from the registry (#330)
+  ok   fresh notepad dialog holds 28pt from the registry (NULL-dc LOGPIXELSY)
+  ok   Page Setup... reports loudly (PageSetupDlgW)
+  ok   Print... reports loudly (PrintDlgW)
+  ok   Page Setup... shows the user-visible no-printing notice
+  ok   Print... shows the user-visible no-printing notice
+  ok   loud cancels open no stray windows
+  ok   View Help (grayed) click refused
+  ok   About Notepad opens the ShellAbout box
+  ok   win32rc \r fix: authors end 'Palamarchuk', no leaked 'r'
+  ok   Open... loads the file and titles the window
+  ok   Save writes the named file
+  ok   Save As... writes the new name
+  ok   Save As tree has no COMBOBOX (OFN hook/template stays un-run)
+  ok   OFN hook/template request reports once (gap #14 honesty)
+  ok   Find/Replace forced-down direction reports once (gap #14 honesty)
+  ok   New Window spawns a second notepad
+  ok   Exit closes notepad (no ghost windows)
+  ok   no popup-locator failures
+ALL OK
