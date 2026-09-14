@@ -1,0 +1,9 @@
+Evidence: /Users/jku/git/c-compiler-ui-lifecycle/build/test-browser/ui-lifecycle-1789375941011
+file:///Users/jku/git/c-compiler-ui-lifecycle/tests/browser/os-ui-lifecycle.mjs:65
+   if(shown<20000)throw Error(driver+' shown pixels missing: '+shown);
+                        ^
+
+Error: software shown pixels missing: 0
+    at file:///Users/jku/git/c-compiler-ui-lifecycle/tests/browser/os-ui-lifecycle.mjs:65:25
+
+Node.js v25.8.2

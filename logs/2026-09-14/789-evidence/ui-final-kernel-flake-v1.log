@@ -1,0 +1,27 @@
+
+[1m━━━ kernel suite ━━━[0m
+$ node -r /Users/jku/git/c-compiler-ui-lifecycle/tests/lib/parent-watch.js tests/kernel/run.js --filter=test_ui_lifecycle_e2e --repeat 3 --under-load
+
+registry: 207 declared + 0 excluded == 207 on disk (tests/kernel/run.js)
+registry: 2 declared + 0 excluded == 2 on disk (gucos-packages/tests/manifest.json)
+sibling tests: gucos-packages at /Users/jku/git/gucos-packages (via main-clone sibling) — 2 member(s) join the suite
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 55.7 GB free
+[fixture] os/os-system.img fresh (v292)
+[33m⚠ kernel suite: --filter=test_ui_lifecycle_e2e selected 1 of 209 files — this run covers PART of the suite.[0m
+--- kernel suite (3 runs = 1×3 repeat, UNDER LOAD ×10, 6 jobs) ---
+ok   test_ui_lifecycle_e2e.js #1  6.7s
+ok   test_ui_lifecycle_e2e.js #3  6.8s
+ok   test_ui_lifecycle_e2e.js #2  6.8s
+
+flake report (3× each, under load ×10):
+  [32mstable[0m test_ui_lifecycle_e2e.js  3/3 passed  (flake 0%)
+
+  [32mall 1 file(s) stable across 3 runs.[0m
+evidence: 1/1 selected members have logs post-dating the run start
+
+kernel suite: 3 passed, 0 failed  (6.8s)  [1/209 selected, 1/209 recorded]  summary: build/test-kernel/summary.json
+
+[1m━━━ tests/run.js summary ━━━[0m
+  [32mok  [0m kernel                       7.2s  [33m[1/209 files — PARTIAL][0m  [3P/0F/0S]  → build/test-kernel/summary.json
+
+  1 passed, 0 failed  (7.3s)  → build/test-run/summary.json

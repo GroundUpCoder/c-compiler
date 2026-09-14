@@ -1,0 +1,77 @@
+{
+  "suite": "kernel suite",
+  "startedAt": "2026-09-14T08:55:37.672Z",
+  "node": "v25.8.2",
+  "jobs": 6,
+  "repeat": 3,
+  "underLoad": 10,
+  "done": true,
+  "elapsedMs": 6792,
+  "filter": "test_ui_lifecycle_e2e",
+  "files": {
+    "total": 209,
+    "selected": 1,
+    "executed": 1,
+    "resumed": 0,
+    "carried": 0,
+    "recorded": 1
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-14T08:55:37.672Z",
+      "filter": "test_ui_lifecycle_e2e",
+      "total": 209,
+      "selected": 1,
+      "executed": 1,
+      "resumed": 0,
+      "jobs": 6,
+      "repeat": 3,
+      "underLoad": 10,
+      "done": true,
+      "elapsedMs": 6792
+    }
+  ],
+  "results": [
+    {
+      "file": "test_ui_lifecycle_e2e.js",
+      "status": "pass",
+      "ms": 6689,
+      "log": "build/test-kernel/test_ui_lifecycle_e2e.js.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "test_ui_lifecycle_e2e.js",
+      "status": "pass",
+      "ms": 6775,
+      "log": "build/test-kernel/test_ui_lifecycle_e2e.js.rep3.log",
+      "repeatIdx": 3
+    },
+    {
+      "file": "test_ui_lifecycle_e2e.js",
+      "status": "pass",
+      "ms": 6787,
+      "log": "build/test-kernel/test_ui_lifecycle_e2e.js.rep2.log",
+      "repeatIdx": 2
+    }
+  ],
+  "flake": [
+    {
+      "file": "test_ui_lifecycle_e2e.js",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    }
+  ],
+  "evidence": {
+    "expected": 1,
+    "fresh": 1,
+    "resumedExistenceOnly": 0
+  },
+  "sibling": {
+    "repo": "gucos-packages",
+    "status": "ok",
+    "root": "/Users/jku/git/gucos-packages",
+    "via": "main-clone sibling",
+    "members": 2
+  }
+}

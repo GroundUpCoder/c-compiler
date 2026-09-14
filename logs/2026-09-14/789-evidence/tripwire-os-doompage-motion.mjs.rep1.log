@@ -1,0 +1,46 @@
+[doompage] rebuilding doom.html:
+  Missing tests/browser/www/doom.html — run 'node tests/browser/build-doom.mjs' first.
+[build] Compiling Doom → /Users/jku/git/c-compiler-ui-lifecycle/tests/browser/www/doom.html  ...
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_data.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+/Users/jku/git/c-compiler-ui-lifecycle/vendor/doom/src/r_state.h:25: warning: Circular include detected
+[build] OK — doom.html = 8152428 bytes
+[server] [server] http://localhost:3177/ — serving /Users/jku/git/c-compiler-ui-lifecycle/tests/browser/www
+[motion] first frame after ~3.0s sig=2409449803
+[motion] signatures over time: 2409449803 2409449803 2409449803 2409449803 4133869692 156184010 1918720225
+[motion] distinct frames: 4
+[motion] PASS — Doom animates over real time (4 distinct frames); callback-model timing is correct without SDL_Delay

@@ -1,0 +1,70 @@
+{
+  "suite": "browser os sweep",
+  "startedAt": "2026-09-14T08:55:54.347Z",
+  "node": "v25.8.2",
+  "jobs": 1,
+  "repeat": 3,
+  "underLoad": 10,
+  "done": true,
+  "elapsedMs": 19404,
+  "filter": "os-ui-lifecycle",
+  "files": {
+    "total": 75,
+    "selected": 1,
+    "executed": 1,
+    "resumed": 0,
+    "carried": 0,
+    "recorded": 1
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-14T08:55:54.347Z",
+      "filter": "os-ui-lifecycle",
+      "total": 75,
+      "selected": 1,
+      "executed": 1,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 3,
+      "underLoad": 10,
+      "done": true,
+      "elapsedMs": 19404
+    }
+  ],
+  "results": [
+    {
+      "file": "os-ui-lifecycle.mjs",
+      "status": "pass",
+      "ms": 6890,
+      "log": "build/test-browser/os-ui-lifecycle.mjs.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "os-ui-lifecycle.mjs",
+      "status": "pass",
+      "ms": 6106,
+      "log": "build/test-browser/os-ui-lifecycle.mjs.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "os-ui-lifecycle.mjs",
+      "status": "pass",
+      "ms": 6403,
+      "log": "build/test-browser/os-ui-lifecycle.mjs.rep3.log",
+      "repeatIdx": 3
+    }
+  ],
+  "flake": [
+    {
+      "file": "os-ui-lifecycle.mjs",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    }
+  ],
+  "evidence": {
+    "expected": 1,
+    "fresh": 1,
+    "resumedExistenceOnly": 0
+  }
+}

@@ -1,0 +1,15 @@
+  ok   boots to ready (doom/gameboy/snake + game data seeded)
+  ok   audio output ring reached the page
+  ok   doom composites a real frame (rich colors over the window region)
+  ok   Escape reached doom (frame changed: menu overlay / demo tick)
+  ok   doom animates (distinct frame signatures over ~6s)
+  ok   audio resumed on the gesture
+  ok   mixer output advances while doom plays (music mixed + consumed)
+  ok   wmctl list from the shell shows DOOM Shareware
+  ok   wmctl close quit doom; desktop restored
+  ok   shell alive after doom exits
+  ok   gameboy composites LCD frames (built-in test ROM; local ROM absent)
+  ok   wmctl close quit gameboy; desktop restored
+  ok   shell alive after gameboy exits
+
+os doom (browser): PASS

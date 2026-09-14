@@ -1,0 +1,18 @@
+ok hidden top-level creation
+ok hidden style clear
+ok show returns previous hidden
+ok shown top-level
+ok duplicate show returns previous visible
+ok duplicate show does not notify
+ok hide returns previous visible
+ok hide releases capture
+ok hide preserves HWND and clears visible style
+ok duplicate hide returns hidden
+ok show again reuses HWND
+ok SDL hidden flag
+ok SDL show
+ok SDL hide retains surface
+ok hidden activation refused
+ok invalid show refused
+LIFECYCLE-DONE failures=0
+

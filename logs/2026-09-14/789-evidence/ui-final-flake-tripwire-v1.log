@@ -1,0 +1,79 @@
+
+[1m━━━ flake gate: kernel leg ━━━[0m
+$ node tests/kernel/run.js --filter=wm_service_e2e,term_e2e,os_apps_e2e,comp_park_e2e --repeat=3 --under-load
+
+registry: 207 declared + 0 excluded == 207 on disk (tests/kernel/run.js)
+registry: 2 declared + 0 excluded == 2 on disk (gucos-packages/tests/manifest.json)
+sibling tests: gucos-packages at /Users/jku/git/gucos-packages (via main-clone sibling) — 2 member(s) join the suite
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 55.7 GB free
+[fixture] os/os-system.img fresh (v292)
+[33m⚠ kernel suite: --filter=wm_service_e2e,term_e2e,os_apps_e2e,comp_park_e2e selected 4 of 209 files — this run covers PART of the suite.[0m
+--- kernel suite (12 runs = 4×3 repeat, UNDER LOAD ×10, 6 jobs) ---
+ok   test_wm_service_e2e.js #1  73.7s
+ok   test_wm_service_e2e.js #2  72.5s
+ok   test_wm_service_e2e.js #3  73.9s
+ok   test_os_apps_e2e.js #1  19.8s
+ok   test_os_apps_e2e.js #2  19.4s
+ok   test_term_e2e.js #1  267.2s
+ok   test_term_e2e.js #3  267.2s
+ok   test_term_e2e.js #2  267.4s
+ok   test_comp_park_e2e.js #1  3.0s
+ok   test_comp_park_e2e.js #2  3.0s
+ok   test_comp_park_e2e.js #3  3.0s
+ok   test_os_apps_e2e.js #3  19.7s
+
+flake report (3× each, under load ×10):
+  [32mstable[0m test_wm_service_e2e.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_os_apps_e2e.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_term_e2e.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_comp_park_e2e.js  3/3 passed  (flake 0%)
+
+  [32mall 4 file(s) stable across 3 runs.[0m
+evidence: 4/4 selected members have logs post-dating the run start
+
+kernel suite: 12 passed, 0 failed, 3 carried from earlier run(s)  (279.1s)  [4/209 selected, 5/209 recorded]  summary: build/test-kernel/summary.json
+
+[1m━━━ flake gate: browser leg ━━━[0m
+$ node tests/browser/os-sweep.mjs --filter=os-doom,os-term,os-compositor,os-wm --repeat=3 --under-load
+
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 55.7 GB free
+[fixture] os/os-system.img fresh (v292)
+[33m⚠ browser os sweep: --filter=os-doom,os-term,os-compositor,os-wm selected 6 of 75 files — this run covers PART of the suite.[0m
+--- browser os sweep (18 runs = 6×3 repeat, UNDER LOAD ×10, 1 jobs) ---
+ok   os-compositor.mjs #1  24.2s
+ok   os-compositor.mjs #2  23.2s
+ok   os-compositor.mjs #3  23.2s
+ok   os-doom.mjs #1  13.7s
+ok   os-doom.mjs #2  13.5s
+ok   os-doom.mjs #3  14.7s
+ok   os-doompage-motion.mjs #1  15.4s
+ok   os-doompage-motion.mjs #2  13.1s
+ok   os-doompage-motion.mjs #3  13.1s
+ok   os-doompage-renders.mjs #1  3.9s
+ok   os-doompage-renders.mjs #2  5.5s
+ok   os-doompage-renders.mjs #3  3.8s
+ok   os-term.mjs #1  11.8s
+ok   os-term.mjs #2  12.0s
+ok   os-term.mjs #3  11.9s
+ok   os-wm.mjs #1  26.2s
+ok   os-wm.mjs #2  9.9s
+ok   os-wm.mjs #3  12.0s
+
+flake report (3× each, under load ×10):
+  [32mstable[0m os-compositor.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-doom.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-doompage-motion.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-doompage-renders.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-term.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-wm.mjs  3/3 passed  (flake 0%)
+
+  [32mall 6 file(s) stable across 3 runs.[0m
+evidence: 6/6 selected members have logs post-dating the run start
+
+browser os sweep: 18 passed, 0 failed, 3 carried from earlier run(s)  (251.1s)  [6/75 selected, 7/75 recorded]  summary: build/test-browser/summary.json
+
+[1m━━━ flake gate summary (3× each, under load) ━━━[0m
+  [32mok  [0m kernel  
+  [32mok  [0m browser 
+
+  [32mflake gate green[0m  (530.6s)

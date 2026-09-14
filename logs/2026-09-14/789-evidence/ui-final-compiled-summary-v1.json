@@ -1,0 +1,54 @@
+{
+  "suite": "kernel suite",
+  "startedAt": "2026-09-14T08:52:09.380Z",
+  "node": "v25.8.2",
+  "jobs": 6,
+  "repeat": 1,
+  "underLoad": 0,
+  "done": true,
+  "elapsedMs": 2658,
+  "filter": "test_ui_lifecycle_e2e",
+  "files": {
+    "total": 209,
+    "selected": 1,
+    "executed": 1,
+    "resumed": 0,
+    "carried": 0,
+    "recorded": 1
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-14T08:52:09.380Z",
+      "filter": "test_ui_lifecycle_e2e",
+      "total": 209,
+      "selected": 1,
+      "executed": 1,
+      "resumed": 0,
+      "jobs": 6,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 2658
+    }
+  ],
+  "results": [
+    {
+      "file": "test_ui_lifecycle_e2e.js",
+      "status": "pass",
+      "ms": 2656,
+      "log": "build/test-kernel/test_ui_lifecycle_e2e.js.log"
+    }
+  ],
+  "evidence": {
+    "expected": 1,
+    "fresh": 1,
+    "resumedExistenceOnly": 0
+  },
+  "sibling": {
+    "repo": "gucos-packages",
+    "status": "ok",
+    "root": "/Users/jku/git/gucos-packages",
+    "via": "main-clone sibling",
+    "members": 2
+  }
+}

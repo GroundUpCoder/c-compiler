@@ -1,0 +1,165 @@
+  ok   wm autostarted: taskbar surface exists
+  ok   taskbar is borderless, parked at the bottom edge (0,740 @1024x768)
+  ok   winbox placed by the WM policy (12,36 — not the kernel cascade)
+  ok   winbox focused + resizable (R flag, todos/0021)
+  ok   wmctl min: winbox minimized
+  ok   taskbar click restores + focuses winbox
+  ok   wmctl shot screen writes a PNG
+  ok   wmctl focus on a bogus sid fails
+  ok   #501 non-numeric SID on key fails loud (exit 2)
+  ok   #501 non-numeric SCANCODE on key fails loud (exit 2)
+  ok   #501 non-numeric SID on click fails loud (exit 2)
+  ok   #501 non-numeric SID on wait gone fails loud, not instant false green
+  ok   #501 the error names the offending argument
+  ok   #501 SID 0 (focused window) still parses as valid
+  ok   wmctl focus bogus sid names the cause (EINVAL)
+  ok   wmctl scale on a fixed-size window succeeds
+  ok   wmctl resize on a fixed-size window is refused
+  ok   wmctl scale on a RESIZABLE window is refused
+  ok   wmctl resize on a fixed-size window names the cause (EPERM, todos/0242)
+  ok   wmctl scale on a RESIZABLE window names the cause (EPERM, todos/0242)
+  ok   fixbox scaled: buffer geometry intact, DST column shows 480x320
+  ok   fixbox is not resizable (no R flag)
+  ok   winbox unscaled: DST column is -
+  ok   wmctl max on the resizable winbox succeeds
+  ok   maximized winbox fills the work area (1024x704+0+28: screen minus taskbar, below the title bar)
+  ok   second max restores the exact saved geometry
+  ok   max on the fixed-size fixbox: aspect-fit scale-to-fit (960x640, integer-snapped 4x), centered
+  ok   fixbox buffer untouched by max (still 240x160)
+  ok   second max restores the pre-max dst and position
+  ok   WM killed: taskbar gone, endpoint still serves wmctl
+  ok   wmctl max with no WM is refused (maximize IS policy)
+  ok   wmctl max with no WM names the cause (ENODEV, todos/0242)
+  ok   wm & respawns: taskbar back at the bottom edge
+  ok   Start click opens the single-column root above the taskbar (290x378+0+354, borderless)
+  ok   menu shot written
+  ok   All Programs cascades the tree flyout of GROUPS (h 124 at root-right - 3, y 608)
+  ok   hovering the Demos group cascades its leaves (h 364, parent-right - 3)
+  ok   flyout z-sorts above the root panel (anchored child, todos/0282)
+  ok   nested flyout z-sorts above its parent column (todos/0282)
+  ok   nested flyout click launches winbox (second instance)
+  ok   selection dismissed the whole cascade
+  ok   the launch recorded an MRU recent (~/.config/recent grew)
+  ok   Start click re-opens the menu
+  ok   focus change dismisses the menu
+  ok   desktop layer: fullscreen borderless surface
+  ok   desktop layer sits at the BOTTOM of z
+  ok   taskbar and app windows composite above it
+  ok   desktop shot written
+  ok   single click does NOT launch (no Notepad window from the notepad link)
+  ok   injected double-click on the term icon spawns term
+  ok   dblclick on the Presentations folder opens fileman AT it (todos/0185)
+  ok   four more winboxes up (6 winbox windows total)
+  ok   close-middle keeps launch order: button 5 click focuses the slid-left window
+  ok   clock-cell click falls on no button (focused window untouched)
+  ok   taskbar shot written
+  ok   pre-cycle: the original winbox is focused
+  ok   wmctl cycle -1 focuses the previous window (fixbox)
+  ok   cycle -1 again toggles back (winbox)
+  ok   minimized window skipped: cycle -1 lands on the 3rd-recent (W6)
+  ok   forward cycle walks to the LRU window (focus moved, minimized still skipped)
+  ok   taskbar rides the top of z after a wmctl raise (todos/0038)
+  ok   raised winbox sits directly below the pinned bar
+  ok   desktop layer stays pinned at the bottom of z
+  ok   FLAGS carry the layer char (taskbar T, desktop B, winbox neither)
+  ok   SIGKILL of the focused winbox: focus falls to a normal window, not the bar
+  ok   desktop dblclick on a #!/bin/sh launcher runs it (winbox +1)
+  ok   desktop dblclick on plain text opens the GUI default (notepad +1)
+  ok   menu search launch takes the same activate path (winbox +1)
+  ok   seeded menu/snake is a real #! script now (image v36)
+  ok   desktop shot is a 1024x768 PNG
+  ok   icon cell 0 histogram: tile + glyph + ground (no notch on a dir)
+  ok   link notch on the calc symlink icon (cell 1)
+  ok   empty desktop area is pure teal
+  ok   folder glyph distinct from launcher block (Presentations vs calc)
+  ok   taskbar shot is a 1024x36 PNG
+  ok   clock digits present in the taskbar shot (black-pixel histogram)
+  ok   menu shot is a 290x378 PNG
+  ok   gucOS branding band is a blue gradient down the left
+  ok   All Programs (bottom row) carries the cascade arrow
+  ok   All Programs label text present (bottom row)
+  ok   fixed places text present in the column (Settings / Run...)
+  ok   search box is a sunken white field
+  ok   search box "Search" ghost text
+  ok   wmctl menu with no WM was refused (the menu IS policy)
+  ok   wmctl menu opens the single-column root (the chord path)
+  ok   live search + Enter launches the top hit (winbox +1)
+  ok   search shot written
+  ok   Esc clears a non-empty search but keeps the menu open
+  ok   a second Esc dismisses the menu
+  ok   the Run... place (column row 1) opens the run dialog (340x78, above the bar)
+  ok   typed command + Enter launches it (sh -c winbox: +1) and closes the dialog
+  ok   keyboard Up+Right cascades the All Programs tree flyout, and the union lists /etc/menu Apps ALONGSIDE the baked groups (0259)
+  ok   keyboard Right+Enter runs the nested launcher (winbox +1)
+  ok   a 4-dir tree cascades to startmenu6 — past the old MENU_DEPTH-4 cap (0259)
+  ok   each deeper level advances x (a real cascade, not a re-park)
+  ok   Enter at depth 5 fires the leaf (winbox +1) and closes the chain
+  ok   taskbar hover raises the Aero Peek popup (todos/0063)
+  ok   peek popup rides the TOP layer like the bar
+  ok   peek popup is shot-able (pixels live)
+  ok   hover off the buttons dismisses the peek
+  ok   wmctl thumb writes the shot
+  ok   alphabox carries the A flag (todos/0063)
+  ok   winbox rows carry no A flag
+  ok   alpha screen shot written
+  ok   alphabox per-surface shot written
+  ok   wmctl glass toggles on and off
+  ok   glass screen shot written
+  ok   thumb is the aspect-fit 60x40
+  ok   thumb corner averages fixbox's white border
+  ok   thumb center averages fixbox's orange fill
+  ok   50%-alpha client composites to the exact src-over blend
+  ok   glass never changes the headless composite
+  ok   alphabox surface shot is 240x160
+  ok   per-pixel ALPHA survives the PNG encode (interior a=128, not 255)
+  ok   the opaque border still encodes a=255 (alpha is carried, not forced)
+  ok   the screen composite stays opaque (a=255)
+  ok   s1 shot written
+  ok   s2 shot written
+  ok   s2b shot written
+  ok   s3 shot written
+  ok   s4 shot written
+  ok   s5 shot written
+  ok   s6 shot written
+  ok   plain click selects one (fileman navy, ctlpanel teal)
+  ok   ctrl+click adds (fileman AND ctlpanel navy)
+  ok   shift+click ranges from the anchor (ctlpanel..notepad navy, ends teal)
+  ok   marquee REPLACES with the intersected tiles (col 0 rows 0-2)
+  ok   .icons persists the whole layout (term at 1,4; Presentations pinned 0,0)
+  ok   drag-move relocated term to (1,4): tile there, old cell teal, still selected
+  ok   Ctrl+A selects all (alauncher, notes.txt, moved term navy)
+  ok   Enter on the multi-selection is a no-op (the multi-launch guard)
+  ok   Esc clears the selection
+  ok   Right selects the top-left icon; Enter launches it (winbox +1)
+  ok   right-click the taskbar strip opens the menu (h 134, clamped above the bar)
+  ok   the strip menu rides the TOP layer like the bar
+  ok   Minimize All minimizes both fresh winboxes and dismisses the menu
+  ok   Show Desktop click restores the minimized set
+  ok   Show Desktop click again re-minimizes everything
+  ok   Cascade resizes the fresh winboxes to the uniform 614x422 box
+  ok   Cascade offsets them (the two boxes are at different origins)
+  ok   a clock-cell click raises the datepop tooltip (184x30, above the bar)
+  ok   datepop rides the TOP layer
+  ok   datepop is shot-able (pixels live)
+  ok   a second clock-cell click toggles the tooltip off
+  ok   wmctl sysmenu succeeds on the focused window
+  ok   sysmenu opens the popup (anchored at the window top-left)
+  ok   picking Move keeps the popup up as the key grabber
+  ok   Move + arrows relocate the window (+32 x, +16 y)
+  ok   Enter commits the move and dismisses the popup
+  ok   mid-mode arrows nudge (-24 x) before Esc
+  ok   Esc reverts to the pre-mode position and dismisses
+  ok   Size grows the resizable winbox (+32 w, +32 h)
+  ok   Size is disabled on the fixed-size fixbox (gray row: click + arrows are no-ops)
+  ok   Close via the sysmenu tears the window down
+  ok   baseline: aaa + aab seeded on the desktop
+  ok   F2 + typed name + Enter renames the icon (aaa -> zzz)
+  ok   rename onto an existing name keeps both files (EEXIST)
+  ok   Esc leaves the file untouched (no partial "aabz")
+  ok   icon-menu Rename renames via the inline editor (aab -> mmm)
+  ok   #676: keysym-omitted injection derives from the scancode — the all-derived rename flow lands (aaa -> kkk)
+  ok   both launchers are present on the desktop (long name not lost)
+  ok   short spaced Desktop name launches on dblclick (winbox +1)
+  ok   36-char spaced Desktop name launches on dblclick (winbox +1) — no name[32] truncation
+
+wm service e2e: PASS
