@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {startServer,launchBrowser,waitForServer,osUrl,osHelpers} from './lib/os-harness.mjs';
 const require=createRequire(import.meta.url),{parsePng}=require('../lib/png.js');
@@ -9,11 +10,16 @@ const root=path.resolve(import.meta.dirname,'../..');
 const dir=path.join(root,'build/test-browser/ui-lifecycle-'+Date.now());fs.mkdirSync(dir,{recursive:true});
 const port=3349,url=osUrl(port),server=startServer(port),browser=await launchBrowser();
 const source=fs.readFileSync(path.join(import.meta.dirname,'ui-lifecycle.c'),'utf8');
-const evidence={kind:'automated Playwright keyboard and screenshot probes; no manual interaction',url,files:{},runs:[]};
-for(const name of ['host.js','kernel.js','compiler.js','os/image.json']) evidence.files[name]=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
+let page;
+const evidence={commit:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),kind:'automated Playwright keyboard and screenshot probes; no manual interaction',url,files:{},runs:[]};
 try {
+for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kernel-worker.js','os/process-worker.js']) evidence.files[name]=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
  await waitForServer(url,{tries:2400,interval:100});
- const context=await browser.newContext({viewport:{width:1050,height:800}}),page=await context.newPage();
+ const context=await browser.newContext({viewport:{width:1050,height:800}});page=await context.newPage();
+ evidence.browser=browser.version();evidence.errors=[];
+ page.on('pageerror',e=>evidence.errors.push(String(e)));
+ for(const name of ['os/os-system.img','os/os-system.img.small.json']) evidence.files[name]=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
+ evidence.small=JSON.parse(fs.readFileSync(path.join(root,'os/os-system.img.small.json'),'utf8'));
  await page.goto(url);await page.waitForFunction(()=>window.__osState==='ready',null,{timeout:180000});
  evidence.served={};
  for(const name of Object.keys(evidence.files)) {
@@ -28,7 +34,7 @@ try {
    await setVt(1);await page.keyboard.type(command+'\r');
    await page.waitForFunction(m=>window.__osOut.includes(m),marker,{timeout:120000});
  }
- await shell("cat /usr/share/os-release; echo UI-IMAGE-PIN-O''K",'UI-IMAGE-PIN-OK');
+ await shell("cat /usr/share/os-release; cat /usr/lib/small/snapshot.json; echo UI-IMAGE-PIN-O''K",'UI-IMAGE-PIN-OK');
  evidence.installed=await page.evaluate(()=>window.__osOut);
  await shell("cat > /root/ui-lifecycle.c <<'EOF'\n"+source+"EOF\ncc /root/ui-lifecycle.c -o /root/ui-lifecycle && echo UI-COMPILE-O''K",'UI-COMPILE-OK');
  async function count(name) {
@@ -63,6 +69,7 @@ try {
  }
  console.log('PASS installed gucOS software and WebGPU hidden/show/activate/hide keyboard probes');
 } finally {
+ if(page) evidence.finalTranscript=await page.evaluate(()=>window.__osOut).catch(String);
  fs.writeFileSync(path.join(dir,'evidence.json'),JSON.stringify(evidence,null,2)+'\n');
  console.log('Evidence: '+dir);await browser.close();server.kill();
 }

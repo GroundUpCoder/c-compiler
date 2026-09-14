@@ -7,13 +7,14 @@ static SDL_Window *control,*target;
 static SDL_Renderer *cr,*tr;
 static int lastFocus=-1, initialized;
 SDL_AppResult SDL_AppInit(void **state,int argc,char **argv) {
-    const char *driver=argc>1 && !strcmp(argv[1],"software")?"software":NULL;
+    const char *driver=argc>1 && !strcmp(argv[1],"software")?"software":"gucos";
     SDL_Init(SDL_INIT_VIDEO);
     control=SDL_CreateWindow("UI lifecycle control",280,160,0);
     target=SDL_CreateWindow("UI lifecycle target",220,130,SDL_WINDOW_HIDDEN);
     if(!control||!target) return SDL_APP_FAILURE;
     cr=SDL_CreateRenderer(control,driver); tr=SDL_CreateRenderer(target,driver);
     if(!cr||!tr) return SDL_APP_FAILURE;
+    printf("RENDER-DRIVER %s\n",driver); fflush(stdout);
     return SDL_APP_CONTINUE;
 }
 SDL_AppResult SDL_AppEvent(void *state,SDL_Event *e) {
