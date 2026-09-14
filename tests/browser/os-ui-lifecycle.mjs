@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {startServer,launchBrowser,waitForServer,osUrl,osHelpers} from './lib/os-harness.mjs';
-const require=createRequire(import.meta.url),{parsePng}=require('../lib/png.js');
+const require=createRequire(import.meta.url),{encodePng}=require('../lib/png.js');
 const root=path.resolve(import.meta.dirname,'../..');
 const dir=path.join(root,'build/test-browser/ui-lifecycle-'+Date.now());fs.mkdirSync(dir,{recursive:true});
 const port=3349,url=osUrl(port),server=startServer(port),browser=await launchBrowser();
@@ -13,11 +13,12 @@ const source=fs.readFileSync(path.join(import.meta.dirname,'ui-lifecycle.c'),'ut
 let page;
 const evidence={commit:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),kind:'automated Playwright keyboard and screenshot probes; no manual interaction',url,files:{},runs:[]};
 try {
-for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kernel-worker.js','os/process-worker.js']) evidence.files[name]=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
+for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kernel-worker.js','os/process-worker.js','tests/browser/os-ui-lifecycle.mjs','tests/browser/ui-lifecycle.c']) evidence.files[name]=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
  await waitForServer(url,{tries:2400,interval:100});
  const context=await browser.newContext({viewport:{width:1050,height:800}});page=await context.newPage();
  evidence.browser=browser.version();evidence.errors=[];
  page.on('pageerror',e=>evidence.errors.push(String(e)));
+ page.on('console',m=>{if(m.type()==='error')evidence.errors.push(m.text());});
  for(const name of ['os/os-system.img','os/os-system.img.small.json']) evidence.files[name]=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
  evidence.small=JSON.parse(fs.readFileSync(path.join(root,'os/os-system.img.small.json'),'utf8'));
  await page.goto(url);await page.waitForFunction(()=>window.__osState==='ready',null,{timeout:180000});
@@ -44,9 +45,30 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kerne
  await shell("cat > /root/ui-lifecycle.c <<'EOF'\n"+source+"EOF\ncc /root/ui-lifecycle.c -o /root/ui-lifecycle && echo UI-COMPILE-O''K",'UI-COMPILE-OK');
  async function count(name) {
    await setVt(2);await waitScreen();
-   const bytes=await page.locator('#screen').screenshot({path:path.join(dir,name+'.png')});
-   const png=parsePng(bytes);let n=0;
-   for(let i=0;i<png.rgba.length;i+=4) if(png.rgba[i]===211&&png.rgba[i+1]===31&&png.rgba[i+2]===171)n++;
+   // Chromium's page screenshot omits transferred OffscreenCanvas pixels
+   // (also documented in os-gcode). Read the actual composited canvas via
+   // WebGPU, then encode PNG in Node; no Canvas2D or browser font rendering.
+   const shot=await page.evaluate(async()=>{
+     const c=document.getElementById('screen'),{w,h}=window.__osScreen;
+     const d=window.__uiCaptureDevice ||= await (await navigator.gpu.requestAdapter()).requestDevice();
+     const texture=d.createTexture({size:[w,h],format:'rgba8unorm',usage:GPUTextureUsage.COPY_DST|GPUTextureUsage.COPY_SRC|GPUTextureUsage.RENDER_ATTACHMENT});
+     const pitch=Math.ceil(w*4/256)*256;
+     const buffer=d.createBuffer({size:pitch*h,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
+     const bitmap=await createImageBitmap(c);
+     d.queue.copyExternalImageToTexture({source:bitmap},{texture},[w,h]);
+     bitmap.close();
+     const enc=d.createCommandEncoder();enc.copyTextureToBuffer({texture},{buffer,bytesPerRow:pitch},[w,h]);d.queue.submit([enc.finish()]);
+     await buffer.mapAsync(GPUMapMode.READ);
+     const mapped=new Uint8Array(buffer.getMappedRange()),rgba=new Uint8Array(w*h*4);
+     for(let y=0;y<h;y++)rgba.set(mapped.subarray(y*pitch,y*pitch+w*4),y*w*4);
+     buffer.unmap();buffer.destroy();texture.destroy();
+     let binary='';for(let i=0;i<rgba.length;i+=16384)binary+=String.fromCharCode(...rgba.subarray(i,i+16384));
+     return {w,h,base64:btoa(binary)};
+   });
+   const rgba=Buffer.from(shot.base64,'base64');
+   fs.writeFileSync(path.join(dir,name+'.png'),encodePng(shot.w,shot.h,rgba));
+   let n=0;
+   for(let i=0;i<rgba.length;i+=4) if(rgba[i]===211&&rgba[i+1]===31&&rgba[i+2]===171)n++;
    return n;
  }
  for(const driver of ['software','gpu']) {
