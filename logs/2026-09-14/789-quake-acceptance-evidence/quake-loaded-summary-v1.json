@@ -1,0 +1,70 @@
+{
+  "suite": "browser os sweep",
+  "startedAt": "2026-09-14T13:26:10.617Z",
+  "node": "v25.8.2",
+  "jobs": 1,
+  "repeat": 3,
+  "underLoad": 10,
+  "done": true,
+  "elapsedMs": 33987,
+  "filter": "os-quake.mjs",
+  "files": {
+    "total": 75,
+    "selected": 1,
+    "executed": 1,
+    "resumed": 0,
+    "carried": 0,
+    "recorded": 1
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-14T13:26:10.617Z",
+      "filter": "os-quake.mjs",
+      "total": 75,
+      "selected": 1,
+      "executed": 1,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 3,
+      "underLoad": 10,
+      "done": true,
+      "elapsedMs": 33987
+    }
+  ],
+  "results": [
+    {
+      "file": "os-quake.mjs",
+      "status": "pass",
+      "ms": 12274,
+      "log": "build/test-browser/os-quake.mjs.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "os-quake.mjs",
+      "status": "pass",
+      "ms": 10826,
+      "log": "build/test-browser/os-quake.mjs.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "os-quake.mjs",
+      "status": "pass",
+      "ms": 10882,
+      "log": "build/test-browser/os-quake.mjs.rep3.log",
+      "repeatIdx": 3
+    }
+  ],
+  "flake": [
+    {
+      "file": "os-quake.mjs",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    }
+  ],
+  "evidence": {
+    "expected": 1,
+    "fresh": 1,
+    "resumedExistenceOnly": 0
+  }
+}

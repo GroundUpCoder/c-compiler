@@ -1,0 +1,54 @@
+{
+  "suite": "kernel suite",
+  "startedAt": "2026-09-14T13:27:11.469Z",
+  "node": "v25.8.2",
+  "jobs": 1,
+  "repeat": 1,
+  "underLoad": 0,
+  "done": true,
+  "elapsedMs": 772272,
+  "filter": "test_os_boot.js",
+  "files": {
+    "total": 210,
+    "selected": 1,
+    "executed": 1,
+    "resumed": 0,
+    "carried": 0,
+    "recorded": 1
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-14T13:27:11.469Z",
+      "filter": "test_os_boot.js",
+      "total": 210,
+      "selected": 1,
+      "executed": 1,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 772272
+    }
+  ],
+  "results": [
+    {
+      "file": "test_os_boot.js",
+      "status": "pass",
+      "ms": 772269,
+      "log": "build/test-kernel/test_os_boot.js.log"
+    }
+  ],
+  "evidence": {
+    "expected": 1,
+    "fresh": 1,
+    "resumedExistenceOnly": 0
+  },
+  "sibling": {
+    "repo": "gucos-packages",
+    "status": "ok",
+    "root": "/Users/jku/git/gucos-packages",
+    "via": "main-clone sibling",
+    "members": 2
+  }
+}

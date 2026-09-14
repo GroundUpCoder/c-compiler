@@ -1,0 +1,10 @@
+registry: 208 declared + 0 excluded == 208 on disk (tests/kernel/run.js)
+registry: 2 declared + 0 excluded == 2 on disk (gucos-packages/tests/manifest.json)
+sibling tests: gucos-packages at /Users/jku/git/gucos-packages (via main-clone sibling) — 2 member(s) join the suite
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 45.5 GB free
+[33m⚠ kernel suite: --filter=test_os_boot.js selected 1 of 210 files — this run covers PART of the suite.[0m
+--- kernel suite (1 files, 1 jobs) ---
+ok   test_os_boot.js  772.3s
+evidence: 1/1 selected members have logs post-dating the run start
+
+kernel suite: 1 passed, 0 failed  (772.3s)  [1/210 selected, 1/210 recorded]  summary: build/test-kernel/summary.json

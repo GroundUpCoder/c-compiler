@@ -1,0 +1,27 @@
+{
+  "host.js": {
+    "sha256": "881fa3b31d11fca934684d3fdabfd30f7d7bcb801abeccdfc640b0abad6c31b5",
+    "bytes": 685798
+  },
+  "kernel.js": {
+    "sha256": "fd57c635fa84bb991af904d3e317f67a21cbf468e9c5dafe2785bb82d50f2698",
+    "bytes": 497815
+  },
+  "compiler.js": {
+    "sha256": "bd117fcf838da9cb0c22e4e351c19b844c0d32bdc2cc71b5f3bbbd2538d0733b",
+    "bytes": 1884053
+  },
+  "os/image.json": {
+    "sha256": "e898b932b95cc655cc013a80df0e408d031e66e775af55d28662bab8dc1e8a5b",
+    "bytes": 28567
+  },
+  "os/os-system.img": {
+    "sha256": "73a4cf8f2a16208ffda2b8ee22755e6fe068e467be9dbeb931b46de8534cbd7e",
+    "bytes": 109885728
+  },
+  "os/os-system.img.small.json": {
+    "sha256": "d42d9e40745d2869cf6d2415df39361bf79f3fddc4aa6e6d5b48a1866163c823",
+    "bytes": 96
+  },
+  "testedCommit": "4b2fcb8ba67b7a1a1220b4f802395b04a1eaa269"
+}
