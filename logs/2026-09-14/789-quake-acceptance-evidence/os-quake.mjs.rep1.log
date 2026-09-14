@@ -1,0 +1,15 @@
+  ok   boots to ready (quake package folded into the fat image)
+  ok   quake composites a real frame (rich colors over the window region)
+  ok   kernel asked the page for the pointer lock (wanted state)
+  ok   not locked before any gesture
+  ok   client click re-offers the lock (kernel-hit-tested gesture)
+  ok   title drag does not re-offer the lock
+  ok   quake animates while locked-moves flow (distinct frame signatures)
+  ok   wanted state persists after unlock (a client click re-locks)
+  ok   title drag moved the window while unlocked (wmctl list geometry + r flag)
+  ok   SE grip drag scales fixed-res quake (aspect-fit dst, buffer untouched — todos/0024)
+  ok   wmctl close quit quake; desktop restored
+  ok   lock request withdrawn when quake died
+  ok   shell alive after quake exits
+
+os quake (browser): PASS

@@ -1,0 +1,47 @@
+{
+  "suite": "browser os sweep",
+  "startedAt": "2026-09-14T13:24:56.645Z",
+  "node": "v25.8.2",
+  "jobs": 1,
+  "repeat": 1,
+  "underLoad": 0,
+  "done": true,
+  "elapsedMs": 11442,
+  "filter": "os-quake.mjs",
+  "files": {
+    "total": 75,
+    "selected": 1,
+    "executed": 1,
+    "resumed": 0,
+    "carried": 0,
+    "recorded": 1
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-14T13:24:56.645Z",
+      "filter": "os-quake.mjs",
+      "total": 75,
+      "selected": 1,
+      "executed": 1,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 11442
+    }
+  ],
+  "results": [
+    {
+      "file": "os-quake.mjs",
+      "status": "pass",
+      "ms": 11441,
+      "log": "build/test-browser/os-quake.mjs.log"
+    }
+  ],
+  "evidence": {
+    "expected": 1,
+    "fresh": 1,
+    "resumedExistenceOnly": 0
+  }
+}

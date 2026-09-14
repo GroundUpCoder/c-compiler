@@ -1,0 +1,111 @@
+{
+  "sampleIntervalSeconds": 2,
+  "timingCaveat": "first/last observations, each boundary sampled; brief child processes may be missed",
+  "peakWholeTreeRssKiB": 4114464,
+  "processes": [
+    {
+      "pid": 96952,
+      "first": 0.0013203620910644531,
+      "last": 771.9509541988373,
+      "command": "node tests/kernel/run.js --serial --filter=test_os_boot.js",
+      "peakRssKiB": 69216,
+      "cpuTime": "0:00.06"
+    },
+    {
+      "pid": 96962,
+      "first": 2.0243592262268066,
+      "last": 771.9509541988373,
+      "command": "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node -r /Users/jku/git/c-compiler-ui-lifecycle-quake/tests/lib/parent-watch.js /Users/jku/git/c-compiler-ui-lifecycle-quake/tests/kernel/test_os_boot.js",
+      "peakRssKiB": 51168,
+      "cpuTime": "0:00.07"
+    },
+    {
+      "pid": 96980,
+      "first": 2.0243592262268066,
+      "last": 241.66990637779236,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/os/boot.js --image=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img --fresh --no-fixture",
+      "peakRssKiB": 3775824,
+      "cpuTime": "6:23.00"
+    },
+    {
+      "pid": 97423,
+      "first": 243.71355319023132,
+      "last": 243.71355319023132,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/os/boot.js --image=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img",
+      "peakRssKiB": 289776,
+      "cpuTime": "0:00.17"
+    },
+    {
+      "pid": 97442,
+      "first": 245.747944355011,
+      "last": 245.747944355011,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/os/boot.js --image=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img",
+      "peakRssKiB": 429264,
+      "cpuTime": "0:01.41"
+    },
+    {
+      "pid": 97461,
+      "first": 247.79228019714355,
+      "last": 247.79228019714355,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/os/boot.js --image=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img",
+      "peakRssKiB": 454544,
+      "cpuTime": "0:01.39"
+    },
+    {
+      "pid": 97498,
+      "first": 249.8362910747528,
+      "last": 249.8362910747528,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/os/boot.js --image=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img",
+      "peakRssKiB": 439888,
+      "cpuTime": "0:00.41"
+    },
+    {
+      "pid": 97571,
+      "first": 251.92383909225464,
+      "last": 251.92383909225464,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/os/boot.js --image=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img",
+      "peakRssKiB": 416640,
+      "cpuTime": "0:00.37"
+    },
+    {
+      "pid": 97646,
+      "first": 253.96743035316467,
+      "last": 284.63641119003296,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/tools/mkimage.js --out=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img --manifest=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/image-vnext.json --quiet",
+      "peakRssKiB": 1238144,
+      "cpuTime": "0:49.81"
+    },
+    {
+      "pid": 97769,
+      "first": 286.67550921440125,
+      "last": 286.67550921440125,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/os/boot.js --image=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img",
+      "peakRssKiB": 271168,
+      "cpuTime": "0:00.43"
+    },
+    {
+      "pid": 97824,
+      "first": 288.72126841545105,
+      "last": 536.5825443267822,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/os/boot.js --image=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img --fresh-system",
+      "peakRssKiB": 4014032,
+      "cpuTime": "6:25.73"
+    },
+    {
+      "pid": 98150,
+      "first": 538.6268112659454,
+      "last": 538.6268112659454,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/os/boot.js --image=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os2.img --fixture=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img",
+      "peakRssKiB": 109616,
+      "cpuTime": "0:00.14"
+    },
+    {
+      "pid": 98223,
+      "first": 540.6713111400604,
+      "last": 771.9509541988373,
+      "command": "node /Users/jku/git/c-compiler-ui-lifecycle-quake/os/boot.js --image=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os2.img --fixture=/var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/os-boot-96962-t2I6wD/os.img",
+      "peakRssKiB": 4009264,
+      "cpuTime": "6:15.39"
+    }
+  ]
+}

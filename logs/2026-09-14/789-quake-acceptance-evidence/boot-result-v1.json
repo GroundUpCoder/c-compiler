@@ -1,0 +1,14 @@
+{
+  "command": [
+    "node",
+    "tests/kernel/run.js",
+    "--serial",
+    "--filter=test_os_boot.js"
+  ],
+  "exitCode": 0,
+  "elapsedSeconds": 774.0575532913208,
+  "innerBudgetMs": 300000,
+  "outerBudgetMs": 900000,
+  "sourceChanged": false,
+  "samplingIntervalSeconds": 2
+}

@@ -1,0 +1,182 @@
+  ok   exit N propagates through hush
+  ok   stdout[0] = "bin"
+  ok   stdout[1] = "dev"
+  ok   stdout[2] = "etc"
+  ok   stdout[3] = "proc"
+  ok   stdout[4] = "root"
+  ok   stdout[5] = "run"
+  ok   stdout[6] = "tmp"
+  ok   stdout[7] = "usr"
+  ok   stdout[8] = "var"
+  ok   stdout[9] = "A"
+  ok   stdout[10] = "sub=inner deep"
+  ok   stdout[11] = "redir"
+  ok   stdout[12] = "loop-1"
+  ok   stdout[13] = "loop-2"
+  ok   stdout[14] = "fn-arg"
+  ok   stdout[15] = "case-ok"
+  ok   stdout[16] = "test-ok"
+  ok   stdout[17] = "or-ok"
+  ok   stdout[18] = "status=1"
+  ok   stdout[19] = "hello, wasm world"
+  ok   first boot bakes the system blob
+  ok   first boot builds hush from vendor/busybox
+  ok   first boot builds the coreutils multicall
+  ok   applet names baked as symlinks
+  ok   first boot seeds the user volume
+  ok   popen/system session exits clean
+  ok   popen[0] = "read: from-popen"
+  ok   popen[1] = "pclose: 0"
+  ok   popen[2] = "system: 0"
+  ok   popen[3] = "file: from-system"
+  ok   coreutils session exits clean
+  ok   coreutils[0] = "2"
+  ok   coreutils[1] = "1"
+  ok   coreutils[2] = "APPLE 1"
+  ok   coreutils[3] = "moved.txt"
+  ok   coreutils[4] = "egrep-ok"
+  ok   coreutils[5] = "touch-ok"
+  ok   coreutils[6] = "1"
+  ok   coreutils[7] = "c.txt"
+  ok   coreutils batch-2 session exits clean
+  ok   coreutils2[0] = "3"
+  ok   coreutils2[1] = "2"
+  ok   coreutils2[2] = "1"
+  ok   coreutils2[3] = "B"
+  ok   coreutils2[4] = "2"
+  ok   coreutils2[5] = "b1946ac92492d2347c6235b4d2611184"
+  ok   coreutils2[6] = "hello"
+  ok   coreutils2[7] = "2"
+  ok   coreutils2[8] = "1"
+  ok   coreutils2[9] = "2"
+  ok   coreutils2[10] = "f.txt"
+  ok   coreutils2[11] = "unlink-ok"
+  ok   coreutils2[12] = "/usr/tmp"
+  ok   coreutils2[13] = "y"
+  ok   coreutils2[14] = "y"
+  ok   coreutils2[15] = "2 copy"
+  ok   coreutils2[16] = "1"
+  ok   coreutils2[17] = "11"
+  ok   coreutils2[18] = "wasm32"
+  ok   coreutils2[19] = "root"
+  ok   coreutils2[20] = "0"
+  ok   coreutils2[21] = "localhost"
+  ok   coreutils2[22] = "/bin/sh"
+  ok   coreutils2[23] = "2072780115"
+  ok   coreutils2[24] = "3"
+  ok   coreutils2[25] = "1\t2"
+  ok   coreutils2[26] = "long "
+  ok   coreutils2[27] = "0000000   A   B  \\n"
+  ok   coreutils2[28] = "2"
+  ok   coreutils2[29] = "mktemp-ok"
+  ok   coreutils2[30] = "sync-ok"
+  ok   coreutils2[31] = "cmp-same"
+  ok   coreutils2[32] = "/etc"
+  ok   coreutils2[33] = "1"
+  ok   coreutils2[34] = "env-exec=0"
+  ok   coreutils2[35] = "usleep-ok"
+  ok   coreutils batch-3 session exits clean
+  ok   coreutils3[0] = "s/a.txt"
+  ok   coreutils3[1] = "s/b.txt"
+  ok   coreutils3[2] = "6 s/a.txt"
+  ok   coreutils3[3] = "a.txt"
+  ok   coreutils3[4] = "b.txt"
+  ok   coreutils3[5] = "two"
+  ok   coreutils3[6] = "four"
+  ok   coreutils3[7] = "got-piped"
+  ok   coreutils3[8] = "sys-out"
+  ok   coreutils3[9] = "sys-rc=0"
+  ok   coreutils3[10] = "s/"
+  ok   coreutils3[11] = "s/a.txt"
+  ok   coreutils3[12] = "s/b.txt"
+  ok   coreutils3[13] = "alpha"
+  ok   coreutils3[14] = "b1"
+  ok   coreutils3[15] = "b2"
+  ok   coreutils3[16] = "s/b.txt"
+  ok   coreutils3[17] = "x.tar"
+  ok   coreutils3[18] = "x.tar.gz"
+  ok   coreutils3[19] = "zcat-matches"
+  ok   coreutils3[20] = "3584"
+  ok   coreutils3[21] = "diff-rc=1"
+  ok   coreutils3[22] = "-one"
+  ok   coreutils3[23] = "+two"
+  ok   coreutils3[24] = "diff-same-rc=0"
+  ok   procps session exits clean
+  ok   ps lists pid 1 as a login sh
+  ok   ps lists itself
+  ok   pgrep -l finds the bg sleep
+  ok   pkill signals it
+  ok   bg job died of SIGTERM
+  ok   pgrep confirms it is gone
+  ok   status State S (pid 1 waits)
+  ok   status PPid 0 for init
+  ok   status NSpgid 1 for init
+  ok   uptime prints load average
+  ok   free parses meminfo
+  ok   top -bn1 renders the Mem header
+  ok   /proc/uptime format
+  ok   time/strings session exits clean
+  ok   time reports a plausible wall time for sleep 1
+  ok   time propagates a failing child status
+  ok   time exits 0 on a clean child
+  ok   strings extracts the >=4-char run and only it
+  ok   strings -n 2 admits the 2-char run
+  ok   strings finds real data in a real binary
+  ok   shebang session exits clean
+  ok   shebang[0] = "hi-world"
+  ok   shebang[1] = "hi-direct"
+  ok   shebang[2] = "hi-classic"
+  ok   shebang[3] = "strict-rc=1"
+  ok   shebang[4] = "loop-rc=2"
+  ok   varstore session exits clean
+  ok   script-file assignments expand (hush store intact, #296)
+  ok   environ-immortality session exits clean
+  ok   environ-immortal[0] = "T1=/root"
+  ok   environ-immortal[1] = "T2=/root"
+  ok   environ-immortal[2] = "0"
+  ok   environ-immortal[3] = "T2b=/root"
+  ok   environ-immortal[4] = "T3=vt999"
+  ok   profile-reexec session exits clean
+  ok   $() result unpolluted by profile stdout
+  ok   $() in ~/.profile does not recurse
+  ok   test profile removed
+  ok   second boot exits clean
+  ok   no re-bake on second boot
+  ok   no user re-seed on second boot
+  ok   a.out persisted across reboot
+  ok   po persisted across reboot
+  ok   system + root images both exist on disk
+  ok   EROFS session exits clean
+  ok   write via /bin is EROFS
+  ok   write under /usr is EROFS
+  ok   /usr/local lands on /var/local (writable)
+  ok   mkimage bakes the v(N+1) blob
+  ok   upgraded boot exits clean
+  ok   the swapped blob is kept (no re-bake)
+  ok   no user re-seed on upgrade
+  ok   os-release reports the upgraded version
+  ok   user file survived the upgrade
+  ok   /etc override survived the upgrade
+  ok   admin-installed tool survived the upgrade
+  ok   upgraded /bin/cc still compiles
+  ok   factory-reset wipe exits clean
+  ok   post-reset boot exits clean
+  ok   /etc is empty after the reset
+  ok   the OS still compiles and runs
+  ok   --fresh-system re-bakes
+  ok   --fresh-system keeps user files
+  ok   OS survives a failed cc
+  ok   cc error reaches stderr
+  ok   unknown command reported
+  ok   unknown command is 127 via $?
+  ok   fixture boot exits clean
+  ok   fixture is installed, not baked
+  ok   no bake on the fixture path
+  ok   fixture-installed OS compiles and runs
+  ok   installed blob reuses cleanly
+  ok   input-stale blob re-materializes
+  ok   --stale-ok reuses the aged blob
+  ok   input-stale fixture is bypassed (real bake)
+  ok   post-bypass boot exits clean
+
+os boot (headless, hush): PASS
