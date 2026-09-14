@@ -1,0 +1,63 @@
+== blockfs (last lines)
+blockfs suite: 15 passed, 0 failed  (86.6s)  [15/15 selected, 15/15 recorded]  summary: build/test-blockfs/summary.json
+  1 passed, 0 failed  (86.8s)  → build/test-run/summary.json
+exit=0
+== host (last lines)
+All version-guard checks passed
+All mkpkg baseline checks passed
+  ok   first bake exits 0 (post-bake seal+version check passed)
+All host tests passed
+  1 passed, 0 failed  (537.0s)  → build/test-run/summary.json
+exit=0
+== kernel-1 (last lines)
+[33m⚠ kernel suite: --filter=test_git_net_e2e.js,test_term_e2e.js,test_present_e2e.js,test_wm_service_e2e.js,test_netsurf_demos_e2e.js,test_cairo_e2e.js selected 6 of 210 files — this run covers PART of the suite.[0m
+kernel suite: 6 passed, 0 failed, 1 carried from earlier run(s)  (223.4s)  [6/210 selected, 7/210 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== kernel-2 (last lines)
+[33m⚠ kernel suite: --filter=test_netsurf_mutation_e2e.js,test_seed_e2e.js,test_netsurf_http_e2e.js,test_notepad_menu_e2e.js,test_win32_ports.js,test_recycle_e2e.js,test_sameboy_e2e.js,test_user32_e2e.js,test_mgpp_e2e.js,test_netsurf_select_e2e.js,test_deck_e2e.js,test_netsurf_select_reconvert_e2e.js,test_os_apps_e2e.js,test_gucman_libgit2_e2e.js,test_keymap_e2e.js,test_punes_e2e.js,test_sounds_e
+kernel suite: 54 passed, 0 failed, 7 carried from earlier run(s)  (311.0s)  [54/210 selected, 61/210 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== kernel-3 (last lines)
+[33m⚠ kernel suite: --filter=test_netsurf_events_e2e.js,test_netsurf_content_e2e.js,test_symbolfont_e2e.js,test_comdlg_diag_e2e.js,test_menubox_e2e.js,test_mgba_e2e.js,test_wm_lifecycle.js,test_wgpu_loopguard_headless_e2e.js,test_user32_lifecycle_policy.js,test_ui_lifecycle_e2e.js,test_trap_report_delivery.js,test_taskbar_owner_e2e.js,test_syscall_restart_e2e.js,test_start_failure_e2e.js,test_spa
+kernel suite: 147 passed, 0 failed, 60 carried from earlier run(s)  (187.9s)  [147/210 selected, 207/210 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== kernel-osboot (last lines)
+[33m⚠ kernel suite: --filter=test_os_boot.js selected 1 of 210 files — this run covers PART of the suite.[0m
+kernel suite: 1 passed, 0 failed, 207 carried from earlier run(s)  (712.3s)  [1/210 selected, 208/210 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== kernel-sibling (last lines)
+[33m⚠ kernel suite: --filter=gucos-packages selected 2 of 210 files — this run covers PART of the suite.[0m
+kernel suite: 2 passed, 0 failed, 208 carried from earlier run(s)  (19.7s)  [2/210 selected, 210/210 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== py (last lines)
+903 passed, 0 failed, 112 skipped
+  1 passed, 0 failed  (416.4s)  → build/test-run/summary.json
+exit=0
+== sweep-1 (last lines)
+browser os sweep: 2 passed, 0 failed  (254.9s)  [2/77 selected, 2/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-2 (last lines)
+browser os sweep: 4 passed, 0 failed, 2 carried from earlier run(s)  (271.4s)  [4/77 selected, 6/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-3 (last lines)
+browser os sweep: 3 passed, 0 failed, 6 carried from earlier run(s)  (269.5s)  [3/77 selected, 9/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-4 (last lines)
+browser os sweep: 5 passed, 0 failed, 9 carried from earlier run(s)  (268.8s)  [5/77 selected, 14/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-5 (last lines)
+browser os sweep: 13 passed, 0 failed, 14 carried from earlier run(s)  (261.2s)  [13/77 selected, 27/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-6 (last lines)
+browser os sweep: 34 passed, 0 failed, 27 carried from earlier run(s)  (273.0s)  [34/77 selected, 61/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-7 (last lines)
+browser os sweep: 16 passed, 0 failed, 61 carried from earlier run(s)  (53.9s)  [16/77 selected, 77/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== todos-unit (last lines)
+liabilities.js: 40 passed
+idspace.test.js: 14 passed
+todos suite: 3/3 passed, 0 failed  (7.5s)
+850 passed, 0 failed, 3 skipped  (16.1s)
+  2 passed, 0 failed  (24.2s)  → build/test-run/summary.json
+exit=0
