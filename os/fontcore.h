@@ -34,6 +34,7 @@
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include "fontchain.h"   /* FC_MAX_FALLBACKS, FC_PATH_MAX, fc_load */
 #include "wcwidth.h"     /* wcwidth_cp — a wide-cp tofu box spans 2 cells */
@@ -122,21 +123,33 @@ static unsigned fc_u8_next(const char *s, int len, int *i) {
  * A wide (wcwidth 2) code point gets a 2-cell box — the honest footprint
  * of the missing glyph. `cell` is the mono cell pitch, `ascent` the
  * face-0 ascent at this size. */
-static void fc_tofu(FcGlyph *g, int cell, int ascent, unsigned cp) {
-    int adv = cell * (wcwidth_cp(cp) == 2 ? 2 : 1);
-    int w = adv > 4 ? adv - 2 : 6;
-    int h = ascent > 4 ? ascent - 1 : 8;
+/* Validate font-derived dimensions and product BEFORE allocation. Wide math
+ * also protects the two-cell advance and baseline subtraction. */
+static int fc_tofu_checked(FcGlyph *g, int cell, int ascent, unsigned cp,
+                           int max_dimension, size_t max_bytes) {
+    long long advance = (long long)cell * (wcwidth_cp(cp) == 2 ? 2 : 1);
+    long long width = advance > 4 ? advance - 2 : 6;
+    long long height = ascent > 4 ? (long long)ascent - 1 : 8;
+    if (advance > INT_MAX || advance < INT_MIN || ascent == INT_MIN ||
+        width > max_dimension || height > max_dimension ||
+        width * height > INT_MAX || (unsigned long long)(width * height) > max_bytes)
+        return 0;
+    int adv = (int)advance, w = (int)width, h = (int)height;
     g->advance = adv > 0 ? adv : w + 2;
     g->left = 1;
     g->top = ascent - 1;                         /* box base sits on baseline */
     g->bmp = (unsigned char *)calloc((size_t)w * h, 1);
-    if (!g->bmp) return;
+    if (!g->bmp) return 0;
     g->w = w;
     g->h = h;
     for (int x = 0; x < w; x++)
         g->bmp[x] = g->bmp[(h - 1) * w + x] = 255;
     for (int y = 0; y < h; y++)
         g->bmp[y * w] = g->bmp[y * w + w - 1] = 255;
+    return 1;
+}
+static void fc_tofu(FcGlyph *g, int cell, int ascent, unsigned cp) {
+    fc_tofu_checked(g, cell, ascent, cp, INT_MAX, (size_t)-1);
 }
 
 /* ---- fallback chain (lazy open + dead-mark + resize-on-demand) -----
@@ -247,7 +260,12 @@ static FT_Int32 fc_load_flags(FT_Face face) {
 /* Load glyph `gi` from `face` into `g` (the caller already resolved the
  * covering face + set g->loaded). The one FT_Load / embolden / advance /
  * FT_Render / copy / threshold sequence the three consumers shared. */
-static FcGlyph *fc_render_face(FcGlyph *g, FT_Face face, FT_UInt gi, FcRenderOpts o) {
+/* Checked adapter seam (#791): status distinguishes a blank glyph from a
+ * failed load/render/allocation; max_bytes bounds allocation BEFORE malloc.
+ * The historical wrapper below keeps existing consumers' return contract. */
+static FcGlyph *fc_render_face_checked(FcGlyph *g, FT_Face face, FT_UInt gi,
+                                       FcRenderOpts o, int max_bytes, int *ok) {
+    if (ok) *ok = 0;
     if (FT_Load_Glyph(face, gi, fc_load_flags(face))) return g;
     FT_GlyphSlot slot = face->glyph;
     if (o.bold_xdelta) {
@@ -270,6 +288,7 @@ static FcGlyph *fc_render_face(FcGlyph *g, FT_Face face, FT_UInt gi, FcRenderOpt
     g->left = slot->bitmap_left;
     g->top = slot->bitmap_top;
     if (g->w > 0 && g->h > 0) {
+        if (max_bytes > 0 && (long long)g->w * g->h > max_bytes) return g;
         g->bmp = (unsigned char *)malloc((size_t)g->w * g->h);
         if (!g->bmp) { g->w = g->h = 0; return g; }
         for (int y = 0; y < g->h; y++)
@@ -279,7 +298,11 @@ static FcGlyph *fc_render_face(FcGlyph *g, FT_Face face, FT_UInt gi, FcRenderOpt
                 g->bmp[i] = g->bmp[i] >= o.mono_threshold ? 255 : 0;
         }
     }
+    if (ok) *ok = 1;
     return g;
+}
+static FcGlyph *fc_render_face(FcGlyph *g, FT_Face face, FT_UInt gi, FcRenderOpts o) {
+    return fc_render_face_checked(g, face, gi, o, 0, NULL);
 }
 
 #endif /* FONTCORE_H */

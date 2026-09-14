@@ -113,6 +113,9 @@ bool SDL_SetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode blendMode);
 bool SDL_GetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode *blendMode);
 bool SDL_SetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode scaleMode);
 bool SDL_GetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode *scaleMode);
+bool SDL_SetRenderClipRect(SDL_Renderer *renderer, const SDL_Rect *rect);
+bool SDL_GetRenderClipRect(SDL_Renderer *renderer, SDL_Rect *rect);
+bool SDL_RenderClipEnabled(SDL_Renderer *renderer);
 bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a);
 bool SDL_GetRenderDrawColor(SDL_Renderer *renderer, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a);
 bool SDL_SetRenderDrawBlendMode(SDL_Renderer *renderer, SDL_BlendMode blendMode);
@@ -645,7 +648,7 @@ An absent symbol fails loud at compile time (“Undeclared identifier”).
 
 - SDL_ttf modern API: `TTF_Text` / `TTF_TextEngine` (`TTF_CreateText`, `TTF_CreateSurfaceTextEngine`, `TTF_CreateRendererTextEngine`, `TTF_DrawSurfaceText`, `TTF_DrawRendererText`) do not exist — only the classic render-to-surface API above. Also absent: `TTF_OpenFontIO` (no SDL_IOStream), `TTF_SetFontOutline`, the `TTF_RenderText_LCD*` family, and `TTF_HINTING_LIGHT_SUBPIXEL`.
 - Texture pixel access: `SDL_LockTexture` / `SDL_UnlockTexture` — upload with SDL_UpdateTexture instead.
-- Renderer state: `SDL_SetRenderViewport`, `SDL_SetRenderClipRect`, `SDL_SetRenderScale`, `SDL_SetRenderLogicalPresentation`, `SDL_RenderReadPixels`, `SDL_GetRenderOutputSize` — none exist; draw in window pixels 1:1.
+- Renderer state: `SDL_SetRenderViewport`, `SDL_SetRenderScale`, `SDL_SetRenderLogicalPresentation`, `SDL_RenderReadPixels`, `SDL_GetRenderOutputSize` — none exist; draw in window pixels 1:1.
 - Joystick-level API: `SDL_OpenJoystick`, `SDL_GetJoysticks`, `SDL_GetJoystickAxis` — the gamepad API above is the only pad surface (this runtime has no unmapped-device view, so SDL_INIT_JOYSTICK still fails loud and, unlike upstream, is NOT implied by SDL_INIT_GAMEPAD). Also absent from the gamepad surface: `SDL_RumbleGamepad` (#714), the mapping DB (`SDL_AddGamepadMapping`, `SDL_GetGamepadMapping` — the browser owns mapping), `SDL_GetGamepadPlayerIndex`, and the touchpad/sensor/LED extras.
 - Surface toolkit: `SDL_CreateSurface`, `SDL_BlitSurface`, `SDL_FillSurfaceRect`, `SDL_ConvertSurface`, `SDL_LoadBMP` — the only SDL_Surfaces are window surfaces and IMG_Load results; write `->pixels` directly.
 - SDL_mixer (`Mix_*`) and `SDL_LoadWAV_IO` do not exist — load WAV files with SDL_LoadWAV (path form; there is no public SDL_IOStream), convert with SDL_CreateAudioStream, mix with SDL_MixAudio, and push PCM through SDL_PutAudioStreamData.

@@ -24747,6 +24747,11 @@ bool SDL_SetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode blendMode);
 bool SDL_GetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode *blendMode);
 bool SDL_SetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode scaleMode);
 bool SDL_GetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode *scaleMode);
+/* Clip state belongs to each render target; NULL disables, zero size clips all.
+   Coordinates are target pixels; SDL_RenderClear ignores the clip. */
+bool SDL_SetRenderClipRect(SDL_Renderer *renderer, const SDL_Rect *rect);
+bool SDL_GetRenderClipRect(SDL_Renderer *renderer, SDL_Rect *rect);
+bool SDL_RenderClipEnabled(SDL_Renderer *renderer);
 bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a);
 bool SDL_GetRenderDrawColor(SDL_Renderer *renderer, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a);
 bool SDL_SetRenderDrawBlendMode(SDL_Renderer *renderer, SDL_BlendMode blendMode);
@@ -29840,6 +29845,8 @@ __import void __sdl_set_texture_scale_mode(int t, int mode);
 __import int __sdl_get_texture_scale_mode(int t);
 __import void __sdl_set_draw_color(int r, double rr, double gg, double bb, double aa);
 __import void __sdl_set_draw_blend_mode(int r, int mode);
+__import void __sdl_set_render_clip_rect(int r, int enabled, int x, int y, int w, int h);
+__import int __sdl_get_render_clip(int r, int field);
 __import void __sdl_render_clear(int r);
 __import void __sdl_render_quad(int r, int texH, double x0, double y0, double x1, double y1, double x2, double y2, double x3, double y3, double sx, double sy, double sw, double sh);
 __import void __sdl_render_geometry(int r, int texH, const float *verts, int vertCount);
@@ -32870,6 +32877,28 @@ bool SDL_GetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode *scaleMode) {
     if (!__sdl_texture_live(texture)) return SDL_InvalidParamError("texture");
     if (scaleMode) *scaleMode = (SDL_ScaleMode)__sdl_get_texture_scale_mode(texture->__handle);
     return 1;
+}
+
+bool SDL_SetRenderClipRect(SDL_Renderer *renderer, const SDL_Rect *rect) {
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
+    __sdl_set_render_clip_rect(renderer->handle, rect != NULL,
+        rect ? rect->x : 0, rect ? rect->y : 0, rect ? rect->w : 0, rect ? rect->h : 0);
+    return 1;
+}
+bool SDL_GetRenderClipRect(SDL_Renderer *renderer, SDL_Rect *rect) {
+    if (rect) memset(rect, 0, sizeof(*rect));
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
+    if (rect) {
+        rect->x = __sdl_get_render_clip(renderer->handle, 1);
+        rect->y = __sdl_get_render_clip(renderer->handle, 2);
+        rect->w = __sdl_get_render_clip(renderer->handle, 3);
+        rect->h = __sdl_get_render_clip(renderer->handle, 4);
+    }
+    return 1;
+}
+bool SDL_RenderClipEnabled(SDL_Renderer *renderer) {
+    if (!__sdl_renderer_live(renderer)) return SDL_InvalidParamError("renderer");
+    return __sdl_get_render_clip(renderer->handle, 0) != 0;
 }
 
 bool SDL_SetRenderDrawColor(SDL_Renderer *renderer, Uint8 r, Uint8 g, Uint8 b, Uint8 a) {

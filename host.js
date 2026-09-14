@@ -7288,9 +7288,123 @@ function captureTableCallback(ctx, index, nullable) {
   return captureWasmCallback(ctx.callbackWrappers?.get(callback) || callback, false);
 }
 
+// #791: one auxiliary memory-only FreeType instance per application. Font file
+// reads use the application's existing filesystem; glyph/run calls never RPC.
+// All returned bitmap handles own copies, so cache eviction/memory.grow cannot
+// invalidate caller results. No module is loaded for processes that omit fonts.
+function createFontBridge(ctx) {
+  let E = null;
+  const results = new Map();
+  let nextResult = 1, resultBytes = 0;
+  const MAX_FILE = 64 * 1024 * 1024, MAX_RESULTS = 32, MAX_RESULT_BYTES = 32 * 1024 * 1024;
+  function readFile(path) {
+    if (!ctx.fs) throw new Error('fontbridge: requires the process filesystem');
+    const fs = ctx.fs, fd = fs.open(path, 0, 0);
+    if (fd === null || fd < 0) return null;
+    try {
+      const st = fs.fstat(fd);
+      if (!st || !Number.isSafeInteger(st.size) || st.size <= 0 || st.size > MAX_FILE) return null;
+      const bytes = new Uint8Array(st.size);
+      for (let off = 0; off < bytes.length;) {
+        const n = fs.read(fd, bytes.subarray(off), bytes.length - off);
+        if (!Number.isInteger(n) || n <= 0 || n > bytes.length - off) return null;
+        off += n;
+      }
+      return bytes;
+    } finally { fs.close(fd); }
+  }
+  function load() {
+    if (E) return;
+    const bytes = readFile('/usr/lib/fontbridge.wasm');
+    if (!bytes) throw new Error('fontbridge: /usr/lib/fontbridge.wasm is not installed');
+    const mod = new WebAssembly.Module(bytes), env = {};
+    // The source linker retains FreeType's file/stdio TUs. Memory-backed faces
+    // do not use them. Refuse any attempted external operation, naming it.
+    for (const im of WebAssembly.Module.imports(mod)) {
+      if (im.module !== 'c' || im.kind !== 'function') throw new Error('fontbridge: unexpected import ' + im.module + '.' + im.name);
+      env[im.name] = function () { throw new Error('fontbridge memory-only module attempted ' + im.name); };
+    }
+    const exports = new WebAssembly.Instance(mod, { c: env }).exports;
+    if (!exports.fb_abi || exports.fb_abi() !== 1) throw new Error('fontbridge: module ABI mismatch (expected 1)');
+    E = exports;
+  }
+  function stage(bytes, fn) {
+    const p = bytes.length ? E.fb_alloc(bytes.length) : 0;
+    if (!p && bytes.length) return -2;
+    try { if (bytes.length) new Uint8Array(E.memory.buffer, p, bytes.length).set(bytes); return fn(p); }
+    finally { if (p) E.fb_free(p); }
+  }
+  function capture(ptr) {
+    if (!ptr) return -3;
+    const d = new Int32Array(E.memory.buffer, ptr, 7);
+    const bytes = d[5];
+    if (results.size >= MAX_RESULTS || nextResult === 2147483647 || bytes < 0 || bytes > MAX_RESULT_BYTES - resultBytes) return -2;
+    const record = { fields: Array.from(d.subarray(0, 6)), pixels: new Uint8Array(E.memory.buffer, d[6], bytes).slice() };
+    record.fields[5] = bytes * 4; // result-copy exports straight-alpha RGBA8
+    const id = nextResult++; results.set(id, record); resultBytes += bytes; return id;
+  }
+  return {
+    __font_abi: function () { return 1; },
+    __font_open: function (path, px, flags) {
+      load();
+      const bytes = path ? readFile(ctx.readString(path)) :
+        (readFile('/etc/fonts/mono.ttf') || readFile('/usr/share/fonts/mono.ttf'));
+      return bytes ? stage(bytes, p => E.fb_open(p, bytes.length, px, flags)) : -4;
+    },
+    __font_add_fallback: function (font, path) {
+      load(); if (!path) return -1;
+      const bytes = readFile(ctx.readString(path));
+      return bytes ? stage(bytes, p => E.fb_add_face(font, p, bytes.length)) : -4;
+    },
+    __font_close: function (font) { return E ? E.fb_close(font) : -1; },
+    __font_metric: function (font, field) { return E ? E.fb_metric(font, field) : -1; },
+    __font_glyph: function (font, cp) { return E ? capture(E.fb_glyph(font, cp)) : -1; },
+    __font_codepoint_run: function (font, ptr, len) {
+      if (!E || len < 0 || len > 16384) return -1;
+      let text;
+      // Runs consume codepoints: a leading U+FEFF counts toward the scalar limit.
+      try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(new Uint8Array(ctx.getMemory().buffer, ptr >>> 0, len)); }
+      catch (_) { return -5; }
+      const cps = Uint32Array.from(text, ch => ch.codePointAt(0));
+      if (cps.length > 4096) return -2;
+      return stage(new Uint8Array(cps.buffer), p => capture(E.fb_run(font, p, cps.length)));
+    },
+    __font_result_field: function (id, field) {
+      const r = results.get(id); return r && field >= 0 && field < 6 ? r.fields[field] : -1;
+    },
+    __font_result_copy: function (id, ptr, cap, rgba) {
+      const r = results.get(id); if (!r) return -1;
+      const n = r.fields[5], offset = ptr >>> 0, memory = ctx.getMemory().buffer;
+      if (cap < n || offset > memory.byteLength || n > memory.byteLength - offset) return -2;
+      const out = new Uint8Array(memory, offset, n), red = rgba >>> 24, green = (rgba >>> 16) & 255, blue = (rgba >>> 8) & 255, alpha = rgba & 255;
+      for (let i = 0, j = 0; i < r.pixels.length; i++, j += 4) {
+        out[j] = red; out[j + 1] = green; out[j + 2] = blue; out[j + 3] = Math.round(r.pixels[i] * alpha / 255);
+      }
+      return n;
+    },
+    __font_result_release: function (id) {
+      const r = results.get(id); if (!r) return -1;
+      resultBytes -= r.pixels.length; results.delete(id); return 0;
+    },
+    __font_dispose: function () { results.clear(); resultBytes = 0; if (E) E.fb_dispose(); },
+  };
+}
+
+// #791: immutable clip snapshots also serve queued GPU draws. Coordinates are
+// target pixels (the supported renderer has no viewport/scale transform).
+function sdlSetClip(view, enabled, x, y, w, h) {
+  if (view) view.clip = enabled && w >= 0 && h >= 0 ? [x, y, w, h] : null;
+}
+function sdlGetClip(view, field) {
+  const c = view && view.clip;
+  return field === 0 ? (c ? 1 : 0) : (c && field >= 1 && field <= 4 ? c[field - 1] : 0);
+}
+
 function createNullSDL(ctx) {
   let animationFrameFunc = null;
   let sdlTicksBase = null;   // ms baseline captured at SDL_Init (see __sdl_get_ticks)
+  const nullRenderers = [];
+  const nullView = r => { const rd = nullRenderers[r - 1]; return rd && (rd.target || rd); };
   const nullTextures = [];   // 1-based; tracks per-texture state observable headless
                              // (scale mode), so the C↔host contract is testable
                              // without a GPU. Same fail-loud rules as createBrowserSDL.
@@ -7315,8 +7429,10 @@ function createNullSDL(ctx) {
       __sdl_create_popup_window: function () { return 0; },
       __sdl_get_display_bounds: function () { return 0; },
       __sdl_update_window_surface: function () { return 0; },
-      __sdl_create_renderer: function () { return 1; },
-      __sdl_destroy_renderer: function () {},
+      __sdl_create_renderer: function () { nullRenderers.push({ target: null }); return nullRenderers.length; },
+      __sdl_destroy_renderer: function (r) { nullRenderers[r - 1] = null; },
+      __sdl_set_render_clip_rect: function (r, enabled, x, y, w, h) { sdlSetClip(nullView(r), enabled, x, y, w, h); },
+      __sdl_get_render_clip: function (r, field) { return sdlGetClip(nullView(r), field); },
       __sdl_create_texture: function () { nullTextures.push({ scaleMode: 1, blendMode: 0 }); return nullTextures.length; },  // SDL3 default LINEAR; blend set by C
       __sdl_destroy_texture: function (t) { if (t > 0 && nullTextures[t - 1]) nullTextures[t - 1] = null; },
       __sdl_update_texture: function () {},
@@ -7346,7 +7462,7 @@ function createNullSDL(ctx) {
       __sdl_render_quad: function () {},
       __sdl_render_geometry: function () {},
       __sdl_render_present: function () {},
-      __sdl_set_render_target: function () {},   // #496: C owns the contract; no pixels here
+      __sdl_set_render_target: function (r, t) { const rd = nullRenderers[r - 1]; if (rd) rd.target = t ? nullTextures[t - 1] : null; },
       // #500: no display, no display clock — vsync=0 (the default) is
       // accepted, anything else reports unsupported (C sets SDL_GetError).
       __sdl_set_render_vsync: function (r, n) { return n === 0 ? 1 : 0; },
@@ -8158,17 +8274,17 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     // bind) or the window fb. ta marks a target so put() runs the real
     // dst-alpha rows; the window path stays byte-identical. One reused
     // scratch — no per-draw allocation.
-    const dstScratch = { f: null, FW: 0, FH: 0, ta: false };
+    const dstScratch = { f: null, FW: 0, FH: 0, ta: false, clip: null };
     const curDst = (rd) => {
       if (rd.target) {
         const tx = texs[rd.target - 1];
         if (!tx) return null;                 // target destroyed while bound: drop the draw
         const need = tx.w * 4 * tx.h;
         if (!tx.cpuPixels || tx.cpuPixels.length !== need) tx.cpuPixels = new Uint8Array(need);
-        dstScratch.f = tx.cpuPixels; dstScratch.FW = tx.w; dstScratch.FH = tx.h; dstScratch.ta = true;
+        dstScratch.f = tx.cpuPixels; dstScratch.FW = tx.w; dstScratch.FH = tx.h; dstScratch.ta = true; dstScratch.clip = tx.clip;
         return dstScratch;
       }
-      dstScratch.f = ensureFb(rd); dstScratch.FW = rd.fbw; dstScratch.FH = rd.fbh; dstScratch.ta = false;
+      dstScratch.f = ensureFb(rd); dstScratch.FW = rd.fbw; dstScratch.FH = rd.fbh; dstScratch.ta = false; dstScratch.clip = rd.clip;
       return dstScratch;
     };
     const present = (rd) => {
@@ -8198,7 +8314,9 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       let x0 = Math.round(dx), y0 = Math.round(dy), x1 = Math.round(dx + dw), y1 = Math.round(dy + dh);
       if (x1 < x0) { const t = x0; x0 = x1; x1 = t; }
       if (y1 < y0) { const t = y0; y0 = y1; y1 = t; }
-      const cx0 = Math.max(0, x0), cy0 = Math.max(0, y0), cx1 = Math.min(FW, x1), cy1 = Math.min(FH, y1);
+      const c = dst.clip;
+      const cx0 = Math.max(0, x0, c ? c[0] : 0), cy0 = Math.max(0, y0, c ? c[1] : 0);
+      const cx1 = Math.min(FW, x1, c ? c[0] + c[2] : FW), cy1 = Math.min(FH, y1, c ? c[1] + c[3] : FH);
       if (cx1 <= cx0 || cy1 <= cy0) return;
       if (texH === 0) {
         const R = rd.drawR, G = rd.drawG, B = rd.drawB, A = rd.drawA, bl = rd.drawBlend;
@@ -8274,10 +8392,11 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         bx = V[ob]; by = V[ob + 1]; cx = V[oc]; cy = V[oc + 1];
         area = -area;
       }
-      const xmin = Math.max(0, Math.floor(Math.min(ax, bx, cx) - 0.5));
-      const xmax = Math.min(FW - 1, Math.ceil(Math.max(ax, bx, cx)));
-      const ymin = Math.max(0, Math.floor(Math.min(ay, by, cy) - 0.5));
-      const ymax = Math.min(FH - 1, Math.ceil(Math.max(ay, by, cy)));
+      const clip = dst.clip;
+      const xmin = Math.max(0, clip ? clip[0] : 0, Math.floor(Math.min(ax, bx, cx) - 0.5));
+      const xmax = Math.min(FW - 1, clip ? clip[0] + clip[2] - 1 : FW - 1, Math.ceil(Math.max(ax, bx, cx)));
+      const ymin = Math.max(0, clip ? clip[1] : 0, Math.floor(Math.min(ay, by, cy) - 0.5));
+      const ymax = Math.min(FH - 1, clip ? clip[1] + clip[3] - 1 : FH - 1, Math.ceil(Math.max(ay, by, cy)));
       if (xmax < xmin || ymax < ymin) return;
       // Edge vectors: e0 = B→C (opposite A), e1 = C→A, e2 = A→B. For an edge
       // P→Q, E(x,y) = (Q.x−P.x)(y−P.y) − (Q.y−P.y)(x−P.x); with clockwise
@@ -8365,6 +8484,12 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         rd.vsync = n;
         rd.lastTick = pace.seq();   // phase baseline: next present parks to the Nth tick from here
         return 1;
+      },
+      __sdl_set_render_clip_rect: function (r, enabled, x, y, w, h) {
+        const rd = rends[r - 1]; if (rd) sdlSetClip(rd.target ? texs[rd.target - 1] : rd, enabled, x, y, w, h);
+      },
+      __sdl_get_render_clip: function (r, field) {
+        const rd = rends[r - 1]; return sdlGetClip(rd && (rd.target ? texs[rd.target - 1] : rd), field);
       },
       __sdl_destroy_renderer: function (r) { if (r > 0 && rends[r - 1]) rends[r - 1] = null; },
       // #496: t 0 = the window. The C layer owns the contract (TARGET access
@@ -9673,6 +9798,13 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     }] });
     pass.setVertexBuffer(0, rdrVbuf);
     for (const e of entries) {
+      const c = e.clip;
+      const x = c ? Math.max(0, Math.min(W, c[0])) : 0;
+      const y = c ? Math.max(0, Math.min(H, c[1])) : 0;
+      const right = c ? Math.max(x, Math.min(W, c[0] + c[2])) : W;
+      const bottom = c ? Math.max(y, Math.min(H, c[1] + c[3])) : H;
+      if (right === x || bottom === y) continue;
+      pass.setScissorRect(x, y, right - x, bottom - y);
       pass.setPipeline(pipelines[e.blend]);   // e.blend ∈ {0,1,2,4}, validated when set
       // e.tex is the texture OBJECT captured at draw time (not a slot index), so a
       // texture destroyed mid-frame still renders this frame — its GPU free is
@@ -9812,6 +9944,12 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         rd.vsync = n;
         return 1;
       },
+      __sdl_set_render_clip_rect: function (r, enabled, x, y, w, h) {
+        const rd = sdlRenderers[r - 1]; if (rd) sdlSetClip(rd.target || rd, enabled, x, y, w, h);
+      },
+      __sdl_get_render_clip: function (r, field) {
+        const rd = sdlRenderers[r - 1]; return sdlGetClip(rd && (rd.target || rd), field);
+      },
       __sdl_destroy_renderer: function (r) {
         if (r > 0 && sdlRenderers[r - 1]) sdlRenderers[r - 1] = null;
       },
@@ -9948,7 +10086,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         a[o]=x0;a[o+1]=y0;a[o+2]=u0;a[o+3]=v0;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;o+=8;
         a[o]=x2;a[o+1]=y2;a[o+2]=u1;a[o+3]=v1;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;o+=8;
         a[o]=x3;a[o+1]=y3;a[o+2]=u0;a[o+3]=v1;a[o+4]=cr;a[o+5]=cg;a[o+6]=cb;a[o+7]=ca;
-        rd.batch.push({ tex: tex, n: 6, blend: blend, first: rd.vertCount });
+        rd.batch.push({ tex: tex, n: 6, blend: blend, first: rd.vertCount, clip: (rd.target || rd).clip });
         rd.vertCount += 6;
       },
       // SDL_RenderGeometry: C resolves indices into a flat triangle soup of
@@ -9963,7 +10101,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         // renderer's draw blend mode.
         const tx = texH ? sdlTextures[texH - 1] : null;
         const blend = tx ? tx.blendMode : rd.drawBlendMode;
-        rd.batch.push({ tex: tx, n: vertCount, blend: blend, first: rd.vertCount });
+        rd.batch.push({ tex: tx, n: vertCount, blend: blend, first: rd.vertCount, clip: (rd.target || rd).clip });
         rd.vertCount += vertCount;
       },
       __sdl_render_present: function (r) {
@@ -13532,6 +13670,8 @@ async function runModule({
     Object.assign(imports[ENV_KEY], posix[ENV_KEY]);
   }
 
+  Object.assign(imports[ENV_KEY], createFontBridge(ctx));
+
   let sdl = sdlOverride || null;
   if (!sdl && getBrowserSDL) {
     sdl = createBrowserSDL({ canvas: getBrowserSDL, ctx: ctx, sharedAudioBuffer: sharedAudioBuffer, notifyAudio: notifyAudio, notifyWindow: notifyWindow });
@@ -14477,6 +14617,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   module.exports.createSharedAudioBuffer = createSharedAudioBuffer;
   module.exports.createBrowserSDL = createBrowserSDL;
   module.exports.createNullSDL = createNullSDL;
+  module.exports.createFontBridge = createFontBridge;
   // Test export: the OS kernel-surface SDL flavor (per-window GPU present, A4)
   module.exports.createSurfaceSDL = createSurfaceSDL;
 }
