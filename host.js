@@ -7348,7 +7348,8 @@ function createFontBridge(ctx) {
     __font_codepoint_run: function (font, ptr, len) {
       if (!E || len < 0 || len > 16384) return -1;
       let text;
-      try { text = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(ctx.getMemory().buffer, ptr >>> 0, len)); }
+      // Runs consume codepoints: a leading U+FEFF counts toward the scalar limit.
+      try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(new Uint8Array(ctx.getMemory().buffer, ptr >>> 0, len)); }
       catch (_) { return -5; }
       const cps = Uint32Array.from(text, ch => ch.codePointAt(0));
       if (cps.length > 4096) return -2;

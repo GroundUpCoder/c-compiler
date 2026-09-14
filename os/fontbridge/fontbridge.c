@@ -70,7 +70,7 @@ static FcGlyph *lookup(Font *f,unsigned cp){
  for(int i=1;i<f->n;i++){chain.face[i-1]=f->face[i];chain.state[i-1]=1;chain.px[i-1]=f->px;}
  face=fc_probe(f->face[0],&chain,f->px,cp,&index);
  if(face){FcRenderOpts opts={0,(f->flags&1)?0x0555:0,(f->flags&2)?FC_ITALIC_SHEAR:0};int ok=0;fc_render_face_checked(&g,face,index,opts,FB_CACHE_BYTES,&ok);if(!ok){free(g.bmp);return NULL;}}
- else {fc_tofu(&g,f->cell,f->ascent,cp);if(!g.bmp)return NULL;}
+ else if(!fc_tofu_checked(&g,f->cell,f->ascent,cp,2048,FB_CACHE_BYTES))return NULL;
  if((g.w>0&&g.h>0&&!g.bmp)||g.w<0||g.h<0||g.w>2048||g.h>2048){free(g.bmp);return NULL;}
  int bytes=g.w*g.h;
  if(bytes>FB_CACHE_BYTES){free(g.bmp);return NULL;}

@@ -51,3 +51,30 @@ uses the existing Node PNG decoder, with no Canvas2D helper. The coordinator
 reserved heavy order: callback gate, #789 lifecycle acceptance/repeats, then #791.
 Browser CPU/GPU results, screenshots, measured percentiles and independent font
 review remain open under #791; this checkpoint does not close the ticket.
+
+## Independent review corrections (review of 9124b1db)
+
+Addressed coordinator comment 01a09edc-9505-7b5e-946b-4f853d828140.
+The UTF-8 run decoder now preserves leading U+FEFF with `ignoreBOM: true`.
+Focused tests accept exactly 4096 scalars and reject 4097 both with and without
+leading U+FEFF, and compare its standalone run advance with its glyph advance.
+
+Added reusable `fc_tofu_checked`: wide dimension/advance arithmetic and dimension,
+product, integer-index and caller-byte bounds precede calloc. The bridge supplies
+2048 pixels and 512 KiB; historical callers retain the existing wrapper. The
+bounded C fixture counts allocation attempts, rejects oversized width/height,
+product and extreme integer metrics without allocating, and checks exact-bound
+wide-codepoint tofu metrics and every border/interior pixel. It uses the same
+fontcore/FreeType build graph, with unexpected linked external calls trapped.
+This tests source-derived metrics directly; it is not an observed OOM exploit.
+
+Executed `node tests/host/test_fontbridge.js`: PASS for real FreeType/process-local
+loader, new scalar boundaries, bounded C fixture and installed Small through real
+host imports (snapshot aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1).
+The first fixture execution used runModule and failed linking FreeType's retained
+`remove` import; the fixture now uses explicit throwing import traps, as the
+production memory-only loader does. No missing operation is silently stubbed.
+
+No browser, image bake, graphical fixture or broad gate was run for this correction.
+CPU/WebGPU graphical acceptance and cold/warm performance remain pending the
+coordinator's reserved heavy-slot release after callback and #789 acceptance.

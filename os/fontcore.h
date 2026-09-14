@@ -34,6 +34,7 @@
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include "fontchain.h"   /* FC_MAX_FALLBACKS, FC_PATH_MAX, fc_load */
 #include "wcwidth.h"     /* wcwidth_cp — a wide-cp tofu box spans 2 cells */
@@ -122,21 +123,33 @@ static unsigned fc_u8_next(const char *s, int len, int *i) {
  * A wide (wcwidth 2) code point gets a 2-cell box — the honest footprint
  * of the missing glyph. `cell` is the mono cell pitch, `ascent` the
  * face-0 ascent at this size. */
-static void fc_tofu(FcGlyph *g, int cell, int ascent, unsigned cp) {
-    int adv = cell * (wcwidth_cp(cp) == 2 ? 2 : 1);
-    int w = adv > 4 ? adv - 2 : 6;
-    int h = ascent > 4 ? ascent - 1 : 8;
+/* Validate font-derived dimensions and product BEFORE allocation. Wide math
+ * also protects the two-cell advance and baseline subtraction. */
+static int fc_tofu_checked(FcGlyph *g, int cell, int ascent, unsigned cp,
+                           int max_dimension, size_t max_bytes) {
+    long long advance = (long long)cell * (wcwidth_cp(cp) == 2 ? 2 : 1);
+    long long width = advance > 4 ? advance - 2 : 6;
+    long long height = ascent > 4 ? (long long)ascent - 1 : 8;
+    if (advance > INT_MAX || advance < INT_MIN || ascent == INT_MIN ||
+        width > max_dimension || height > max_dimension ||
+        width * height > INT_MAX || (unsigned long long)(width * height) > max_bytes)
+        return 0;
+    int adv = (int)advance, w = (int)width, h = (int)height;
     g->advance = adv > 0 ? adv : w + 2;
     g->left = 1;
     g->top = ascent - 1;                         /* box base sits on baseline */
     g->bmp = (unsigned char *)calloc((size_t)w * h, 1);
-    if (!g->bmp) return;
+    if (!g->bmp) return 0;
     g->w = w;
     g->h = h;
     for (int x = 0; x < w; x++)
         g->bmp[x] = g->bmp[(h - 1) * w + x] = 255;
     for (int y = 0; y < h; y++)
         g->bmp[y * w] = g->bmp[y * w + w - 1] = 255;
+    return 1;
+}
+static void fc_tofu(FcGlyph *g, int cell, int ascent, unsigned cp) {
+    fc_tofu_checked(g, cell, ascent, cp, INT_MAX, (size_t)-1);
 }
 
 /* ---- fallback chain (lazy open + dead-mark + resize-on-demand) -----

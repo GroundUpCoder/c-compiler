@@ -40,6 +40,17 @@ for(const ch of 'Hello Ω'){
 const rn=e.__font_result_field(run,5);e.__font_result_copy(run,131072,rn,0xffffffff);
 const runPixels=new Uint8Array(memory.buffer,131072,rn);
 for(let i=0;i<reference.length;i++)assert.equal(runPixels[i*4+3],reference[i],`run coverage ${i}`);
+// A leading U+FEFF is a codepoint, not a stream signature to discard.
+for (const prefix of ['', '\uFEFF']) {
+ const atLimit=prefix+'A'.repeat(4096-prefix.length);
+ const h=e.__font_codepoint_run(font,128,stage(atLimit));assert(h>0,'4096 scalars accepted');
+ e.__font_result_release(h);
+ assert.equal(e.__font_codepoint_run(font,128,stage(atLimit+'A')),-2,'4097 scalars rejected, including leading U+FEFF');
+}
+const bomGlyph=e.__font_glyph(font,0xfeff);assert(bomGlyph>0);
+const bomRun=e.__font_codepoint_run(font,128,stage('\uFEFF'));assert(bomRun>0);
+assert.equal(e.__font_result_field(bomRun,4),e.__font_result_field(bomGlyph,4),'leading codepoint retains its advance');
+e.__font_result_release(bomGlyph);e.__font_result_release(bomRun);
 new Uint8Array(memory.buffer).set([0xc0,0x80],128);assert.equal(e.__font_codepoint_run(font,128,2),-5);
 assert(e.__font_glyph(font,0xd800)<0);
 stage('/usr/share/fonts/sans.ttf');assert.equal(e.__font_add_fallback(font,128),0);assert.equal(e.__font_metric(font,5),2);
@@ -59,6 +70,17 @@ console.log('fontbridge: PASS (real FreeType ink, metrics, runs, cache/result bo
 // Compile Small through the installed-snapshot cc driver, then execute through
 // the actual runModule import wiring. Optional sibling follows test_small.js.
 (async()=>{
+ // Compile the bounded allocator fixture against the same shared fontcore and
+ // FreeType dependency graph; no production test exports or altered module.
+ const bounded=COMMON.buildProject(C,'os/fontbridge/bin.json',p=>fs.readFileSync(path.join(ROOT,
+  p==='os/fontbridge/fontbridge.c'?'tests/host/fontcore_tofu_bounds.c':p),'utf8'),{debug:true});
+ const boundedModule=new WebAssembly.Module(bounded),boundedImports={};
+ for(const im of WebAssembly.Module.imports(boundedModule)) {
+  assert.equal(im.module,'c');assert.equal(im.kind,'function');
+  boundedImports[im.name]=()=>{throw new Error('tofu fixture unexpected import '+im.name);};
+ }
+ assert.equal(new WebAssembly.Instance(boundedModule,{c:boundedImports}).exports.main(),0,'tofu pre-allocation bounds');
+ console.log('fontcore tofu: PASS (dimension/product/overflow rejection before allocation, exact-bound pixels)');
  const sibling=require('../../tools/small-sibling.js'),snap=sibling.snapshot(ROOT);
  if(!snap){console.log('Small font ABI: NOT RUN (optional sibling absent)');return;}
  const folded=sibling.fold(ROOT,{system:{dirs:[],files:{}}});
