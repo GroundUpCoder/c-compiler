@@ -316,6 +316,7 @@ var OP = {
   // UI bridge on every change (onCursor) — the pointer-lock wanted-state
   // pattern, but for the native CSS cursor.
   SURFACE_SET_CURSOR: 0x1008,
+  SURFACE_SET_VISIBLE: 0x1009, SURFACE_ACTIVATE: 0x100a, SURFACE_GET_STATE: 0x100b,
   // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
   // Control plane only: PCM rides the per-process source ring SABs and the
   // one page-owned output ring — never RPCs. AUDIO_GAIN (todos/0048, the
@@ -661,7 +662,7 @@ var IR_RECORD_WORDS = 8;                     // 32 bytes per event record
  * A9): every kernel focus TRANSITION emits LOST to the old owner and GAINED
  * to the new one — by construction, since all _focusSid writes flow through
  * the ONE _wmSetFocus choke point. */
-var WMEV = { QUIT: 0x100, WINDOW_RESIZED: 0x206,
+var WMEV = { WINDOW_SHOWN: 0x202, WINDOW_HIDDEN: 0x203, QUIT: 0x100, WINDOW_RESIZED: 0x206,
              FOCUS_GAINED: 0x20E, FOCUS_LOST: 0x20F,
              KEYDOWN: 0x300, KEYUP: 0x301,
              MOUSEMOTION: 0x400, MOUSEBUTTONDOWN: 0x401, MOUSEBUTTONUP: 0x402,
@@ -1076,6 +1077,8 @@ var WMP = {
                                         { KTOK_OVERVIEW } instead; this is the
                                         command-side twin (the EV_MENU pattern).
                                         Only emitted with a subscriber */
+  EV_VISIBILITY: 0x95,              // full record, requested visibility changed
+  EV_ACTIVATION_REQUEST: 0x96,      // { sid }; WM may grant via FOCUS
   EV_OVERVIEW_PICK: 0x94,             /* { sid }: overview pick — a pointer-down
                                         landed in cell `sid`, or dismissed
                                         (sid = 0: background click or Esc).
@@ -1088,7 +1091,7 @@ var WMP = {
  * the name to its libc <errno.h> number for the R_ERR payload (numbers MUST
  * MATCH host.js's errnoMap / the libc errno.h). Semantics are documented at
  * the "R_ERR payload" line of the protocol comment above. */
-var WMP_ERRNO = { EPERM: 1, ESRCH: 3, EIO: 5, EBUSY: 16, EAGAIN: 11, ENODEV: 19, EINVAL: 22, ENOSYS: 38 };
+var WMP_ERRNO = { EPERM: 1, ESRCH: 3, EIO: 5, EBUSY: 16, EAGAIN: 11, EACCES: 13, ENODEV: 19, EINVAL: 22, ENOSYS: 38 };
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
 
@@ -1674,6 +1677,9 @@ KernelClient.prototype.spawnHooks = function () {
     },
     // The published screen dims (vDSO read, zero RPCs) — SDL_GetDisplayBounds.
     screen: function () { return self.screen(); },
+    surfaceSetVisible: function (sid, visible) { return self.call(OP.SURFACE_SET_VISIBLE, { sid: sid, visible: !!visible }); },
+    surfaceActivate: function (sid) { return self.call(OP.SURFACE_ACTIVATE, { sid: sid }); },
+    surfaceGetState: function (sid) { return self.call(OP.SURFACE_GET_STATE, { sid: sid }); },
     surfaceDestroy: function (sid) { return self.call(OP.SURFACE_DESTROY, { sid: sid }); },
     surfaceSetTitle: function (sid, title) { return self.call(OP.SURFACE_SET_TITLE, { sid: sid, title: title || '' }); },
     // Flag-word update (todos/0018): bit0 borderless, bit1 relative-mouse.
@@ -4734,6 +4740,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         x: 8 + ((n * 24) % Math.max(64, this._wmScreen.w >> 2)),
         y: WM_TITLE_H + 8 + ((n * 24) % Math.max(64, this._wmScreen.h >> 2)),
         bitmap: null,             // gpu transport: latest ImageBitmap (browser)
+        requestedVisible: !((req.flags | 0) & 256),
         minimized: false,
         borderless: !!((req.flags | 0) & 1),      // bit0: no kernel chrome (taskbar-class)
         relativeMouse: !!((req.flags | 0) & 2),   // bit1: wants pointer lock (0018)
@@ -4815,7 +4822,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
                                   // (and re-slots anchored subtrees, A1)
       pcb.surfaces.add(sid);
       this._bumpWm();
-      this._respond(pcb, { sid: sid, x: surf.x, y: surf.y });
+      this._respond(pcb, { sid: sid, x: surf.x, y: surf.y, lifecycle: 1 });
       this._wmEmit(WMP.EV_CREATED, this._wmpRecord(surf));
       // New window takes focus (v1 policy) — EXCEPT anchored children, which
       // never steal focus (§3.1: a menu must not deactivate its own window
@@ -4823,8 +4830,31 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       // popups). The funnel emits the owner FOCUS pair + EV_FOCUS; it runs
       // AFTER EV_CREATED because wm.c's dismissal gating relies on the
       // create echo naming the sid before its EV_FOCUS arrives (wm.c:3284).
-      if (!parent) this._wmSetFocus(sid);
+      if (!parent && surf.requestedVisible && req.activate !== false) this._wmSetFocus(sid);
       this._wmSyncPointerLock();
+      break;
+    }
+    // Owner lifecycle requests share both presentation transports. No operation
+    // below destroys backing storage or treats placement as application intent.
+    case OP.SURFACE_SET_VISIBLE:
+    case OP.SURFACE_ACTIVATE:
+    case OP.SURFACE_GET_STATE: {
+      var sv = this._surfaces.get(req.sid | 0);
+      if (!sv) { this._respond(pcb, { errno: 'EINVAL' }); break; }
+      if (sv.pid !== pcb.pid) { this._respond(pcb, { errno: 'EPERM' }); break; }
+      if (op === OP.SURFACE_GET_STATE) {
+        this._respond(pcb, { visible: sv.requestedVisible, focused: this._focusSid === sv.sid,
+          minimized: sv.minimized, mapped: sv.mapped });
+      } else if (op === OP.SURFACE_SET_VISIBLE) {
+        if (typeof req.visible !== 'boolean') { this._respond(pcb, { errno: 'EINVAL' }); break; }
+        this._wmSetVisible(sv, req.visible);
+        this._respond(pcb, {});
+      } else {
+        if (this._wmRequestedHidden(sv)) { this._respond(pcb, { errno: 'EACCES' }); break; }
+        if (this._wmSubs.size) this._wmEmit(WMP.EV_ACTIVATION_REQUEST, [sv.sid]);
+        else this.wmFocus(sv.sid);
+        this._respond(pcb, {});
+      }
       break;
     }
     // Update the surface flag word (todos/0018): bit0 borderless, bit1
@@ -4978,6 +5008,41 @@ Kernel.prototype._wmMap = function (sid) {
   this._bumpWm();
 };
 
+/* Application visibility is independent of placement and minimization. */
+Kernel.prototype._wmRequestedHidden = function (s) {
+  for (var p = s; p; p = p.parentSid ? this._surfaces.get(p.parentSid) : null)
+    if (p.requestedVisible === false) return true;
+  return false;
+};
+Kernel.prototype._wmSetVisible = function (s, visible) {
+  if (s.requestedVisible === visible) return;
+  s.requestedVisible = visible;
+  if (!visible) {
+    var self = this;
+    function inTree(sid) {
+      var t = self._surfaces.get(sid);
+      while (t) { if (t === s) return true; t = self._surfaces.get(t.parentSid); }
+      return false;
+    }
+    if (this._wmOverview) {
+      this._wmOverview.cells = this._wmOverview.cells.filter(function (c) { return !inTree(c.sid); });
+      if (inTree(this._wmOverview.hoverSid)) this._wmOverview.hoverSid = 0;
+    }
+    this._wmOverviewAnims = this._wmOverviewAnims.filter(function (a) { return !inTree(a.sid); });
+    this._wmGrabs = this._wmGrabs.filter(function (sid) { return !inTree(sid); });
+    this._wmAnims.forEach(function (a, sid) { if (inTree(sid)) self._wmAnims.delete(sid); });
+    if (this._wmDrag && inTree(this._wmDrag.sid)) this._wmDrag = null;
+    if (this._wmResizeDrag && inTree(this._wmResizeDrag.sid)) this._wmResizeDrag = null;
+    if (inTree(this._focusSid)) this._wmFocusFall();
+  } else if (s.grab && !this._wmAnchorHidden(s) && this._wmGrabs.indexOf(s.sid) < 0) {
+    this._wmGrabs.push(s.sid);
+  }
+  this._wmEventTo(s.sid, [visible ? WMEV.WINDOW_SHOWN : WMEV.WINDOW_HIDDEN, 0, 0, 0, 0, 0, 0, 0]);
+  this._wmEmit(WMP.EV_VISIBILITY, this._wmpRecord(s));
+  this._bumpWm();
+  this._wmSyncPointerLock();
+};
+
 /* Does any subscribed WM connection belong to this pid? (The SURFACE_CREATE
  * borderless exception: the WM parks its own furniture, so only ITS
  * borderless surfaces wait for placement.) */
@@ -5046,7 +5111,7 @@ Kernel.prototype._wmFocusFall = function () {
   var fall = 0;
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var t = this._surfaces.get(this._zOrder[i]);
-    if (!t || t.minimized) continue;
+    if (!t || t.minimized || this._wmRequestedHidden(t)) continue;
     if (t.parentSid) continue;            // anchored children never take focus
     if (t.layer === 0) { fall = t.sid; break; }
     if (!fall) fall = t.sid;              // remember the topmost furniture
@@ -5147,7 +5212,7 @@ Kernel.prototype._wmMoveWithChildren = function (s, nx, ny) {
 Kernel.prototype._wmAnchorHidden = function (s) {
   for (var p = this._surfaces.get(s.parentSid); p;
        p = p.parentSid ? this._surfaces.get(p.parentSid) : null) {
-    if (p.minimized || !p.mapped) return true;
+    if (p.minimized || !p.mapped || p.requestedVisible === false) return true;
   }
   return false;
 };
@@ -5179,6 +5244,11 @@ Kernel.prototype._wmAnchorRoot = function (s) {
  * popup's own process via the focused parent. Pointer lock outranks the
  * grab by branch order in wmPointer (locked routing never hit-tests). */
 Kernel.prototype._wmGrabConsume = function (target, isClient) {
+  while (this._wmGrabs.length) {
+    var top = this._surfaces.get(this._wmGrabs[this._wmGrabs.length - 1]);
+    if (top && !this._wmRequestedHidden(top) && !this._wmAnchorHidden(top)) break;
+    this._wmGrabs.pop();
+  }
   var hSid = this._wmGrabs[this._wmGrabs.length - 1];
   var holder = this._surfaces.get(hSid);
   if (!holder) { this._wmGrabs.pop(); return null; }   // stale entry: no grab
@@ -5206,7 +5276,7 @@ Kernel.prototype._wmGrabConsume = function (target, isClient) {
  * normal absolute path, so the window stays draggable/closable. */
 Kernel.prototype._wmSyncPointerLock = function () {
   var s = this._surfaces.get(this._focusSid);
-  var wanted = !!(s && s.relativeMouse && !s.minimized);
+  var wanted = !!(s && s.relativeMouse && !s.minimized && !this._wmRequestedHidden(s));
   if (wanted !== this._wmPtrLockWanted) {
     this._wmPtrLockWanted = wanted;
     if (!wanted) this._wmPtrLockActive = false;   // routing reverts immediately;
@@ -5992,7 +6062,7 @@ Kernel.prototype._wmCursorAt = function (x, y) {
   if (this._wmDrag) return CUR_DEFAULT;          // moving a window: arrow
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
-    if (!s || s.minimized || !s.mapped) continue;
+    if (!s || s.minimized || !s.mapped || this._wmRequestedHidden(s)) continue;
     if (s.parentSid && this._wmAnchorHidden(s)) continue;   // (todos/0256)
     var dw = s.dstW, dh = s.dstH;
     var inTitle = !s.borderless &&
@@ -6191,7 +6261,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
   // borderless ones (taskbar-class) have no title-bar band and no frame.
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
-    if (!s || s.minimized || !s.mapped) continue;
+    if (!s || s.minimized || !s.mapped || this._wmRequestedHidden(s)) continue;
     if (s.parentSid && this._wmAnchorHidden(s)) continue;   // hides with its
                                                             // parent (0256)
     var dw = s.dstW, dh = s.dstH;
@@ -6364,6 +6434,7 @@ Kernel.prototype.wmList = function () {
                relativeMouse: !!s.relativeMouse, resizable: !!s.resizable,
                hasAlpha: !!s.hasAlpha,          // per-pixel alpha (todos/0063)
                layer: s.layer | 0,
+               requestedVisible: s.requestedVisible !== false,
                mapped: !!s.mapped,              // map-on-placement (todos/0069)
                parent: s.parentSid | 0,         // anchored child (todos/0256)
                configurePending: !!s.pendingConfigure,
@@ -6443,6 +6514,7 @@ Kernel.prototype.wmSetLayer = function (sid, layer) {
 Kernel.prototype.wmFocus = function (sid) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
+  if (this._wmRequestedHidden(s)) return 'EACCES';
   // Anchored children never take focus (todos/0256, §3.1) — focusing one
   // focuses (and raises, restores) its top-level root instead, the same
   // policy as a client click on the child.
@@ -6661,12 +6733,16 @@ Kernel.prototype.wmRestack = function (sid, place) {
  * window-local. sid 0 = the focused window. */
 Kernel.prototype.wmInjectKey = function (sid, down, scancode, keysym, mod) {
   var target = (sid | 0) || this._focusSid;
+  var surface = this._surfaces.get(target);
+  if (surface && this._wmRequestedHidden(surface)) return 'EACCES';
   return this._wmEventTo(target,
     [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, 0, 0, 0]);
 };
 
 Kernel.prototype.wmInjectPointer = function (sid, kind, lx, ly, opts) {
   var target = (sid | 0) || this._focusSid;
+  var surface = this._surfaces.get(target);
+  if (surface && this._wmRequestedHidden(surface)) return 'EACCES';
   opts = opts || {};
   if (kind === 'move') {
     return this._wmEventTo(target, [WMEV.MOUSEMOTION, 0, f32bits(lx), f32bits(ly), opts.buttons | 0, 0, 0, 0]);
@@ -6878,13 +6954,16 @@ Kernel.prototype.wmCapture = async function (type, sid, maxW, maxH) {
     wanted.add(s.sid);
     s.children.forEach(function (id) {
       var c = snap._surfaces.get(id);
-      if (c && c.mapped) addKids(c);
+      if (c && c.mapped && !snap._wmRequestedHidden(c)) addKids(c);
     });
   };
   if (type === WMP.SHOT_SCREEN) {
-    if (snap._wmOverview) snap._wmOverview.cells.forEach(function (c) { wanted.add(c.sid); });
+    if (snap._wmOverview) snap._wmOverview.cells.forEach(function (c) {
+      var s = snap._surfaces.get(c.sid);
+      if (s && !snap._wmRequestedHidden(s)) wanted.add(c.sid);
+    });
     else snap._surfaces.forEach(function (s) {
-      if (s.mapped && !s.minimized && !(s.parentSid && snap._wmAnchorHidden(s))) wanted.add(s.sid);
+      if (s.mapped && !s.minimized && !snap._wmRequestedHidden(s) && !(s.parentSid && snap._wmAnchorHidden(s))) wanted.add(s.sid);
     });
   } else {
     var s = snap._surfaces.get(sid | 0);
@@ -6984,7 +7063,7 @@ Kernel.prototype.wmScreenshotScreen = function (pixels) {
     for (var oi = 0; oi < ovcells.length; oi++) {
       var oc = ovcells[oi];
       var os = this._surfaces.get(oc.sid);
-      if (!os) continue;
+      if (!os || this._wmRequestedHidden(os)) continue;
       fill(oc.x - OVB, oc.y - OVB, oc.w + 2 * OVB, oc.h + 2 * OVB,
            oc.sid === hoverSid ? WM_COLORS.titleFocused : WM_COLORS.border);
       var opixels = this.wmScreenshot(os.sid, pixels).rgba;
@@ -7011,7 +7090,7 @@ Kernel.prototype.wmScreenshotScreen = function (pixels) {
   }
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
-    if (!s || s.minimized || !s.mapped) continue;   // unmapped: todos/0069
+    if (!s || s.minimized || !s.mapped || this._wmRequestedHidden(s)) continue;   // unmapped: todos/0069
     if (s.parentSid && this._wmAnchorHidden(s)) continue;   // hides with its
                                                             // parent (0256)
     var dw = s.dstW, dh = s.dstH;      // on-screen rect (todos/0024)
@@ -7172,7 +7251,7 @@ Kernel.prototype.wmThumbnail = function (sid, maxW, maxH, pixels) {
     var blitKids = function (p) {
       for (var i = 0; i < p.children.length; i++) {
         var c = self._surfaces.get(p.children[i]);
-        if (!c || !c.mapped) continue;
+        if (!c || !c.mapped || self._wmRequestedHidden(c)) continue;
         // Materialized screen coords -> parent BUFFER space; the child's
         // buffer size maps 1:1 there (its dst rides the same ratio, A11).
         var bx = Math.round((c.x - s.x) * s.w / s.dstW);
@@ -7275,6 +7354,7 @@ Kernel.prototype.wmScene = function () {
         // live; restore-direction children are visible anyway (minimized
         // clears before the restore push) and only need the linkage.
         if (!s) return false;
+        if (self._wmRequestedHidden(s)) return false;
         if (!s.parentSid) return true;
         var root = self._wmAnchorRoot(s);
         var anim = self._wmAnims.get(root.sid);   // post-prune: live or absent
@@ -7324,7 +7404,7 @@ Kernel.prototype._wmpRecord = function (s) {
               (s.borderless ? 4 : 0) | (s.relativeMouse ? 8 : 0) |
               (s.resizable ? 16 : 0) | (s.hasAlpha ? 32 : 0) |
               (s.parentSid ? 64 : 0) |    // WMP_F_ANCHORED (todos/0256)
-              (s.transient ? 128 : 0);   // WMP_F_TRANSIENT (todos/0281)
+              (s.transient ? 128 : 0) | (s.requestedVisible === false ? 256 : 0);   // WMP_F_TRANSIENT (todos/0281)
   var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
                 this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ),
                 s.dstW, s.dstH, s.layer | 0];

@@ -168,6 +168,8 @@ enum {
     WMP_R_CURSOR = 0x45,               /* { shape }: the CURSOR_AT reply
                                           (todos/0105; the R_IDLE precedent) */
     /* events */
+    WMP_EV_VISIBILITY = 0x95,       /* full window record, requested visibility */
+    WMP_EV_ACTIVATION_REQUEST = 0x96, /* { sid }, grant using WMP_FOCUS */
     WMP_EV_CREATED = 0x80, WMP_EV_DESTROYED = 0x81, WMP_EV_TITLE = 0x82,
     WMP_EV_FOCUS = 0x83, WMP_EV_MOVED = 0x84, WMP_EV_MINIMIZED = 0x85,
     WMP_EV_CONFIGURED = 0x86,          /* { sid, w, h }: resize ack landed */
@@ -279,6 +281,7 @@ typedef struct {
                                 focused; always borderless. WM geometry/
                                 stacking/minimize ops refuse it (EPERM) —
                                 policy never manages popups. */
+#define WMP_F_HIDDEN 256  /* application-hidden, independent of minimized */
 #define WMP_F_TRANSIENT 128  /* transient/owned window (todos/0281): a framed,
                                 focusable secondary window that Win95 never lists
                                 in the taskbar. Unlike ANCHORED it keeps chrome +

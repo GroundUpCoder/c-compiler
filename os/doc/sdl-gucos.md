@@ -242,3 +242,20 @@ Rules and boundaries:
 - Raw FreeType (`<ft2build.h>`, see the freetype package) stays available
   for custom rasterization; an embedded bitmap font still works for a
   tiny fixed HUD.
+
+### Window lifecycle
+
+`SDL_WINDOW_HIDDEN` allocates a real gucOS window without displaying or
+activating it. Render its initial contents, then use `SDL_ShowWindow` to display
+it. Showing preserves focus; `SDL_RaiseWindow` separately requests activation
+from the desktop WM. A successful request need not mean focus was granted:
+observe `SDL_EVENT_WINDOW_FOCUS_GAINED` or `SDL_WINDOW_INPUT_FOCUS`.
+`SDL_HideWindow` retains the window and renderer for reuse and suppresses its
+anchored popup tree. Hidden windows cannot accept activation or input.
+
+Application visibility, WM placement mapping, and minimization are independent.
+A delayed placement response cannot reveal an application-hidden window.
+`SDL_GetWindowFlags` queries HIDDEN, INPUT_FOCUS and MINIMIZED from the kernel;
+other bits retain the declared creation flags. Standalone runtimes retain the
+creation-flag query and refuse show/hide/raise because they have no gucOS window
+manager. No drawing backend or presentation transport changes for visibility.

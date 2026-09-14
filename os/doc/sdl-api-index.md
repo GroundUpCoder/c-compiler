@@ -86,6 +86,9 @@ bool SDL_UpdateWindowSurface(SDL_Window *window);
 bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h);
 bool SDL_SetWindowSize(SDL_Window *window, int w, int h);
 SDL_WindowFlags SDL_GetWindowFlags(SDL_Window *window);
+bool SDL_ShowWindow(SDL_Window *window);
+bool SDL_HideWindow(SDL_Window *window);
+bool SDL_RaiseWindow(SDL_Window *window);
 bool SDL_SetWindowPosition(SDL_Window *window, int x, int y);
 bool SDL_SetWindowIcon(SDL_Window *window, SDL_Surface *icon);
 void SDL_DestroySurface(SDL_Surface *surface);
@@ -431,10 +434,11 @@ SDL_WINDOWPOS_CENTERED=0x2FFF0000  SDL_WINDOWPOS_UNDEFINED=0x1FFF0000
 ### SDL_WINDOW_* — window create flags
 
 ```
-SDL_WINDOW_FULLSCREEN=0x0000000000000001ULL  SDL_WINDOW_BORDERLESS=0x0000000000000010ULL
-SDL_WINDOW_RESIZABLE=0x0000000000000020ULL  SDL_WINDOW_TRANSPARENT=0x0000000040000000ULL
-SDL_WINDOW_UTILITY=0x0000000000020000ULL  SDL_WINDOW_TOOLTIP=0x0000000000040000ULL
-SDL_WINDOW_POPUP_MENU=0x0000000000080000ULL
+SDL_WINDOW_FULLSCREEN=0x0000000000000001ULL  SDL_WINDOW_HIDDEN=0x0000000000000008ULL
+SDL_WINDOW_MINIMIZED=0x0000000000000040ULL  SDL_WINDOW_INPUT_FOCUS=0x0000000000000200ULL
+SDL_WINDOW_BORDERLESS=0x0000000000000010ULL  SDL_WINDOW_RESIZABLE=0x0000000000000020ULL
+SDL_WINDOW_TRANSPARENT=0x0000000040000000ULL  SDL_WINDOW_UTILITY=0x0000000000020000ULL
+SDL_WINDOW_TOOLTIP=0x0000000000040000ULL  SDL_WINDOW_POPUP_MENU=0x0000000000080000ULL
 ```
 
 ### SDL_EVENT_* — event types (event.type)
@@ -645,7 +649,7 @@ An absent symbol fails loud at compile time (“Undeclared identifier”).
 - Joystick-level API: `SDL_OpenJoystick`, `SDL_GetJoysticks`, `SDL_GetJoystickAxis` — the gamepad API above is the only pad surface (this runtime has no unmapped-device view, so SDL_INIT_JOYSTICK still fails loud and, unlike upstream, is NOT implied by SDL_INIT_GAMEPAD). Also absent from the gamepad surface: `SDL_RumbleGamepad` (#714), the mapping DB (`SDL_AddGamepadMapping`, `SDL_GetGamepadMapping` — the browser owns mapping), `SDL_GetGamepadPlayerIndex`, and the touchpad/sensor/LED extras.
 - Surface toolkit: `SDL_CreateSurface`, `SDL_BlitSurface`, `SDL_FillSurfaceRect`, `SDL_ConvertSurface`, `SDL_LoadBMP` — the only SDL_Surfaces are window surfaces and IMG_Load results; write `->pixels` directly.
 - SDL_mixer (`Mix_*`) and `SDL_LoadWAV_IO` do not exist — load WAV files with SDL_LoadWAV (path form; there is no public SDL_IOStream), convert with SDL_CreateAudioStream, mix with SDL_MixAudio, and push PCM through SDL_PutAudioStreamData.
-- Window management: `SDL_ShowWindow`, `SDL_HideWindow`, `SDL_RaiseWindow`, `SDL_MinimizeWindow`, `SDL_MaximizeWindow`, `SDL_SetWindowFullscreen` — the WM owns placement and chrome.
+- Window management: `SDL_MinimizeWindow`, `SDL_MaximizeWindow`, `SDL_SetWindowFullscreen` — the WM owns placement and chrome.
 - Text input & custom cursors: `SDL_StartTextInput` (use key events — event.key.key is already the applied character) and `SDL_CreateCursor` (system cursor shapes only, via SDL_CreateSystemCursor).
 - stdinc wrappers: `SDL_snprintf`, `SDL_strlcpy`, `SDL_memcpy`, `SDL_sinf`, … — use libc (`<stdio.h>`, `<string.h>`, `<math.h>`); SDL and libc share one heap here.
 - Threads, IO abstraction, properties, message boxes, GL: `SDL_CreateThread` (single-threaded platform), `SDL_IOStream`/`SDL_RWops` (use stdio), `SDL_GetWindowProperties`, `SDL_ShowSimpleMessageBox`, `SDL_GL_*` — GPU access is `<webgpu.h>` + `<sdl3webgpu.h>`.

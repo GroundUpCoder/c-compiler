@@ -3753,9 +3753,28 @@ static void hotkey_dispatch(int token, int flags, int sid) {
 }
 
 static void handle_event(wmp_hdr *h) {
-    if (h->type == WMP_EV_CREATED) {
+    if (h->type == WMP_EV_CREATED || h->type == WMP_EV_VISIBILITY) {
         wmp_rec r;
         if (h->plen != sizeof r || wmp_read_all(sock, &r, (int)sizeof r) != 0) die("EV_CREATED read");
+        if (h->type == WMP_EV_VISIBILITY) {
+            /* Hidden surfaces retain their kernel placement/backing store, but
+             * are absent from desktop policy (taskbar, cycle and overview). */
+            for (int i = 0; i < nwins; i++) if (wins[i].sid == r.sid) {
+                memmove(&wins[i], &wins[i + 1], (size_t)(nwins - i - 1) * sizeof wins[0]);
+                nwins--; break;
+            }
+            if (r.flags & WMP_F_HIDDEN) {
+                if (peek_for == r.sid) peek_dismiss();
+                if (sys_mode && sys_target == r.sid) sys_end(0);
+                overview_relayout();
+                return;
+            }
+            if (r.pid == own_pid) return;
+        }
+        if (r.flags & WMP_F_HIDDEN) {
+            if (!(r.flags & WMP_F_BORDERLESS)) place(r.sid, r.w, r.h);
+            return;
+        }
         if (r.pid == own_pid) {        /* our own furniture: park by title */
             if (r.flags & WMP_F_ANCHORED) {
                 /* A menucore chain level (todos/0282): kernel-positioned
@@ -3910,7 +3929,7 @@ static void handle_event(wmp_hdr *h) {
              * (we send no FOCUS), so the modal has the keyboard as it should.
              * (The WMP_F_TRANSIENT flag could later also suppress the min/max
              * title-bar boxes on modals — deliberately NOT done here, 0281.) */
-            place(r.sid, r.w, r.h);
+            if (h->type == WMP_EV_CREATED) place(r.sid, r.w, r.h);
             return;
         }
         if (nwins < MAX_WIN) {
@@ -3927,7 +3946,7 @@ static void handle_event(wmp_hdr *h) {
             memcpy(w->title, r.title, 32);
             w->title[31] = 0;
         }
-        place(r.sid, r.w, r.h);
+        if (h->type == WMP_EV_CREATED) place(r.sid, r.w, r.h);
         overview_relayout();            /* a new window joins the grid (EXPOSE) */
         return;
     }
@@ -3936,6 +3955,12 @@ static void handle_event(wmp_hdr *h) {
     int32_t p[8];
     if (h->plen > sizeof p && h->type != WMP_EV_TITLE) { wmp_skip(sock, h->plen); return; }
     switch (h->type) {
+    case WMP_EV_ACTIVATION_REQUEST:
+        if (h->plen != 4 || wmp_read_all(sock, p, 4) != 0) die("activation request read");
+        /* Current desktop policy grants owner requests; the kernel rechecks
+         * visibility when FOCUS arrives, so a later hide wins this race. */
+        wmp_send(sock, WMP_FOCUS, p, 1);
+        break;
     case WMP_EV_DESTROYED: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_DESTROYED read");
         if (p[0] == smroot.sid) smroot.sid = 0;           /* defensive (0028) */

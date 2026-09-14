@@ -112,6 +112,7 @@ const tests = [
   ['test_repl_pty_e2e.js'], // 0036: lua/micropython/sqlite3 interactive on a kernel pty — prompt, eval, LD erase, ^D exit
   ['test_micropython_script_e2e.js', BOOT], // 0117 R1: the micropython CLI as an OS process — argv/sys.argv, open() on BlockFS, FS import, sys.exit status, traceback on fd 2 not fd 1, -c
   ['test_micropython_stdlib_e2e.js', BOOT], // 0117 R2: sys.path policy (script dir / site dir / symlink-chased package lib), two-file import from another cwd, -m, os+os.path over the kernel fs, the curated stdlib
+  ['test_wm_lifecycle.js', LIGHT], // #789 hidden/show/activation, ownership and WM timer races
   ['test_wm.js', LIGHT],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)
   ['test_wm_anchored.js', LIGHT],  // 0256 Spike 1: anchored child surfaces (A1 tree, A11 materialized dst, A5 owner child resize, clamp, cascade, thumbnail compositing) + the grab (A2) + the focus-funnel owner pair (A9) — kernel seam, no wasm
   ['test_wm_aero.js', LIGHT],      // 0063: has-alpha src-over blend goldens, wmThumbnail box filter, glass headless invariance, minimize/restore anim records (no wasm)
@@ -160,6 +161,7 @@ const tests = [
   ['test_cairo_e2e.js', BOOT, IMG],    // 0061: cairo image backend -> shm — in-OS selftest (gradients/AA/cairo-ft anchors), windowed scene via wmctl shot, theme repaint, vector re-render on resize
   ['test_gdi32_e2e.js', BOOT, IMG],    // 0057: win32 gdi32 — in-OS selftest (GDI semantics + leak check), windowed scene probed via wmctl shot, bit-exact repaints
   ['test_multiface_font_e2e.js', BOOT, IMG], // C1/#281: multi-face CreateFont — NULL-face default byte-identical to mono (no flag day), proportional sans/serif metrics, real bold/italic files preferred (sans italic advances shift) vs synthetic shear (mono/serif italic advances preserved), drawn underline/strikeout rules, the Win32 name mapper, /etc per-face override, per-face ramp shots
+  ['test_ui_lifecycle_e2e.js', BOOT, IMG], // #789 compiled lifecycle/Win32 compatibility
   ['test_user32_e2e.js', BOOT, IMG],   // 0058: win32 user32 — blocking GetMessage loop, lifecycle order, controls, MessageBox modal, wmctl tree/click-by-label agent path
   ['test_lb_vscroll_e2e.js', BOOT, IMG], // 0275 (#275): LISTBOX built-in WS_VSCROLL bar — show-when-needed pixels, arrows/channel/thumb-drag through the real input path, wheel/keys share the lb_vscroll clamp (thumb sync)
   ['test_listview_e2e.js', BOOT, IMG], // 0370: SysListView32 + SysHeader32 + the AQM agent seam — lvtest message surface, rows/columns addressable by NAME (wmctl click/gettext/wait text, lvrow/hdcol tree lines), sort via header click, LISTBOX rows retrofitted as click targets

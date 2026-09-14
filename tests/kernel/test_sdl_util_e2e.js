@@ -105,7 +105,7 @@ const scriptA = [
   '    chk("GetWindowFlags returns the create flags",',
   '        (wf & SDL_WINDOW_RESIZABLE) && (wf & SDL_WINDOW_TRANSPARENT));',
   '    chk("GetWindowFlags invents nothing",',
-  '        (wf & ~(SDL_WINDOW_RESIZABLE | SDL_WINDOW_TRANSPARENT)) == 0);',
+  '        (wf & ~(SDL_WINDOW_RESIZABLE | SDL_WINDOW_TRANSPARENT | SDL_WINDOW_INPUT_FOCUS)) == 0);',
   '    SDL_Renderer *r = SDL_CreateRenderer(w, NULL);',
   '    if (!r) { printf("RDR-FAIL %s\\n", SDL_GetError()); return 2; }',
   '    Uint8 cr, cg, cb, ca;',

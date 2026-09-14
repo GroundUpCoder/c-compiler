@@ -7302,11 +7302,14 @@ function createNullSDL(ctx) {
     [ENV_KEY]: {
       __sdl_init: function () { sdlTicksBase = performance.now(); return 0; },
       __sdl_quit: function () { animationFrameFunc = null; },
-      __sdl_create_window: function () { return 1; },
+      __sdl_create_window: function (title, x, y, w, h, flags) { return (flags & 8) ? 0 : 1; },
       __sdl_destroy_window: function () {},
       __sdl_set_window_title: function () {},
       __sdl_set_relative_mouse_mode: function () {},
       __sdl_set_cursor: function () {},                   // no display (todos/0105)
+      __sdl_set_window_visible: function () { return -1; },
+      __sdl_raise_window: function () { return -1; },
+      __sdl_get_window_state: function () { return -1; },
       __sdl_set_window_size: function () { return -1; },  // no window system to resize
       // Anchored popups + display bounds are OS-WM concepts (todos/0256):
       // no window system here -> clean failure, the C side sets SDL errors.
@@ -7499,6 +7502,7 @@ function assertWmSabLayout(hooks) {
     auHdrBytes: WMAU_HDR_BYTES,
     ev: {
       QUIT: WMEV_QUIT, WINDOW_RESIZED: WMEV_WINDOW_RESIZED,
+      WINDOW_SHOWN: 0x202, WINDOW_HIDDEN: 0x203,
       FOCUS_GAINED: WMEV_FOCUS_GAINED, FOCUS_LOST: WMEV_FOCUS_LOST,
       KEYDOWN: WMEV_KEYDOWN, KEYUP: WMEV_KEYUP,
       MOUSEMOTION: WMEV_MOUSEMOTION, MOUSEBUTTONDOWN: WMEV_MOUSEBUTTONDOWN,
@@ -7701,7 +7705,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     // — /bin/wm gives it no taskbar button and skips it when cycling; owned
     // modals like MessageBox/dialogs are never taskbar entries in Win95).
     let kFlags = ((sdlFlags & 0x10) ? 1 : 0) | ((sdlFlags & 0x20) ? 4 : 0) |
-                 ((sdlFlags & 0x40000000) ? 8 : 0) | ((sdlFlags & 0x20000) ? 16 : 0);
+                 ((sdlFlags & 0x40000000) ? 8 : 0) | ((sdlFlags & 0x20000) ? 16 : 0) | ((sdlFlags & 8) ? 256 : 0);
     // SDL_CreatePopupWindow (todos/0256): an anchored child surface — kernel
     // flag bit6 + parentSid/dx/dy, implicitly borderless (bit0), and
     // SDL_WINDOW_POPUP_MENU (0x80000) carries the kernel GRAB (bit7, menu
@@ -7718,6 +7722,10 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     const r = hooks.surfaceCreate(w, h, title, fb.sab, ensureRing().sab, kFlags,
                                   parentSid, dx, dy);
     if (!r || r.errno || !(r.sid > 0)) return null;
+    if ((sdlFlags & 8) && r.lifecycle !== 1) {
+      hooks.surfaceDestroy(r.sid);
+      return null; // older kernel cannot promise invisible construction
+    }
     kFlagsBySid.set(r.sid, kFlags);
     return { sid: r.sid, fb };
   }
@@ -7762,6 +7770,18 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
    * resize (below), so the app-facing contract is one path: the new size
    * arrives as SDL_EVENT_WINDOW_RESIZED. Pre-0068 embedders lack the hook
    * -> loud failure (SDL_SetWindowSize returns false). */
+  function lifecycle(sid, action, value) {
+    const fn = hooks[action];
+    if (!sid || typeof fn !== 'function') return -1;
+    const r = fn(sid, value);
+    return r && !r.errno ? 0 : -1;
+  }
+  function windowState(sid) {
+    if (!sid || typeof hooks.surfaceGetState !== 'function') return -1;
+    const r = hooks.surfaceGetState(sid);
+    return r && !r.errno ? (r.visible ? 0 : 8) | (r.focused ? 0x200 : 0) |
+      (r.minimized ? 0x40 : 0) : -1;
+  }
   function requestResize(sid, w, h) {
     if (typeof hooks.surfaceResize !== 'function') return -1;
     const r = hooks.surfaceResize(sid, w | 0, h | 0);
@@ -7887,6 +7907,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
             ex.__sdl_push_window_event(handle, type, ring.i32[base + 2], ring.i32[base + 3]);
           }
           break;
+        case 0x202: case 0x203: // SDL window shown/hidden
         case WMEV_FOCUS_GAINED: case WMEV_FOCUS_LOST:
           // The owner focus pair (todos/0256, menu arch A9): SDL3's stock
           // SDL_EVENT_WINDOW_FOCUS_GAINED/LOST, delivered per-window.
@@ -8826,7 +8847,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     env.__sdl_create_window = function (titlePtr, x, y, w, h, flags) {
       const s = surfaceCreate(titlePtr, w, h, flags);
       if (!s) return 0;
-      const handle = innerCreate(titlePtr, x, y, w, h, flags);
+      const handle = innerCreate(titlePtr, x, y, w, h, flags & ~8);
       legacySid = s.sid;                       // legacy handle-less tail only
       handleBySid.set(s.sid, handle);
       fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h });
@@ -8843,10 +8864,22 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       const s = surfaceCreate(0, w, h, flags,
                               { parentSid: pwin.sid, dx: dx, dy: dy });
       if (!s) return 0;
-      const handle = innerCreate(0, 0, 0, w, h, flags);
+      const handle = innerCreate(0, 0, 0, w, h, flags & ~8);
       handleBySid.set(s.sid, handle);
       fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h });
       return handle;
+    };
+    env.__sdl_set_window_visible = function (handle, visible) {
+      const win = fbByHandle.get(handle);
+      return lifecycle(win && win.sid, 'surfaceSetVisible', !!visible);
+    };
+    env.__sdl_raise_window = function (handle) {
+      const win = fbByHandle.get(handle);
+      return lifecycle(win && win.sid, 'surfaceActivate');
+    };
+    env.__sdl_get_window_state = function (handle) {
+      const win = fbByHandle.get(handle);
+      return windowState(win && win.sid);
     };
     env.__sdl_get_display_bounds = displayBounds;   // (todos/0256)
     // CPU software-present path: shm transport, no GPU dependency (see
@@ -9086,6 +9119,18 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         windows.push({ sid: s.sid, w: w, h: h, fb: s.fb });
         handleBySid.set(s.sid, windows.length);
         return windows.length;
+      },
+      __sdl_set_window_visible: function (handle, visible) {
+        const win = windows[handle - 1];
+        return lifecycle(win && win.sid, 'surfaceSetVisible', !!visible);
+      },
+      __sdl_raise_window: function (handle) {
+        const win = windows[handle - 1];
+        return lifecycle(win && win.sid, 'surfaceActivate');
+      },
+      __sdl_get_window_state: function (handle) {
+        const win = windows[handle - 1];
+        return windowState(win && win.sid);
       },
       __sdl_get_display_bounds: displayBounds,   // (todos/0256)
       __sdl_destroy_window: function (handle) {
@@ -9673,6 +9718,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_quit: function () { animationFrameFunc = null; },
 
       __sdl_create_window: function (title_ptr, x, y, w, h, flags) {
+        if (flags & 8) return 0; // standalone presentation has no hidden-window lifecycle
         // No context acquired here — a canvas yields only ONE context type for
         // its lifetime, so we defer to the first present (WebGPU blitter) or to
         // the program's own wgpu* calls (SDL_GetWGPUSurface).
@@ -9711,6 +9757,9 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       },
       // SDL_SetWindowSize (todos/0068): only the kernel-surface flavor can
       // renegotiate a buffer; the standalone page's canvas is the page's.
+      __sdl_set_window_visible: function () { return -1; },
+      __sdl_raise_window: function () { return -1; },
+      __sdl_get_window_state: function () { return -1; },
       __sdl_set_window_size: function () { return -1; },
       // Anchored popups + display bounds are OS-WM concepts (todos/0256):
       // the standalone page has ONE canvas -> clean failure, C sets errors.
