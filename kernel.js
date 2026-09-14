@@ -5007,7 +5007,15 @@ Kernel.prototype._wmMap = function (sid) {
   if (s.mapTimer) { clearTimeout(s.mapTimer); s.mapTimer = null; }
   if (s.mapped) return;
   s.mapped = true;
+  this._wmRestoreGrabs(s);
   this._bumpWm();
+};
+
+Kernel.prototype._wmRestoreGrabs = function (s) {
+  if (this._wmRequestedHidden(s) || this._wmAnchorHidden(s)) return;
+  if (s.grab && !s.grabDismissed && this._wmGrabs.indexOf(s.sid) < 0) this._wmGrabs.push(s.sid);
+  var self = this;
+  s.children.forEach(function (sid) { var c = self._surfaces.get(sid); if (c) self._wmRestoreGrabs(c); });
 };
 
 /* Application visibility is independent of placement and minimization. */
@@ -5041,13 +5049,10 @@ Kernel.prototype._wmSetVisible = function (s, visible) {
     // Restore surviving popup authority in tree order. A popup explicitly
     // hidden by its own client stays hidden; a dismissed grab (grabDismissed)
     // never rearms merely because an ancestor was shown.
-    var self = this;
-    function restoreGrabs(t) {
-      if (self._wmRequestedHidden(t) || self._wmAnchorHidden(t)) return;
-      if (t.grab && !t.grabDismissed && self._wmGrabs.indexOf(t.sid) < 0) self._wmGrabs.push(t.sid);
-      t.children.forEach(function (sid) { var c = self._surfaces.get(sid); if (c) restoreGrabs(c); });
-    }
-    restoreGrabs(s);
+    // An explicit hide/show of this popup starts a new opening. Showing
+    // only its ancestor must not resurrect a dismissed child.
+    if (s.grab) s.grabDismissed = false;
+    this._wmRestoreGrabs(s);
   }
   this._wmEventTo(s.sid, [visible ? WMEV.WINDOW_SHOWN : WMEV.WINDOW_HIDDEN, 0, 0, 0, 0, 0, 0, 0]);
   this._wmEmit(WMP.EV_VISIBILITY, this._wmpRecord(s));

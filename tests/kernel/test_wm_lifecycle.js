@@ -155,6 +155,9 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:hidden,visible:false});
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:hidden,visible:true});
   check('dismissed grab never resurrects on parent show', !kernel._wmGrabs.includes(popup));
+  await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:popup,visible:false});
+  await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:popup,visible:true});
+  check('explicit popup reopening rearms dismissal', kernel._wmGrabConsume(null,false)==='grab-dismiss');
   // Capture placement timers deterministically, then exercise late callbacks.
   // No wall-clock nap: these are the actual callbacks registered by CREATE.
   const pending=[], emitted=[];
@@ -165,7 +168,12 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   finally { global.setTimeout=realSetTimeout; }
   const ds=kernel._surfaces.get(delayed); ds.mapTimer=null;
   check('WM managed hidden creation waits for placement', ds.mapped===false && pending.length===1);
+  const earlyPopup = await create(64|128,{parentSid:delayed,dx:2,dy:2});
+  await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:delayed,visible:true});
+  check('show before placement does not expose popup', !kernel.wmScene().surfaces.some(s=>s.sid===earlyPopup));
   kernel.wmMove(delayed,190,170); pending[0]();
+  check('placement restores pending popup grab', kernel._wmGrabs.includes(earlyPopup));
+  await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:delayed,visible:false});
   check('placement and stale timer cannot reveal hidden window', ds.mapped && !kernel.wmScene().surfaces.some(s=>s.sid===delayed));
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:delayed,visible:true});
   const requestedEpoch=ds.visibilitySerial;

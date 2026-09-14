@@ -3583,6 +3583,20 @@ static int make_bar(void) {
  * design), give focus back (a create steals it), and re-clamp windows so
  * every title bar stays reachable and clear of the taskbar. Policy: clamp,
  * don't re-cascade — no placement churn on a mere resize. */
+static void screen_refit(win_t *w) {
+    if (w->maximized) { maximize(w); return; }   /* re-fit (todos/0025) */
+    if (w->snapped) { snap_place(w); return; }   /* re-fit (todos/0095) */
+    int nx = w->x, ny = w->y;
+    if (nx > scr_w - 40) nx = scr_w - 40;
+    if (nx < 40 - w->dst_w) nx = 40 - w->dst_w;   /* on-screen size (0024) */
+    if (ny > scr_h - BAR_H - 8) ny = scr_h - BAR_H - 8;
+    if (ny < TITLE_H) ny = TITLE_H;
+    if (nx != w->x || ny != w->y) {
+        int32_t a[3] = { w->sid, nx, ny };
+        wmp_send(sock, WMP_MOVE, a, 3);   /* echo updates the model */
+    }
+}
+
 static void screen_changed(void) {
     menu_dismiss();                    /* geometry is stale; reopen re-lays */
     run_dismiss();                     /* likewise (todos/0078) */
@@ -3604,20 +3618,8 @@ static void screen_changed(void) {
             wmp_send(sock, WMP_FOCUS, a, 1);
             break;
         }
-    for (int i = 0; i < nwins; i++) {
-        win_t *w = &wins[i];
-        if (w->maximized) { maximize(w); continue; }   /* re-fit (todos/0025) */
-        if (w->snapped) { snap_place(w); continue; }   /* re-fit (todos/0095) */
-        int nx = w->x, ny = w->y;
-        if (nx > scr_w - 40) nx = scr_w - 40;
-        if (nx < 40 - w->dst_w) nx = 40 - w->dst_w;   /* on-screen size (0024) */
-        if (ny > scr_h - BAR_H - 8) ny = scr_h - BAR_H - 8;
-        if (ny < TITLE_H) ny = TITLE_H;
-        if (nx != w->x || ny != w->y) {
-            int32_t a[3] = { w->sid, nx, ny };
-            wmp_send(sock, WMP_MOVE, a, 3);   /* echo updates the model */
-        }
-    }
+    for (int i = 0; i < nwins; i++) screen_refit(&wins[i]);
+    for (hidden_win *n = hidden_wins; n; n = n->next) screen_refit(&n->value);
 }
 
 /* ---- window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) ----
@@ -3795,7 +3797,6 @@ static void handle_event(wmp_hdr *h) {
                 overview_relayout();
                 return;
             }
-            has_restored = hidden_take(r.sid, &restored);
             if (r.pid == own_pid) return;
         }
         if (r.flags & WMP_F_HIDDEN) {
@@ -3960,6 +3961,7 @@ static void handle_event(wmp_hdr *h) {
             return;
         }
         if (nwins < MAX_WIN) {
+            has_restored = hidden_take(r.sid, &restored);
             win_t *w = &wins[nwins++];
             if (has_restored) *w = restored;
             w->sid = r.sid; w->pid = r.pid;
@@ -4083,12 +4085,16 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_MOVED: {                /* tracked for the EV_SCREEN re-clamp */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_MOVED read");
         win_t *w = find(p[0]);
+        if (!w) for (hidden_win *n = hidden_wins; n; n = n->next)
+            if (n->value.sid == p[0]) { w = &n->value; break; }
         if (w) { w->x = p[1]; w->y = p[2]; }
         break;
     }
     case WMP_EV_CONFIGURED: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_CONFIGURED read");
         win_t *w = find(p[0]);
+        if (!w) for (hidden_win *n = hidden_wins; n; n = n->next)
+            if (n->value.sid == p[0]) { w = &n->value; break; }
         /* configure implies resizable: dst tracks the buffer (todos/0024) */
         if (w) { w->w = p[1]; w->h = p[2]; w->dst_w = p[1]; w->dst_h = p[2]; }
         break;
@@ -4096,6 +4102,8 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_SCALED: {               /* dst viewport changed (todos/0024) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SCALED read");
         win_t *w = find(p[0]);
+        if (!w) for (hidden_win *n = hidden_wins; n; n = n->next)
+            if (n->value.sid == p[0]) { w = &n->value; break; }
         if (w) { w->dst_w = p[1]; w->dst_h = p[2]; }
         break;
     }
