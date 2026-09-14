@@ -36,6 +36,11 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kerne
  }
  await shell("cat /usr/share/os-release; cat /usr/lib/small/snapshot.json; echo UI-IMAGE-PIN-O''K",'UI-IMAGE-PIN-OK');
  evidence.installed=await page.evaluate(()=>window.__osOut);
+ const installedVersion=/(?:^|[\r\n])VERSION_ID=(\d+)/.exec(evidence.installed);
+ const installedSmall=/\{"format":1,"sha256":"([a-f0-9]{64})"\}/.exec(evidence.installed);
+ const manifest=JSON.parse(fs.readFileSync(path.join(root,'os/image.json'),'utf8'));
+ if(!installedVersion||Number(installedVersion[1])!==manifest.version)throw Error('installed image version mismatch');
+ if(!installedSmall||installedSmall[1]!==evidence.small.smallSnapshot)throw Error('installed Small snapshot mismatch');
  await shell("cat > /root/ui-lifecycle.c <<'EOF'\n"+source+"EOF\ncc /root/ui-lifecycle.c -o /root/ui-lifecycle && echo UI-COMPILE-O''K",'UI-COMPILE-OK');
  async function count(name) {
    await setVt(2);await waitScreen();
@@ -46,6 +51,7 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kerne
  }
  for(const driver of ['software','gpu']) {
    await page.evaluate(()=>{window.__osOut='';});
+   const before=await page.evaluate(()=>window.__osCompositorStats());
    await shell('/root/ui-lifecycle '+driver+' &','UI-LIFECYCLE-READY');
    const hidden=await count(driver+'-01-hidden');if(hidden!==0)throw Error(driver+' hidden frame flashed: '+hidden);
    async function key(k,marker) {
@@ -57,6 +63,9 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kerne
    let shown=0;
    for(let i=0;i<80&&shown<20000;i++)shown=await count(driver+'-02-shown-'+i);
    if(shown<20000)throw Error(driver+' shown pixels missing: '+shown);
+   const shownStats=await page.evaluate(()=>window.__osCompositorStats());
+   const gpuShips=shownStats.wmFrames-before.wmFrames;
+   if(driver==='gpu' ? gpuShips<=0 : gpuShips!==0)throw Error(driver+' transport mismatch: '+gpuShips+' bitmap ships');
    let out=await page.evaluate(()=>window.__osOut);
    if(out.includes('TARGET-FOCUS 1'))throw Error('show stole focus');
    await key('a','TARGET-FOCUS 1');await count(driver+'-03-active');
@@ -65,7 +74,7 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kerne
    for(let i=0;i<80&&after!==0;i++)after=await count(driver+'-04-hidden-'+i);
    if(after!==0)throw Error('hide left pixels');
    await key('q','UI-LIFECYCLE-EXIT');
-   evidence.runs.push({driver,hidden,shown,after,transcript:await page.evaluate(()=>window.__osOut)});
+   evidence.runs.push({driver,hidden,shown,after,gpuShips,transcript:await page.evaluate(()=>window.__osOut)});
  }
  console.log('PASS installed gucOS software and WebGPU hidden/show/activate/hide keyboard probes');
 } finally {
