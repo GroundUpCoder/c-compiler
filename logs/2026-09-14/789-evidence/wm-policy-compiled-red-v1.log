@@ -1,0 +1,22 @@
+ok title activation maximizes
+ok hidden leaves selectable set
+ok capacity remains bounded
+FAIL retry show preserves maximize history
+FAIL restore after hide and capacity pressure uses floating rect
+FAIL hidden geometry echoes retained
+FAIL screen resize refits hidden snapped window
+ok snap restore survives hidden resize
+WM-LIFECYCLE-POLICY failures=4
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+1 !== 0
+
+    at /Users/jku/git/c-compiler-ui-lifecycle/tests/kernel/test_wm_lifecycle_policy.js:18:61
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 1,
+  expected: 0,
+  operator: 'strictEqual',
+  diff: 'simple'
+}

@@ -49,7 +49,7 @@ try {
    await key('s','ACTION s 1');
    // Frame readiness is observed from screenshot pixels, not an elapsed nap.
    let shown=0;
-   for(let i=0;i<80&&!shown;i++)shown=await count(driver+'-02-shown-'+i);
+   for(let i=0;i<80&&shown<20000;i++)shown=await count(driver+'-02-shown-'+i);
    if(shown<20000)throw Error(driver+' shown pixels missing: '+shown);
    let out=await page.evaluate(()=>window.__osOut);
    if(out.includes('TARGET-FOCUS 1'))throw Error('show stole focus');

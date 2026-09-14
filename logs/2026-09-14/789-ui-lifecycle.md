@@ -100,3 +100,25 @@ from boot/load timing and the capability check, not a traced runtime observation
 A main-kernel red control failed 20 lifecycle assertions; focused expanded tests
 pass with the review fixes. Final re-review, browser evidence and mapped gate
 remain pending.
+
+## Second review and policy regression
+
+The second review found show-before-placement and explicit popup reopening grab
+races, hidden-window resize refitting and visible-table capacity loss. Commit
+`a1ea95a5` fixes those. The next review found minimize/outside-click/restore also
+needs grab restoration, and correctly rejected a placement test that did not
+remove the dormant grab first. Both are now corrected, with 39 passing assertions.
+
+The new lightweight compiled WM policy test builds real `os/wm.c` and replaces
+only its socket read/send seam. It executes actual event handlers, title activation,
+hide/show at full MAX_WIN capacity, geometry echoes, screen_changed and floating
+restore. Eight checks pass. Replacing wm.c with `f5e517d1` yields four failures;
+removing kernel map-time restoration yields the expected single lifecycle failure.
+These red controls are intentional failures, not acceptance results. Logs are in
+789-evidence (v4 kernel, compiled policy v1, and explicitly named red controls).
+
+No browser/manual evidence has yet been produced: the initial browser launch was
+refused by the shared heavy-test lock while the coordinator's callback mapped gate
+runs. The coordinator reserved the following heavy slot for #789. Final compiled
+SDL/User32 rerun, installed software/WebGPU screenshots, flake repetitions and
+mapped acceptance remain pending, as does exact-tip independent approval.

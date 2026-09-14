@@ -6542,6 +6542,7 @@ Kernel.prototype.wmFocus = function (sid, expectedVisibility) {
   if (s.parentSid) s = this._wmAnchorRoot(s);
   if (s.minimized) {                                            // focus restores
     s.minimized = false;
+    this._wmRestoreGrabs(s);
     this._wmAnimPush(s, 'restore');   // compositor animation (todos/0063)
     this._bumpWm();
     this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 0]);

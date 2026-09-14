@@ -1,0 +1,41 @@
+  ok   hidden creation retains real storage
+  ok   hidden creation does not steal focus
+  ok   hidden frame does not enter composition
+  ok   browser scene excludes hidden frame
+  ok   hidden target rejects keyboard injection
+  ok   hidden target rejects pointer injection
+  ok   wrong-owner hide rejected
+  ok   wrong-owner activation rejected
+  ok   hidden activation rejected
+  ok   show keeps sid and storage, without focus
+  ok   show emits one visibility event
+  ok   duplicate show is idempotent
+  ok   explicit activation focuses in no-WM mode
+  ok   hide active window selects visible fallback
+  ok   popup hidden with parent
+  ok   hide revokes popup grab
+  ok   popup cannot receive hidden input
+  ok   hide preserves popup resources
+  ok   show restores requested-visible descendants
+  ok   show restores surviving popup grab
+  ok   restored grab consumes outside press
+  ok   popup dismissal never starts watchdog
+  ok   dismissed grab never resurrects on parent show
+  ok   minimize and outside click then restore retains popup grab
+  ok   explicit popup reopening rearms dismissal
+  ok   WM managed hidden creation waits for placement
+  ok   show before placement does not expose popup
+  ok   unmapped popup has no active dismissal grab
+  ok   placement restores pending popup grab
+  ok   placement and stale timer cannot reveal hidden window
+  ok   activation request routed to WM, not implicit grant
+  ok   late WM activation cannot undo hide
+  ok   delayed overview cannot recreate hidden hit targets
+  ok   old activation grant cannot focus a later show
+  ok   popup activation rejected
+  ok   last subscriber loss preserves explicit hide
+  ok   stale timer after destroy cannot resurrect
+  ok   stale lifecycle request fails
+  ok   destroy cascades popup
+
+lifecycle: PASS

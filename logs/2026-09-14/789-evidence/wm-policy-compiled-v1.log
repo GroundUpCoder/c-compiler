@@ -1,0 +1,9 @@
+ok title activation maximizes
+ok hidden leaves selectable set
+ok capacity remains bounded
+ok retry show preserves maximize history
+ok restore after hide and capacity pressure uses floating rect
+ok hidden geometry echoes retained
+ok screen resize refits hidden snapped window
+ok snap restore survives hidden resize
+WM-LIFECYCLE-POLICY failures=0

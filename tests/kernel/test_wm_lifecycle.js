@@ -157,6 +157,11 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('dismissed grab never resurrects on parent show', !kernel._wmGrabs.includes(popup));
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:popup,visible:false});
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:popup,visible:true});
+  kernel.wmMinimize(hidden);
+  kernel._wmGrabConsume(null,false);
+  kernel.wmFocus(hidden);
+  check('minimize and outside click then restore retains popup grab', kernel._wmGrabs.includes(popup));
+  kernel.wmFocus(visible);
   check('explicit popup reopening rearms dismissal', kernel._wmGrabConsume(null,false)==='grab-dismiss');
   // Capture placement timers deterministically, then exercise late callbacks.
   // No wall-clock nap: these are the actual callbacks registered by CREATE.
@@ -171,6 +176,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   const earlyPopup = await create(64|128,{parentSid:delayed,dx:2,dy:2});
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:delayed,visible:true});
   check('show before placement does not expose popup', !kernel.wmScene().surfaces.some(s=>s.sid===earlyPopup));
+  kernel._wmGrabConsume(null,false); // outside press while parent is unmapped
+  check('unmapped popup has no active dismissal grab', !kernel._wmGrabs.includes(earlyPopup));
   kernel.wmMove(delayed,190,170); pending[0]();
   check('placement restores pending popup grab', kernel._wmGrabs.includes(earlyPopup));
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:delayed,visible:false});
