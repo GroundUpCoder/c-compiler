@@ -21,7 +21,7 @@ if (!mode) {
   const deadline = setTimeout(() => { console.error('callback capture did not settle'); process.exit(1); }, 20000);
   const sentinel = new Error('callback failure identity');
   async function run(bytes, expected, expectedExit = 0, options = {}) {
-    const seen = []; let sdl, tableReads = 0, drained = 0;
+    const seen = []; let sdl, tableReads = 0, drained = 0, stderr = '';
     const block = host.BLOCK_FS.create(new host.BLOCK_FS.MemoryByteStore(4 << 20));
     let result, error, frameAtDrain;
     try {
@@ -44,19 +44,70 @@ if (!mode) {
               table.set(index, WebAssembly.Table.prototype.get.call(table, replacement));
             }
           }};
-        }, writeOut() {}, writeErr() {}
+        }, writeOut() {}, writeErr(text) {
+          stderr += typeof text === 'string' ? text : new TextDecoder().decode(text);
+        }
       });
     } catch (e) { error = e; }
     if (options.failure) assert.equal(error, sentinel);
     else { assert.equal(error, undefined); assert.equal(result, expectedExit); }
     assert.deepEqual(seen, expected);
+    if (options.stderr) assert.match(stderr, options.stderr);
     assert.equal(drained, 1);
     assert.equal(frameAtDrain, null, "release frame before drain");
     if (options.reads !== undefined) assert.equal(tableReads, options.reads, 'lookup only at registration');
   }
   function c(source) { return compile(C, {'/tests/capture.c': source}, ['capture.c']).bytes; }
+  function objc(source) {
+    return compile(C, {'/tests/capture.m':
+      '@interface Dummy @end @implementation Dummy @end\n' + source}, ['capture.m']).bytes;
+  }
   (async () => {
     assert.equal(typeof WebAssembly.Suspending === 'function', mode === 'jspi');
+    // Objective-C callbacks need their uncaught-exception boundary, but the
+    // boundary belongs to the function, not to its original mutable table slot.
+    for (const mutateBeforeRegistration of [false, true]) {
+      await run(objc(`
+        __import void observe(int); __import void mutate(void(*)(void),void(*)(void));
+        __import void __sdl_set_animation_frame_func(void(*)(void));
+        int count;
+        void second(void) { observe(2); __sdl_set_animation_frame_func(0); }
+        void first(void) {
+          observe(1);
+          __sdl_set_animation_frame_func(++count == 1 ? first : 0);
+        }
+        int main(void) {
+          ${mutateBeforeRegistration ? 'mutate(first,second);' : ''}
+          __sdl_set_animation_frame_func(first);
+          ${mutateBeforeRegistration ? '' : 'mutate(first,second);'}
+          return 0;
+        }
+      `), mutateBeforeRegistration ? [2] : [1,2]);
+    }
+    await run(objc(`
+      #include <stdlib.h>
+      #include <emscripten.h>
+      __import void observe(int); __import void mutate(void(*)(void*),void(*)(void*));
+      void keep(void) {} __export __no_exit_runtime=keep;
+      int count;
+      void second(void *p) { observe(2); exit(17); }
+      void first(void *p) {
+        observe(1);
+        if (++count == 1) emscripten_async_call(first,0,0); else exit(18);
+      }
+      int main(void) { emscripten_async_call(first,0,0); mutate(first,second); return 0; }
+    `), [1,2], 17);
+    await run(objc(`
+      __import void mutate(void(*)(void),void(*)(void));
+      __import void __sdl_set_animation_frame_func(void(*)(void));
+      void first(void) { __sdl_set_animation_frame_func(0); }
+      void second(void) { @throw (id)0; }
+      int main(void) {
+        mutate(first,second);
+        __sdl_set_animation_frame_func(first);
+        return 0;
+      }
+    `), [], 134, {stderr:/uncaught Objective-C exception/});
     await run(c(`
       __import void observe(int); __import void mutate(void(*)(void),void(*)(void));
       __import void __sdl_set_animation_frame_func(void(*)(void));

@@ -7284,9 +7284,8 @@ function captureWasmCallback(callback, nullable) {
 }
 function captureTableCallback(ctx, index, nullable) {
   if (nullable && index === 0) return null;
-  const exports = ctx.getExports ? ctx.getExports() : null;
-  const callback = exports && exports['__guc_objc_callback_' + index];
-  return captureWasmCallback(callback || ctx.getIndirectFunctionTable().get(index), false);
+  const callback = ctx.getIndirectFunctionTable().get(index);
+  return captureWasmCallback(ctx.callbackWrappers?.get(callback) || callback, false);
 }
 
 function createNullSDL(ctx) {
@@ -13476,6 +13475,7 @@ async function runModule({
 
   /* Build runtime context and conditionally create filesystem imports */
   const ctx = {
+    callbackWrappers: new Map(),
     readString: readString,
     createVaReader: createVaReader,
     setErrno: setErrno,
@@ -13944,6 +13944,18 @@ async function runModule({
   }
 
   const instance = new WebAssembly.Instance(module, imports);
+
+  // Resolve compiler-generated exception boundaries against original function
+  // identities before onReady, constructors or main can mutate the table.
+  // A later registration follows the current entry, even when it moved slots;
+  // already registered callbacks retain their captured guarded callable.
+  const callbackTable = instance.exports.__indirect_function_table;
+  if (callbackTable) {
+    for (const name of Object.keys(instance.exports)) {
+      const match = /^__guc_objc_callback_([1-9][0-9]*)$/.exec(name);
+      if (match) ctx.callbackWrappers.set(callbackTable.get(Number(match[1])), instance.exports[name]);
+    }
+  }
 
   if (ctx.bindSigDispatch) ctx.bindSigDispatch(instance.exports);
   if (onReady) onReady({ sdl: sdl, instance: instance });
