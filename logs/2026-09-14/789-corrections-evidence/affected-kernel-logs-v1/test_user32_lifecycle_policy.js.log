@@ -1,0 +1,18 @@
+ok placement unchanged geometry shows without activation
+ok placement already visible requests activation
+ok placement hides
+ok placement restores without activation
+ok invalid placement length refuses before effects
+ok explicitly focused hidden child receives key
+ok visible focused child receives key
+ok disabled focus target rejects key
+ok hidden top rejects key
+ok disabled ancestor rejects key
+USER32-LIFECYCLE-POLICY failures=0
+ok existence is not visibility
+ok hidden startup does not satisfy visible
+ok hidden state exposed in list
+ok viewable startup satisfies visible
+ok minimized does not satisfy visible
+ok missing title does not satisfy visible
+WMCTL-VISIBILITY-POLICY failures=0

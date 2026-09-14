@@ -26,6 +26,14 @@ int main(void) {
     check("hide preserves HWND and clears visible style",IsWindow(b) && !IsWindowVisible(b) && !(GetWindowLongPtr(b,GWL_STYLE)&WS_VISIBLE));
     check("duplicate hide returns hidden",!ShowWindow(b,SW_HIDE));
     check("show again reuses HWND",!ShowWindow(b,SW_SHOWNOACTIVATE) && IsWindowVisible(b));
+    WINDOWPLACEMENT wp={0}; wp.length=sizeof wp;
+    GetWindowRect(b,&wp.rcNormalPosition);
+    ShowWindow(b,SW_HIDE); wp.showCmd=SW_SHOWNA;
+    check("placement unchanged geometry shows hidden top",SetWindowPlacement(b,&wp) && IsWindowVisible(b));
+    wp.showCmd=SW_HIDE;
+    check("placement hides top",SetWindowPlacement(b,&wp) && !IsWindowVisible(b));
+    wp.showCmd=SW_SHOWNORMAL;
+    check("placement restores hidden top",SetWindowPlacement(b,&wp) && IsWindowVisible(b));
     DestroyWindow(b); DestroyWindow(a);
     SDL_Window *s=SDL_CreateWindow("SDL hidden probe",120,80,SDL_WINDOW_HIDDEN);
     check("SDL hidden flag",s && (SDL_GetWindowFlags(s)&SDL_WINDOW_HIDDEN));

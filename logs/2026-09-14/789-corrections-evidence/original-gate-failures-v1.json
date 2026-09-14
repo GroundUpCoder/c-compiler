@@ -1,0 +1,2313 @@
+{
+  "sourceCommit": "86968e3339fe1c9339c81b6f4c6b01aebe519978",
+  "baseline": "4e534f88f10769ff12e41f5374a5fc2d47a49dd9",
+  "artifacts": {
+    "test-run/summary.json": {
+      "sha256": "50a5b727e8129da4fdb6d086341b0d7821ed159ac3ae67604784d9d33b15d6ac",
+      "summary": {
+        "tool": "tests/run.js",
+        "node": "v25.8.2",
+        "elapsedMs": 5108984,
+        "runId": "20260914-092925-86785",
+        "host": {
+          "hostname": "mftmm.local",
+          "start": {
+            "t": "2026-09-14T09:29:25.832Z",
+            "load1": 7.34,
+            "totalGb": 16,
+            "measured": true,
+            "pressure": 1,
+            "memFreePct": 70,
+            "availBytes": 6238666752,
+            "availGb": 5.81,
+            "freeGb": 0.65,
+            "swapUsedGb": 1.78,
+            "compressorGb": 2.33
+          },
+          "end": {
+            "t": "2026-09-14T10:54:34.821Z",
+            "load1": 2.1,
+            "totalGb": 16,
+            "measured": true,
+            "pressure": 1,
+            "memFreePct": 69,
+            "availBytes": 8553562112,
+            "availGb": 7.97,
+            "freeGb": 3.31,
+            "swapUsedGb": 1.78,
+            "compressorGb": 2.43
+          }
+        },
+        "hostHealth": {
+          "level": "ok",
+          "reasons": []
+        },
+        "filter": null,
+        "tier": "diff",
+        "omitted": [
+          "netsurf-patch"
+        ],
+        "suites": [
+          "todos",
+          "unit",
+          "host",
+          "blockfs",
+          "ast",
+          "extra",
+          "ext",
+          "projects",
+          "zlib",
+          "lua",
+          "freetype",
+          "libpng",
+          "libjpeg",
+          "cairo",
+          "micropython",
+          "micropython-upstream",
+          "sqlite",
+          "disw",
+          "sourcemap",
+          "tcc",
+          "libc",
+          "fuzz",
+          "fakegit",
+          "kernel",
+          "sweep"
+        ],
+        "results": [
+          {
+            "suite": "todos",
+            "status": "pass",
+            "ms": 8889,
+            "exit": 0,
+            "host": {
+              "before": {
+                "t": "2026-09-14T09:29:25.837Z",
+                "load1": 7.34,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 70,
+                "availBytes": 6236667904,
+                "availGb": 5.81,
+                "freeGb": 0.65,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.33
+              },
+              "after": {
+                "t": "2026-09-14T09:29:34.731Z",
+                "load1": 6.99,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 70,
+                "availBytes": 6095044608,
+                "availGb": 5.68,
+                "freeGb": 0.32,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.32
+              }
+            }
+          },
+          {
+            "suite": "unit",
+            "status": "pass",
+            "ms": 18128,
+            "exit": 0,
+            "host": {
+              "before": {
+                "t": "2026-09-14T09:29:34.737Z",
+                "load1": 6.99,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 70,
+                "availBytes": 6096715776,
+                "availGb": 5.68,
+                "freeGb": 0.32,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.32
+              },
+              "after": {
+                "t": "2026-09-14T09:29:52.870Z",
+                "load1": 12.3,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 62,
+                "availBytes": 9729818624,
+                "availGb": 9.06,
+                "freeGb": 5.55,
+                "swapUsedGb": 1.78,
+                "compressorGb": 3.5
+              }
+            }
+          },
+          {
+            "suite": "host",
+            "status": "pass",
+            "ms": 592302,
+            "exit": 0,
+            "host": {
+              "before": {
+                "t": "2026-09-14T09:29:52.876Z",
+                "load1": 12.3,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 62,
+                "availBytes": 9729802240,
+                "availGb": 9.06,
+                "freeGb": 5.55,
+                "swapUsedGb": 1.78,
+                "compressorGb": 3.5
+              },
+              "after": {
+                "t": "2026-09-14T09:39:45.182Z",
+                "load1": 2.71,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 68,
+                "availBytes": 7977992192,
+                "availGb": 7.43,
+                "freeGb": 3.45,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.6
+              }
+            }
+          },
+          {
+            "suite": "blockfs",
+            "status": "pass",
+            "ms": 86708,
+            "exit": 0,
+            "artifact": "build/test-blockfs/summary.json",
+            "files": {
+              "filter": null,
+              "total": 15,
+              "selected": 15,
+              "executed": 15,
+              "resumed": 0,
+              "carried": 0,
+              "recorded": 15
+            },
+            "tallies": {
+              "passed": 15,
+              "failed": 0,
+              "skipped": 0
+            },
+            "host": {
+              "before": {
+                "t": "2026-09-14T09:39:45.187Z",
+                "load1": 2.71,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 68,
+                "availBytes": 7983693824,
+                "availGb": 7.44,
+                "freeGb": 3.46,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.6
+              },
+              "after": {
+                "t": "2026-09-14T09:41:11.899Z",
+                "load1": 2.6,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 68,
+                "availBytes": 7770865664,
+                "availGb": 7.24,
+                "freeGb": 3.28,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.54
+              }
+            }
+          },
+          {
+            "suite": "py[ast,extra,ext,projects,zlib,lua,freetype,libpng,libjpeg,cairo,micropython,micropython-upstream,sqlite,disw,sourcemap,tcc,libc,fuzz,fakegit]",
+            "status": "pass",
+            "ms": 432233,
+            "exit": 0,
+            "artifact": "build/test-py/summary.json",
+            "tallies": {
+              "passed": 904,
+              "failed": 0,
+              "skipped": 111,
+              "categories": {
+                "ast": {
+                  "passed": 6,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "extra": {
+                  "passed": 14,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "ext": {
+                  "passed": 1,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "projects": {
+                  "passed": 29,
+                  "failed": 0,
+                  "skipped": 1
+                },
+                "zlib": {
+                  "passed": 3,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "lua": {
+                  "passed": 26,
+                  "failed": 0,
+                  "skipped": 7
+                },
+                "freetype": {
+                  "passed": 1,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "libpng": {
+                  "passed": 27,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "libjpeg": {
+                  "passed": 13,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "cairo": {
+                  "passed": 3,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "micropython": {
+                  "passed": 10,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "micropython-upstream": {
+                  "passed": 574,
+                  "failed": 0,
+                  "skipped": 65
+                },
+                "sqlite": {
+                  "passed": 10,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "disw": {
+                  "passed": 7,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "sourcemap": {
+                  "passed": 1,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "tcc": {
+                  "passed": 8,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "libc": {
+                  "passed": 38,
+                  "failed": 0,
+                  "skipped": 38
+                },
+                "fuzz": {
+                  "passed": 106,
+                  "failed": 0,
+                  "skipped": 0
+                },
+                "fakegit": {
+                  "passed": 27,
+                  "failed": 0,
+                  "skipped": 0
+                }
+              }
+            },
+            "skipBaseline": {
+              "checked": true,
+              "violations": []
+            },
+            "host": {
+              "before": {
+                "t": "2026-09-14T09:41:11.904Z",
+                "load1": 2.6,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 68,
+                "availBytes": 7772258304,
+                "availGb": 7.24,
+                "freeGb": 3.28,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.54
+              },
+              "after": {
+                "t": "2026-09-14T09:48:24.141Z",
+                "load1": 2.89,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 70,
+                "availBytes": 7919894528,
+                "availGb": 7.38,
+                "freeGb": 3.39,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.36
+              }
+            }
+          },
+          {
+            "suite": "kernel",
+            "status": "fail",
+            "ms": 1757063,
+            "exit": 1,
+            "artifact": "build/test-kernel/summary.json",
+            "files": {
+              "filter": null,
+              "total": 209,
+              "selected": 209,
+              "executed": 209,
+              "resumed": 0,
+              "carried": 0,
+              "recorded": 209
+            },
+            "tallies": {
+              "passed": 198,
+              "failed": 11,
+              "skipped": 0
+            },
+            "host": {
+              "before": {
+                "t": "2026-09-14T09:48:24.147Z",
+                "load1": 2.89,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 70,
+                "availBytes": 7921532928,
+                "availGb": 7.38,
+                "freeGb": 3.39,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.36
+              },
+              "after": {
+                "t": "2026-09-14T10:17:41.214Z",
+                "load1": 4.25,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 66,
+                "availBytes": 8222113792,
+                "availGb": 7.66,
+                "freeGb": 4.6,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.85
+              }
+            }
+          },
+          {
+            "suite": "sweep",
+            "status": "fail",
+            "ms": 2213584,
+            "exit": 1,
+            "artifact": "build/test-browser/summary.json",
+            "files": {
+              "filter": null,
+              "total": 75,
+              "selected": 75,
+              "executed": 75,
+              "resumed": 0,
+              "carried": 0,
+              "recorded": 75
+            },
+            "tallies": {
+              "passed": 65,
+              "failed": 10,
+              "skipped": 0
+            },
+            "host": {
+              "before": {
+                "t": "2026-09-14T10:17:41.221Z",
+                "load1": 4.25,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 66,
+                "availBytes": 8219639808,
+                "availGb": 7.66,
+                "freeGb": 4.6,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.85
+              },
+              "after": {
+                "t": "2026-09-14T10:54:34.810Z",
+                "load1": 2.1,
+                "totalGb": 16,
+                "measured": true,
+                "pressure": 1,
+                "memFreePct": 69,
+                "availBytes": 8559050752,
+                "availGb": 7.97,
+                "freeGb": 3.32,
+                "swapUsedGb": 1.78,
+                "compressorGb": 2.43
+              }
+            }
+          }
+        ]
+      }
+    },
+    "test-kernel/summary.json": {
+      "sha256": "645bb00ed5a797adbb45354704741f5af582f2b5c145541b06466d186d4c993a",
+      "summary": {
+        "suite": "kernel suite",
+        "startedAt": "2026-09-14T09:48:58.221Z",
+        "node": "v25.8.2",
+        "jobs": 6,
+        "repeat": 1,
+        "underLoad": 0,
+        "done": true,
+        "elapsedMs": 1722990,
+        "filter": null,
+        "files": {
+          "total": 209,
+          "selected": 209,
+          "executed": 209,
+          "resumed": 0,
+          "carried": 0,
+          "recorded": 209
+        },
+        "runs": [
+          {
+            "startedAt": "2026-09-14T09:48:58.221Z",
+            "filter": null,
+            "total": 209,
+            "selected": 209,
+            "executed": 209,
+            "resumed": 0,
+            "jobs": 6,
+            "repeat": 1,
+            "underLoad": 0,
+            "done": true,
+            "elapsedMs": 1722990
+          }
+        ],
+        "results": [
+          {
+            "file": "test_trap_report_delivery.js",
+            "status": "pass",
+            "ms": 45,
+            "log": "build/test-kernel/test_trap_report_delivery.js.log"
+          },
+          {
+            "file": "test_small_e2e.js",
+            "status": "pass",
+            "ms": 905,
+            "log": "build/test-kernel/test_small_e2e.js.log"
+          },
+          {
+            "file": "test_wm_lifecycle_policy.js",
+            "status": "pass",
+            "ms": 2234,
+            "log": "build/test-kernel/test_wm_lifecycle_policy.js.log"
+          },
+          {
+            "file": "test_wm_lifecycle.js",
+            "status": "pass",
+            "ms": 44,
+            "log": "build/test-kernel/test_wm_lifecycle.js.log"
+          },
+          {
+            "file": "test_foundation_arrays_e2e.js",
+            "status": "pass",
+            "ms": 3651,
+            "log": "build/test-kernel/test_foundation_arrays_e2e.js.log"
+          },
+          {
+            "file": "test_wm.js",
+            "status": "pass",
+            "ms": 2713,
+            "log": "build/test-kernel/test_wm.js.log"
+          },
+          {
+            "file": "test_readdir_page.js",
+            "status": "pass",
+            "ms": 997,
+            "log": "build/test-kernel/test_readdir_page.js.log"
+          },
+          {
+            "file": "test_http.js",
+            "status": "pass",
+            "ms": 813,
+            "log": "build/test-kernel/test_http.js.log"
+          },
+          {
+            "file": "test_keybind_registry.js",
+            "status": "pass",
+            "ms": 528,
+            "log": "build/test-kernel/test_keybind_registry.js.log"
+          },
+          {
+            "file": "test_foundation_e2e.js",
+            "status": "pass",
+            "ms": 7623,
+            "log": "build/test-kernel/test_foundation_e2e.js.log"
+          },
+          {
+            "file": "test_kernel.js",
+            "status": "pass",
+            "ms": 737,
+            "log": "build/test-kernel/test_kernel.js.log"
+          },
+          {
+            "file": "test_wm_policy.js",
+            "status": "pass",
+            "ms": 393,
+            "log": "build/test-kernel/test_wm_policy.js.log"
+          },
+          {
+            "file": "test_wm_aero.js",
+            "status": "pass",
+            "ms": 307,
+            "log": "build/test-kernel/test_wm_aero.js.log"
+          },
+          {
+            "file": "test_win32rc.js",
+            "status": "pass",
+            "ms": 88,
+            "log": "build/test-kernel/test_win32rc.js.log"
+          },
+          {
+            "file": "test_pipes_spsc.js",
+            "status": "pass",
+            "ms": 58,
+            "log": "build/test-kernel/test_pipes_spsc.js.log"
+          },
+          {
+            "file": "test_audio.js",
+            "status": "pass",
+            "ms": 47,
+            "log": "build/test-kernel/test_audio.js.log"
+          },
+          {
+            "file": "test_sockets.js",
+            "status": "pass",
+            "ms": 43,
+            "log": "build/test-kernel/test_sockets.js.log"
+          },
+          {
+            "file": "test_wm_anchored.js",
+            "status": "pass",
+            "ms": 45,
+            "log": "build/test-kernel/test_wm_anchored.js.log"
+          },
+          {
+            "file": "test_keybind.js",
+            "status": "pass",
+            "ms": 42,
+            "log": "build/test-kernel/test_keybind.js.log"
+          },
+          {
+            "file": "test_pty.js",
+            "status": "pass",
+            "ms": 55,
+            "log": "build/test-kernel/test_pty.js.log"
+          },
+          {
+            "file": "test_zerolen_read.js",
+            "status": "pass",
+            "ms": 42,
+            "log": "build/test-kernel/test_zerolen_read.js.log"
+          },
+          {
+            "file": "test_pipes.js",
+            "status": "pass",
+            "ms": 41,
+            "log": "build/test-kernel/test_pipes.js.log"
+          },
+          {
+            "file": "test_strace.js",
+            "status": "pass",
+            "ms": 40,
+            "log": "build/test-kernel/test_strace.js.log"
+          },
+          {
+            "file": "test_rofs.js",
+            "status": "pass",
+            "ms": 37,
+            "log": "build/test-kernel/test_rofs.js.log"
+          },
+          {
+            "file": "test_vsync.js",
+            "status": "pass",
+            "ms": 34,
+            "log": "build/test-kernel/test_vsync.js.log"
+          },
+          {
+            "file": "test_tty.js",
+            "status": "pass",
+            "ms": 34,
+            "log": "build/test-kernel/test_tty.js.log"
+          },
+          {
+            "file": "test_vdso.js",
+            "status": "pass",
+            "ms": 35,
+            "log": "build/test-kernel/test_vdso.js.log"
+          },
+          {
+            "file": "test_objc_e2e.js",
+            "status": "pass",
+            "ms": 6153,
+            "log": "build/test-kernel/test_objc_e2e.js.log"
+          },
+          {
+            "file": "test_hush_errexit_e2e.js",
+            "status": "pass",
+            "ms": 635,
+            "log": "build/test-kernel/test_hush_errexit_e2e.js.log"
+          },
+          {
+            "file": "test_objc_exceptions_e2e.js",
+            "status": "pass",
+            "ms": 11760,
+            "log": "build/test-kernel/test_objc_exceptions_e2e.js.log"
+          },
+          {
+            "file": "test_start_failure_e2e.js",
+            "status": "pass",
+            "ms": 507,
+            "log": "build/test-kernel/test_start_failure_e2e.js.log"
+          },
+          {
+            "file": "test_syscall_restart_e2e.js",
+            "status": "pass",
+            "ms": 433,
+            "log": "build/test-kernel/test_syscall_restart_e2e.js.log"
+          },
+          {
+            "file": "test_spawn_build_e2e.js",
+            "status": "pass",
+            "ms": 3340,
+            "log": "build/test-kernel/test_spawn_build_e2e.js.log"
+          },
+          {
+            "file": "test_null_trap_e2e.js",
+            "status": "pass",
+            "ms": 715,
+            "log": "build/test-kernel/test_null_trap_e2e.js.log"
+          },
+          {
+            "file": "test_shell_restart_e2e.js",
+            "status": "pass",
+            "ms": 1264,
+            "log": "build/test-kernel/test_shell_restart_e2e.js.log"
+          },
+          {
+            "file": "test_abort_backtrace_e2e.js",
+            "status": "pass",
+            "ms": 1126,
+            "log": "build/test-kernel/test_abort_backtrace_e2e.js.log"
+          },
+          {
+            "file": "test_gamepad_e2e.js",
+            "status": "pass",
+            "ms": 1208,
+            "log": "build/test-kernel/test_gamepad_e2e.js.log"
+          },
+          {
+            "file": "test_sdl_events_e2e.js",
+            "status": "pass",
+            "ms": 688,
+            "log": "build/test-kernel/test_sdl_events_e2e.js.log"
+          },
+          {
+            "file": "test_frame_lifecycle_e2e.js",
+            "status": "pass",
+            "ms": 1513,
+            "log": "build/test-kernel/test_frame_lifecycle_e2e.js.log"
+          },
+          {
+            "file": "test_wgpu_loopguard_headless_e2e.js",
+            "status": "pass",
+            "ms": 843,
+            "log": "build/test-kernel/test_wgpu_loopguard_headless_e2e.js.log"
+          },
+          {
+            "file": "test_loopguard_headless_e2e.js",
+            "status": "pass",
+            "ms": 1113,
+            "log": "build/test-kernel/test_loopguard_headless_e2e.js.log"
+          },
+          {
+            "file": "test_sleep_overshoot_e2e.js",
+            "status": "pass",
+            "ms": 3093,
+            "log": "build/test-kernel/test_sleep_overshoot_e2e.js.log"
+          },
+          {
+            "file": "test_ui_lifecycle_e2e.js",
+            "status": "pass",
+            "ms": 2725,
+            "log": "build/test-kernel/test_ui_lifecycle_e2e.js.log"
+          },
+          {
+            "file": "test_sdl_raster_e2e.js",
+            "status": "pass",
+            "ms": 1371,
+            "log": "build/test-kernel/test_sdl_raster_e2e.js.log"
+          },
+          {
+            "file": "test_sdl_util_e2e.js",
+            "status": "pass",
+            "ms": 1582,
+            "log": "build/test-kernel/test_sdl_util_e2e.js.log"
+          },
+          {
+            "file": "test_render_vsync_e2e.js",
+            "status": "pass",
+            "ms": 9710,
+            "log": "build/test-kernel/test_render_vsync_e2e.js.log"
+          },
+          {
+            "file": "test_sedit_e2e.js",
+            "status": "pass",
+            "ms": 14210,
+            "log": "build/test-kernel/test_sedit_e2e.js.log"
+          },
+          {
+            "file": "test_wm_service_e2e.js",
+            "status": "pass",
+            "ms": 63501,
+            "log": "build/test-kernel/test_wm_service_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_mutation_e2e.js",
+            "status": "pass",
+            "ms": 120002,
+            "log": "build/test-kernel/test_netsurf_mutation_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_demos_e2e.js",
+            "status": "pass",
+            "ms": 54493,
+            "log": "build/test-kernel/test_netsurf_demos_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_http_e2e.js",
+            "status": "pass",
+            "ms": 36346,
+            "log": "build/test-kernel/test_netsurf_http_e2e.js.log"
+          },
+          {
+            "file": "test_recycle_e2e.js",
+            "status": "pass",
+            "ms": 23653,
+            "log": "build/test-kernel/test_recycle_e2e.js.log"
+          },
+          {
+            "file": "test_present_e2e.js",
+            "status": "pass",
+            "ms": 199736,
+            "log": "build/test-kernel/test_present_e2e.js.log"
+          },
+          {
+            "file": "test_sameboy_e2e.js",
+            "status": "fail",
+            "ms": 28712,
+            "log": "build/test-kernel/test_sameboy_e2e.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_user32_e2e.js",
+            "status": "pass",
+            "ms": 20125,
+            "log": "build/test-kernel/test_user32_e2e.js.log"
+          },
+          {
+            "file": "test_mgpp_e2e.js",
+            "status": "pass",
+            "ms": 19599,
+            "log": "build/test-kernel/test_mgpp_e2e.js.log"
+          },
+          {
+            "file": "test_term_e2e.js",
+            "status": "pass",
+            "ms": 232339,
+            "log": "build/test-kernel/test_term_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_select_e2e.js",
+            "status": "pass",
+            "ms": 18014,
+            "log": "build/test-kernel/test_netsurf_select_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_select_reconvert_e2e.js",
+            "status": "pass",
+            "ms": 17570,
+            "log": "build/test-kernel/test_netsurf_select_reconvert_e2e.js.log"
+          },
+          {
+            "file": "test_deck_e2e.js",
+            "status": "pass",
+            "ms": 19021,
+            "log": "build/test-kernel/test_deck_e2e.js.log"
+          },
+          {
+            "file": "test_os_apps_e2e.js",
+            "status": "pass",
+            "ms": 18437,
+            "log": "build/test-kernel/test_os_apps_e2e.js.log"
+          },
+          {
+            "file": "test_sounds_e2e.js",
+            "status": "pass",
+            "ms": 14614,
+            "log": "build/test-kernel/test_sounds_e2e.js.log"
+          },
+          {
+            "file": "test_saver_e2e.js",
+            "status": "pass",
+            "ms": 13872,
+            "log": "build/test-kernel/test_saver_e2e.js.log"
+          },
+          {
+            "file": "test_snap_e2e.js",
+            "status": "pass",
+            "ms": 12500,
+            "log": "build/test-kernel/test_snap_e2e.js.log"
+          },
+          {
+            "file": "test_notepad_menu_e2e.js",
+            "status": "fail",
+            "ms": 162568,
+            "log": "build/test-kernel/test_notepad_menu_e2e.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_ctxmenu_e2e.js",
+            "status": "fail",
+            "ms": 29243,
+            "log": "build/test-kernel/test_ctxmenu_e2e.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_mgp_livereload_e2e.js",
+            "status": "pass",
+            "ms": 12691,
+            "log": "build/test-kernel/test_mgp_livereload_e2e.js.log"
+          },
+          {
+            "file": "test_gcode_native.js",
+            "status": "pass",
+            "ms": 15307,
+            "log": "build/test-kernel/test_gcode_native.js.log"
+          },
+          {
+            "file": "test_clipboard_e2e.js",
+            "status": "pass",
+            "ms": 13610,
+            "log": "build/test-kernel/test_clipboard_e2e.js.log"
+          },
+          {
+            "file": "test_fileman_ops_e2e.js",
+            "status": "pass",
+            "ms": 13581,
+            "log": "build/test-kernel/test_fileman_ops_e2e.js.log"
+          },
+          {
+            "file": "test_overview_e2e.js",
+            "status": "pass",
+            "ms": 10260,
+            "log": "build/test-kernel/test_overview_e2e.js.log"
+          },
+          {
+            "file": "test_gcode_timeout_e2e.js",
+            "status": "pass",
+            "ms": 10050,
+            "log": "build/test-kernel/test_gcode_timeout_e2e.js.log"
+          },
+          {
+            "file": "test_gcode_intr_chatty_e2e.js",
+            "status": "pass",
+            "ms": 10040,
+            "log": "build/test-kernel/test_gcode_intr_chatty_e2e.js.log"
+          },
+          {
+            "file": "test_keymap_e2e.js",
+            "status": "fail",
+            "ms": 73869,
+            "log": "build/test-kernel/test_keymap_e2e.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_gcode_intr_honesty_e2e.js",
+            "status": "pass",
+            "ms": 10044,
+            "log": "build/test-kernel/test_gcode_intr_honesty_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_pointer_e2e.js",
+            "status": "pass",
+            "ms": 10619,
+            "log": "build/test-kernel/test_netsurf_pointer_e2e.js.log"
+          },
+          {
+            "file": "test_multiface_font_e2e.js",
+            "status": "pass",
+            "ms": 12202,
+            "log": "build/test-kernel/test_multiface_font_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_filegadget_e2e.js",
+            "status": "pass",
+            "ms": 9835,
+            "log": "build/test-kernel/test_netsurf_filegadget_e2e.js.log"
+          },
+          {
+            "file": "test_openwith_e2e.js",
+            "status": "pass",
+            "ms": 9836,
+            "log": "build/test-kernel/test_openwith_e2e.js.log"
+          },
+          {
+            "file": "test_winmine_e2e.js",
+            "status": "pass",
+            "ms": 8712,
+            "log": "build/test-kernel/test_winmine_e2e.js.log"
+          },
+          {
+            "file": "test_paint_e2e.js",
+            "status": "pass",
+            "ms": 8471,
+            "log": "build/test-kernel/test_paint_e2e.js.log"
+          },
+          {
+            "file": "test_ksvc_e2e.js",
+            "status": "pass",
+            "ms": 7747,
+            "log": "build/test-kernel/test_ksvc_e2e.js.log"
+          },
+          {
+            "file": "test_micropython_stdlib_e2e.js",
+            "status": "pass",
+            "ms": 9610,
+            "log": "build/test-kernel/test_micropython_stdlib_e2e.js.log"
+          },
+          {
+            "file": "test_sdl_delay_e2e.js",
+            "status": "pass",
+            "ms": 7454,
+            "log": "build/test-kernel/test_sdl_delay_e2e.js.log"
+          },
+          {
+            "file": "test_micropython_script_e2e.js",
+            "status": "pass",
+            "ms": 9800,
+            "log": "build/test-kernel/test_micropython_script_e2e.js.log"
+          },
+          {
+            "file": "test_hostpaste_e2e.js",
+            "status": "fail",
+            "ms": 25760,
+            "log": "build/test-kernel/test_hostpaste_e2e.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_ctlpanel_e2e.js",
+            "status": "pass",
+            "ms": 7147,
+            "log": "build/test-kernel/test_ctlpanel_e2e.js.log"
+          },
+          {
+            "file": "test_calc_e2e.js",
+            "status": "fail",
+            "ms": 12188,
+            "log": "build/test-kernel/test_calc_e2e.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_cairo_e2e.js",
+            "status": "pass",
+            "ms": 6687,
+            "log": "build/test-kernel/test_cairo_e2e.js.log"
+          },
+          {
+            "file": "test_jobctl_tty_e2e.js",
+            "status": "pass",
+            "ms": 6131,
+            "log": "build/test-kernel/test_jobctl_tty_e2e.js.log"
+          },
+          {
+            "file": "test_lb_vscroll_e2e.js",
+            "status": "pass",
+            "ms": 7073,
+            "log": "build/test-kernel/test_lb_vscroll_e2e.js.log"
+          },
+          {
+            "file": "test_rust_e2e.js",
+            "status": "pass",
+            "ms": 9398,
+            "log": "build/test-kernel/test_rust_e2e.js.log"
+          },
+          {
+            "file": "test_heavylock_e2e.js",
+            "status": "pass",
+            "ms": 7074,
+            "log": "build/test-kernel/test_heavylock_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_events_e2e.js",
+            "status": "pass",
+            "ms": 6556,
+            "log": "build/test-kernel/test_netsurf_events_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_content_e2e.js",
+            "status": "pass",
+            "ms": 6276,
+            "log": "build/test-kernel/test_netsurf_content_e2e.js.log"
+          },
+          {
+            "file": "test_menubox_e2e.js",
+            "status": "pass",
+            "ms": 6983,
+            "log": "build/test-kernel/test_menubox_e2e.js.log"
+          },
+          {
+            "file": "test_comdlg_diag_e2e.js",
+            "status": "pass",
+            "ms": 7809,
+            "log": "build/test-kernel/test_comdlg_diag_e2e.js.log"
+          },
+          {
+            "file": "test_mgba_e2e.js",
+            "status": "pass",
+            "ms": 5663,
+            "log": "build/test-kernel/test_mgba_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_e2e.js",
+            "status": "pass",
+            "ms": 5796,
+            "log": "build/test-kernel/test_netsurf_e2e.js.log"
+          },
+          {
+            "file": "test_edit_punct_repro.js",
+            "status": "fail",
+            "ms": 6170,
+            "log": "build/test-kernel/test_edit_punct_repro.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_fileman_nav_e2e.js",
+            "status": "pass",
+            "ms": 5430,
+            "log": "build/test-kernel/test_fileman_nav_e2e.js.log"
+          },
+          {
+            "file": "test_gdi32_e2e.js",
+            "status": "pass",
+            "ms": 5128,
+            "log": "build/test-kernel/test_gdi32_e2e.js.log"
+          },
+          {
+            "file": "test_vi_e2e.js",
+            "status": "pass",
+            "ms": 4522,
+            "log": "build/test-kernel/test_vi_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_layout_e2e.js",
+            "status": "pass",
+            "ms": 4819,
+            "log": "build/test-kernel/test_netsurf_layout_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_img_reconvert_e2e.js",
+            "status": "pass",
+            "ms": 3844,
+            "log": "build/test-kernel/test_netsurf_img_reconvert_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_js_e2e.js",
+            "status": "pass",
+            "ms": 3872,
+            "log": "build/test-kernel/test_netsurf_js_e2e.js.log"
+          },
+          {
+            "file": "test_waitevent_e2e.js",
+            "status": "pass",
+            "ms": 3854,
+            "log": "build/test-kernel/test_waitevent_e2e.js.log"
+          },
+          {
+            "file": "test_rust_std_e2e.js",
+            "status": "pass",
+            "ms": 4550,
+            "log": "build/test-kernel/test_rust_std_e2e.js.log"
+          },
+          {
+            "file": "test_curl_e2e.js",
+            "status": "pass",
+            "ms": 10204,
+            "log": "build/test-kernel/test_curl_e2e.js.log"
+          },
+          {
+            "file": "test_listview_e2e.js",
+            "status": "pass",
+            "ms": 3546,
+            "log": "build/test-kernel/test_listview_e2e.js.log"
+          },
+          {
+            "file": "test_ticketbridge_e2e.js",
+            "status": "pass",
+            "ms": 3399,
+            "log": "build/test-kernel/test_ticketbridge_e2e.js.log"
+          },
+          {
+            "file": "test_fileman_e2e.js",
+            "status": "pass",
+            "ms": 3520,
+            "log": "build/test-kernel/test_fileman_e2e.js.log"
+          },
+          {
+            "file": "test_pbcopy_e2e.js",
+            "status": "pass",
+            "ms": 3653,
+            "log": "build/test-kernel/test_pbcopy_e2e.js.log"
+          },
+          {
+            "file": "test_http_e2e.js",
+            "status": "pass",
+            "ms": 3424,
+            "log": "build/test-kernel/test_http_e2e.js.log"
+          },
+          {
+            "file": "test_vsync_boot_e2e.js",
+            "status": "pass",
+            "ms": 3571,
+            "log": "build/test-kernel/test_vsync_boot_e2e.js.log"
+          },
+          {
+            "file": "test_wait_e2e.js",
+            "status": "pass",
+            "ms": 2987,
+            "log": "build/test-kernel/test_wait_e2e.js.log"
+          },
+          {
+            "file": "test_itimer_e2e.js",
+            "status": "pass",
+            "ms": 2873,
+            "log": "build/test-kernel/test_itimer_e2e.js.log"
+          },
+          {
+            "file": "test_spawn_budget_kill_honesty.js",
+            "status": "pass",
+            "ms": 3019,
+            "log": "build/test-kernel/test_spawn_budget_kill_honesty.js.log"
+          },
+          {
+            "file": "test_notepad_e2e.js",
+            "status": "fail",
+            "ms": 65252,
+            "log": "build/test-kernel/test_notepad_e2e.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_desk_icons_e2e.js",
+            "status": "pass",
+            "ms": 2795,
+            "log": "build/test-kernel/test_desk_icons_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_restyle_e2e.js",
+            "status": "pass",
+            "ms": 2805,
+            "log": "build/test-kernel/test_netsurf_restyle_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_console_e2e.js",
+            "status": "pass",
+            "ms": 2634,
+            "log": "build/test-kernel/test_netsurf_console_e2e.js.log"
+          },
+          {
+            "file": "test_signals_e2e.js",
+            "status": "pass",
+            "ms": 2779,
+            "log": "build/test-kernel/test_signals_e2e.js.log"
+          },
+          {
+            "file": "test_kernel32_e2e.js",
+            "status": "pass",
+            "ms": 2620,
+            "log": "build/test-kernel/test_kernel32_e2e.js.log"
+          },
+          {
+            "file": "test_desktop_defaults_e2e.js",
+            "status": "pass",
+            "ms": 2754,
+            "log": "build/test-kernel/test_desktop_defaults_e2e.js.log"
+          },
+          {
+            "file": "test_netsurf_dragslop_e2e.js",
+            "status": "pass",
+            "ms": 2295,
+            "log": "build/test-kernel/test_netsurf_dragslop_e2e.js.log"
+          },
+          {
+            "file": "test_jobctl_e2e.js",
+            "status": "pass",
+            "ms": 2200,
+            "log": "build/test-kernel/test_jobctl_e2e.js.log"
+          },
+          {
+            "file": "test_wm_fatal_e2e.js",
+            "status": "pass",
+            "ms": 2214,
+            "log": "build/test-kernel/test_wm_fatal_e2e.js.log"
+          },
+          {
+            "file": "test_comp_park_e2e.js",
+            "status": "pass",
+            "ms": 1989,
+            "log": "build/test-kernel/test_comp_park_e2e.js.log"
+          },
+          {
+            "file": "test_os_boot_kill_honesty.js",
+            "status": "pass",
+            "ms": 1947,
+            "log": "build/test-kernel/test_os_boot_kill_honesty.js.log"
+          },
+          {
+            "file": "test_cursor_e2e.js",
+            "status": "pass",
+            "ms": 2052,
+            "log": "build/test-kernel/test_cursor_e2e.js.log"
+          },
+          {
+            "file": "test_gcode_intr_flush_e2e.js",
+            "status": "pass",
+            "ms": 1871,
+            "log": "build/test-kernel/test_gcode_intr_flush_e2e.js.log"
+          },
+          {
+            "file": "test_gpubox_dawn_e2e.js",
+            "status": "pass",
+            "ms": 1865,
+            "log": "build/test-kernel/test_gpubox_dawn_e2e.js.log"
+          },
+          {
+            "file": "test_netbridge_e2e.js",
+            "status": "pass",
+            "ms": 1871,
+            "log": "build/test-kernel/test_netbridge_e2e.js.log"
+          },
+          {
+            "file": "test_minesweeper_sample_e2e.js",
+            "status": "pass",
+            "ms": 1713,
+            "log": "build/test-kernel/test_minesweeper_sample_e2e.js.log"
+          },
+          {
+            "file": "test_spsc_e2e.js",
+            "status": "pass",
+            "ms": 1649,
+            "log": "build/test-kernel/test_spsc_e2e.js.log"
+          },
+          {
+            "file": "test_gcode_step2_e2e.js",
+            "status": "pass",
+            "ms": 1583,
+            "log": "build/test-kernel/test_gcode_step2_e2e.js.log"
+          },
+          {
+            "file": "test_fileman_watch_e2e.js",
+            "status": "pass",
+            "ms": 1566,
+            "log": "build/test-kernel/test_fileman_watch_e2e.js.log"
+          },
+          {
+            "file": "test_module_cache.js",
+            "status": "pass",
+            "ms": 1620,
+            "log": "build/test-kernel/test_module_cache.js.log"
+          },
+          {
+            "file": "test_fswatch_e2e.js",
+            "status": "pass",
+            "ms": 1668,
+            "log": "build/test-kernel/test_fswatch_e2e.js.log"
+          },
+          {
+            "file": "test_skey_e2e.js",
+            "status": "pass",
+            "ms": 1504,
+            "log": "build/test-kernel/test_skey_e2e.js.log"
+          },
+          {
+            "file": "test_sockwake_e2e.js",
+            "status": "pass",
+            "ms": 1390,
+            "log": "build/test-kernel/test_sockwake_e2e.js.log"
+          },
+          {
+            "file": "test_cc_srclib_e2e.js",
+            "status": "pass",
+            "ms": 1484,
+            "log": "build/test-kernel/test_cc_srclib_e2e.js.log"
+          },
+          {
+            "file": "test_sdl_render_e2e.js",
+            "status": "pass",
+            "ms": 1330,
+            "log": "build/test-kernel/test_sdl_render_e2e.js.log"
+          },
+          {
+            "file": "test_strace_e2e.js",
+            "status": "pass",
+            "ms": 1224,
+            "log": "build/test-kernel/test_strace_e2e.js.log"
+          },
+          {
+            "file": "test_fs_e2e.js",
+            "status": "pass",
+            "ms": 1294,
+            "log": "build/test-kernel/test_fs_e2e.js.log"
+          },
+          {
+            "file": "test_code_e2e.js",
+            "status": "pass",
+            "ms": 1322,
+            "log": "build/test-kernel/test_code_e2e.js.log"
+          },
+          {
+            "file": "test_symlink_create_e2e.js",
+            "status": "pass",
+            "ms": 1133,
+            "log": "build/test-kernel/test_symlink_create_e2e.js.log"
+          },
+          {
+            "file": "test_gpubox_menu_e2e.js",
+            "status": "fail",
+            "ms": 9879,
+            "log": "build/test-kernel/test_gpubox_menu_e2e.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_pipes_e2e.js",
+            "status": "pass",
+            "ms": 1124,
+            "log": "build/test-kernel/test_pipes_e2e.js.log"
+          },
+          {
+            "file": "test_boot_guard_e2e.js",
+            "status": "pass",
+            "ms": 1278,
+            "log": "build/test-kernel/test_boot_guard_e2e.js.log"
+          },
+          {
+            "file": "test_sockets_e2e.js",
+            "status": "pass",
+            "ms": 1118,
+            "log": "build/test-kernel/test_sockets_e2e.js.log"
+          },
+          {
+            "file": "test_hostclip_e2e.js",
+            "status": "pass",
+            "ms": 1163,
+            "log": "build/test-kernel/test_hostclip_e2e.js.log"
+          },
+          {
+            "file": "test_realpath_e2e.js",
+            "status": "pass",
+            "ms": 1119,
+            "log": "build/test-kernel/test_realpath_e2e.js.log"
+          },
+          {
+            "file": "test_e2e.js",
+            "status": "pass",
+            "ms": 1192,
+            "log": "build/test-kernel/test_e2e.js.log"
+          },
+          {
+            "file": "test_rofs_e2e.js",
+            "status": "pass",
+            "ms": 812,
+            "log": "build/test-kernel/test_rofs_e2e.js.log"
+          },
+          {
+            "file": "test_gdiplus_e2e.js",
+            "status": "pass",
+            "ms": 717,
+            "log": "build/test-kernel/test_gdiplus_e2e.js.log"
+          },
+          {
+            "file": "test_pty_e2e.js",
+            "status": "pass",
+            "ms": 839,
+            "log": "build/test-kernel/test_pty_e2e.js.log"
+          },
+          {
+            "file": "test_wm_e2e.js",
+            "status": "pass",
+            "ms": 878,
+            "log": "build/test-kernel/test_wm_e2e.js.log"
+          },
+          {
+            "file": "test_gpu_multiwin_dawn_e2e.js",
+            "status": "pass",
+            "ms": 632,
+            "log": "build/test-kernel/test_gpu_multiwin_dawn_e2e.js.log"
+          },
+          {
+            "file": "test_read_fill_e2e.js",
+            "status": "pass",
+            "ms": 543,
+            "log": "build/test-kernel/test_read_fill_e2e.js.log"
+          },
+          {
+            "file": "test_vdso_e2e.js",
+            "status": "pass",
+            "ms": 646,
+            "log": "build/test-kernel/test_vdso_e2e.js.log"
+          },
+          {
+            "file": "test_audio_e2e.js",
+            "status": "pass",
+            "ms": 2086,
+            "log": "build/test-kernel/test_audio_e2e.js.log"
+          },
+          {
+            "file": "test_taskbar_owner_e2e.js",
+            "status": "pass",
+            "ms": 3753,
+            "log": "build/test-kernel/test_taskbar_owner_e2e.js.log"
+          },
+          {
+            "file": "test_gucedit.js",
+            "status": "pass",
+            "ms": 2897,
+            "log": "build/test-kernel/test_gucedit.js.log"
+          },
+          {
+            "file": "test_sedit_core.js",
+            "status": "pass",
+            "ms": 869,
+            "log": "build/test-kernel/test_sedit_core.js.log"
+          },
+          {
+            "file": "test_sdl_rendertarget_e2e.js",
+            "status": "pass",
+            "ms": 1380,
+            "log": "build/test-kernel/test_sdl_rendertarget_e2e.js.log"
+          },
+          {
+            "file": "test_sdl_debugtext_e2e.js",
+            "status": "pass",
+            "ms": 1417,
+            "log": "build/test-kernel/test_sdl_debugtext_e2e.js.log"
+          },
+          {
+            "file": "test_sdl_rotated_e2e.js",
+            "status": "pass",
+            "ms": 1409,
+            "log": "build/test-kernel/test_sdl_rotated_e2e.js.log"
+          },
+          {
+            "file": "gucos-packages/test_repo_contract.js",
+            "status": "pass",
+            "ms": 29,
+            "log": "build/test-kernel/gucos-packages_test_repo_contract.js.log"
+          },
+          {
+            "file": "test_sdlttf_e2e.js",
+            "status": "pass",
+            "ms": 2403,
+            "log": "build/test-kernel/test_sdlttf_e2e.js.log"
+          },
+          {
+            "file": "test_win32_ports.js",
+            "status": "pass",
+            "ms": 25239,
+            "log": "build/test-kernel/test_win32_ports.js.log"
+          },
+          {
+            "file": "test_repl_pty_e2e.js",
+            "status": "pass",
+            "ms": 11623,
+            "log": "build/test-kernel/test_repl_pty_e2e.js.log"
+          },
+          {
+            "file": "test_egress_e2e.js",
+            "status": "pass",
+            "ms": 2174,
+            "log": "build/test-kernel/test_egress_e2e.js.log"
+          },
+          {
+            "file": "test_cc_srclib.js",
+            "status": "pass",
+            "ms": 1432,
+            "log": "build/test-kernel/test_cc_srclib.js.log"
+          },
+          {
+            "file": "test_cfgstore_e2e.js",
+            "status": "pass",
+            "ms": 385,
+            "log": "build/test-kernel/test_cfgstore_e2e.js.log"
+          },
+          {
+            "file": "test_tty_e2e.js",
+            "status": "pass",
+            "ms": 356,
+            "log": "build/test-kernel/test_tty_e2e.js.log"
+          },
+          {
+            "file": "test_overlays.js",
+            "status": "pass",
+            "ms": 114,
+            "log": "build/test-kernel/test_overlays.js.log"
+          },
+          {
+            "file": "test_mounts.js",
+            "status": "pass",
+            "ms": 50,
+            "log": "build/test-kernel/test_mounts.js.log"
+          },
+          {
+            "file": "test_procfs.js",
+            "status": "pass",
+            "ms": 40,
+            "log": "build/test-kernel/test_procfs.js.log"
+          },
+          {
+            "file": "test_os_boot.js",
+            "status": "pass",
+            "ms": 753011,
+            "log": "build/test-kernel/test_os_boot.js.log"
+          },
+          {
+            "file": "test_cc_imagelibs_e2e.js",
+            "status": "pass",
+            "ms": 246633,
+            "log": "build/test-kernel/test_cc_imagelibs_e2e.js.log"
+          },
+          {
+            "file": "test_cc_cjson_e2e.js",
+            "status": "pass",
+            "ms": 3266,
+            "log": "build/test-kernel/test_cc_cjson_e2e.js.log"
+          },
+          {
+            "file": "test_cc_lua_sqlite_e2e.js",
+            "status": "pass",
+            "ms": 10358,
+            "log": "build/test-kernel/test_cc_lua_sqlite_e2e.js.log"
+          },
+          {
+            "file": "test_cc_freetype_e2e.js",
+            "status": "pass",
+            "ms": 5805,
+            "log": "build/test-kernel/test_cc_freetype_e2e.js.log"
+          },
+          {
+            "file": "test_gucman_scripts_e2e.js",
+            "status": "pass",
+            "ms": 4085,
+            "log": "build/test-kernel/test_gucman_scripts_e2e.js.log"
+          },
+          {
+            "file": "test_gucman_upgrade_e2e.js",
+            "status": "pass",
+            "ms": 4755,
+            "log": "build/test-kernel/test_gucman_upgrade_e2e.js.log"
+          },
+          {
+            "file": "gucos-packages/test_fontpkg_e2e.js",
+            "status": "fail",
+            "ms": 20161,
+            "log": "build/test-kernel/gucos-packages_test_fontpkg_e2e.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_git_net_e2e.js",
+            "status": "pass",
+            "ms": 6252,
+            "log": "build/test-kernel/test_git_net_e2e.js.log"
+          },
+          {
+            "file": "test_seed_e2e.js",
+            "status": "pass",
+            "ms": 47475,
+            "log": "build/test-kernel/test_seed_e2e.js.log"
+          },
+          {
+            "file": "test_gucman_libgit2_e2e.js",
+            "status": "pass",
+            "ms": 25515,
+            "log": "build/test-kernel/test_gucman_libgit2_e2e.js.log"
+          },
+          {
+            "file": "test_punes_e2e.js",
+            "status": "pass",
+            "ms": 14935,
+            "log": "build/test-kernel/test_punes_e2e.js.log"
+          },
+          {
+            "file": "test_software_e2e.js",
+            "status": "pass",
+            "ms": 15806,
+            "log": "build/test-kernel/test_software_e2e.js.log"
+          },
+          {
+            "file": "test_cc_win32_e2e.js",
+            "status": "pass",
+            "ms": 12743,
+            "log": "build/test-kernel/test_cc_win32_e2e.js.log"
+          },
+          {
+            "file": "test_gucman_e2e.js",
+            "status": "pass",
+            "ms": 21494,
+            "log": "build/test-kernel/test_gucman_e2e.js.log"
+          },
+          {
+            "file": "test_defaults_sync_e2e.js",
+            "status": "pass",
+            "ms": 8568,
+            "log": "build/test-kernel/test_defaults_sync_e2e.js.log"
+          },
+          {
+            "file": "test_cpython_clang_e2e.js",
+            "status": "pass",
+            "ms": 7244,
+            "log": "build/test-kernel/test_cpython_clang_e2e.js.log"
+          },
+          {
+            "file": "test_symbolfont_e2e.js",
+            "status": "fail",
+            "ms": 5540,
+            "log": "build/test-kernel/test_symbolfont_e2e.js.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "test_clang_pkgs_e2e.js",
+            "status": "pass",
+            "ms": 4498,
+            "log": "build/test-kernel/test_clang_pkgs_e2e.js.log"
+          },
+          {
+            "file": "test_cmdalt_e2e.js",
+            "status": "pass",
+            "ms": 5314,
+            "log": "build/test-kernel/test_cmdalt_e2e.js.log"
+          },
+          {
+            "file": "test_git_e2e.js",
+            "status": "pass",
+            "ms": 5169,
+            "log": "build/test-kernel/test_git_e2e.js.log"
+          },
+          {
+            "file": "test_gucman_apps_e2e.js",
+            "status": "pass",
+            "ms": 5297,
+            "log": "build/test-kernel/test_gucman_apps_e2e.js.log"
+          },
+          {
+            "file": "test_gucman_doom_e2e.js",
+            "status": "pass",
+            "ms": 3744,
+            "log": "build/test-kernel/test_gucman_doom_e2e.js.log"
+          },
+          {
+            "file": "test_gucman_quake_e2e.js",
+            "status": "pass",
+            "ms": 3175,
+            "log": "build/test-kernel/test_gucman_quake_e2e.js.log"
+          },
+          {
+            "file": "test_cc_libpng_e2e.js",
+            "status": "pass",
+            "ms": 6835,
+            "log": "build/test-kernel/test_cc_libpng_e2e.js.log"
+          },
+          {
+            "file": "test_stdinc_e2e.js",
+            "status": "pass",
+            "ms": 2619,
+            "log": "build/test-kernel/test_stdinc_e2e.js.log"
+          },
+          {
+            "file": "test_cc_libjpeg_e2e.js",
+            "status": "pass",
+            "ms": 4167,
+            "log": "build/test-kernel/test_cc_libjpeg_e2e.js.log"
+          },
+          {
+            "file": "test_gucman_sources_e2e.js",
+            "status": "pass",
+            "ms": 2237,
+            "log": "build/test-kernel/test_gucman_sources_e2e.js.log"
+          },
+          {
+            "file": "test_rust_pkgs_e2e.js",
+            "status": "pass",
+            "ms": 2223,
+            "log": "build/test-kernel/test_rust_pkgs_e2e.js.log"
+          }
+        ],
+        "evidence": {
+          "expected": 209,
+          "fresh": 209,
+          "resumedExistenceOnly": 0
+        },
+        "sibling": {
+          "repo": "gucos-packages",
+          "status": "ok",
+          "root": "/Users/jku/git/gucos-packages",
+          "via": "main-clone sibling",
+          "members": 2
+        }
+      }
+    },
+    "test-browser/summary.json": {
+      "sha256": "06f44333dc270f320c0b225965befbc386bb92cfdb33eb0b08369f1099d4a874",
+      "summary": {
+        "suite": "browser os sweep",
+        "startedAt": "2026-09-14T10:17:41.643Z",
+        "node": "v25.8.2",
+        "jobs": 1,
+        "repeat": 1,
+        "underLoad": 0,
+        "done": true,
+        "elapsedMs": 2213163,
+        "filter": null,
+        "files": {
+          "total": 75,
+          "selected": 75,
+          "executed": 75,
+          "resumed": 0,
+          "carried": 0,
+          "recorded": 75
+        },
+        "runs": [
+          {
+            "startedAt": "2026-09-14T10:17:41.643Z",
+            "filter": null,
+            "total": 75,
+            "selected": 75,
+            "executed": 75,
+            "resumed": 0,
+            "jobs": 1,
+            "repeat": 1,
+            "underLoad": 0,
+            "done": true,
+            "elapsedMs": 2213163
+          }
+        ],
+        "results": [
+          {
+            "file": "os-abort-backtrace.mjs",
+            "status": "pass",
+            "ms": 3495,
+            "log": "build/test-browser/os-abort-backtrace.mjs.log"
+          },
+          {
+            "file": "os-aero.mjs",
+            "status": "pass",
+            "ms": 3406,
+            "log": "build/test-browser/os-aero.mjs.log"
+          },
+          {
+            "file": "os-boots.mjs",
+            "status": "pass",
+            "ms": 6158,
+            "log": "build/test-browser/os-boots.mjs.log"
+          },
+          {
+            "file": "os-cairo.mjs",
+            "status": "pass",
+            "ms": 3066,
+            "log": "build/test-browser/os-cairo.mjs.log"
+          },
+          {
+            "file": "os-clang.mjs",
+            "status": "pass",
+            "ms": 244480,
+            "log": "build/test-browser/os-clang.mjs.log"
+          },
+          {
+            "file": "os-clipboard.mjs",
+            "status": "fail",
+            "ms": 20122,
+            "log": "build/test-browser/os-clipboard.mjs.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "os-compositor.mjs",
+            "status": "pass",
+            "ms": 22870,
+            "log": "build/test-browser/os-compositor.mjs.log"
+          },
+          {
+            "file": "os-ctxmenu.mjs",
+            "status": "fail",
+            "ms": 74656,
+            "log": "build/test-browser/os-ctxmenu.mjs.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "os-debugtext.mjs",
+            "status": "pass",
+            "ms": 4267,
+            "log": "build/test-browser/os-debugtext.mjs.log"
+          },
+          {
+            "file": "os-deck.mjs",
+            "status": "pass",
+            "ms": 11733,
+            "log": "build/test-browser/os-deck.mjs.log"
+          },
+          {
+            "file": "os-devloss.mjs",
+            "status": "pass",
+            "ms": 15850,
+            "log": "build/test-browser/os-devloss.mjs.log"
+          },
+          {
+            "file": "os-doom.mjs",
+            "status": "pass",
+            "ms": 15410,
+            "log": "build/test-browser/os-doom.mjs.log"
+          },
+          {
+            "file": "os-doompage-motion.mjs",
+            "status": "pass",
+            "ms": 14569,
+            "log": "build/test-browser/os-doompage-motion.mjs.log"
+          },
+          {
+            "file": "os-doompage-renders.mjs",
+            "status": "pass",
+            "ms": 3720,
+            "log": "build/test-browser/os-doompage-renders.mjs.log"
+          },
+          {
+            "file": "os-drop.mjs",
+            "status": "pass",
+            "ms": 5836,
+            "log": "build/test-browser/os-drop.mjs.log"
+          },
+          {
+            "file": "os-edittab.mjs",
+            "status": "pass",
+            "ms": 4789,
+            "log": "build/test-browser/os-edittab.mjs.log"
+          },
+          {
+            "file": "os-egress.mjs",
+            "status": "pass",
+            "ms": 15455,
+            "log": "build/test-browser/os-egress.mjs.log"
+          },
+          {
+            "file": "os-fileman.mjs",
+            "status": "pass",
+            "ms": 80350,
+            "log": "build/test-browser/os-fileman.mjs.log"
+          },
+          {
+            "file": "os-foundation-arrays.mjs",
+            "status": "pass",
+            "ms": 17650,
+            "log": "build/test-browser/os-foundation-arrays.mjs.log"
+          },
+          {
+            "file": "os-foundation.mjs",
+            "status": "pass",
+            "ms": 27295,
+            "log": "build/test-browser/os-foundation.mjs.log"
+          },
+          {
+            "file": "os-frame-lifecycle.mjs",
+            "status": "pass",
+            "ms": 3511,
+            "log": "build/test-browser/os-frame-lifecycle.mjs.log"
+          },
+          {
+            "file": "os-fsbtn.mjs",
+            "status": "pass",
+            "ms": 3276,
+            "log": "build/test-browser/os-fsbtn.mjs.log"
+          },
+          {
+            "file": "os-gamepad.mjs",
+            "status": "pass",
+            "ms": 3222,
+            "log": "build/test-browser/os-gamepad.mjs.log"
+          },
+          {
+            "file": "os-gcode.mjs",
+            "status": "pass",
+            "ms": 70265,
+            "log": "build/test-browser/os-gcode.mjs.log"
+          },
+          {
+            "file": "os-gdi.mjs",
+            "status": "pass",
+            "ms": 3344,
+            "log": "build/test-browser/os-gdi.mjs.log"
+          },
+          {
+            "file": "os-git-cli.mjs",
+            "status": "pass",
+            "ms": 264294,
+            "log": "build/test-browser/os-git-cli.mjs.log"
+          },
+          {
+            "file": "os-git-net.mjs",
+            "status": "pass",
+            "ms": 10828,
+            "log": "build/test-browser/os-git-net.mjs.log"
+          },
+          {
+            "file": "os-gpubox.mjs",
+            "status": "fail",
+            "ms": 92773,
+            "log": "build/test-browser/os-gpubox.mjs.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "os-gucman.mjs",
+            "status": "pass",
+            "ms": 11036,
+            "log": "build/test-browser/os-gucman.mjs.log"
+          },
+          {
+            "file": "os-harness-unit.mjs",
+            "status": "pass",
+            "ms": 52,
+            "log": "build/test-browser/os-harness-unit.mjs.log"
+          },
+          {
+            "file": "os-hires.mjs",
+            "status": "pass",
+            "ms": 8024,
+            "log": "build/test-browser/os-hires.mjs.log"
+          },
+          {
+            "file": "os-hush-errexit.mjs",
+            "status": "pass",
+            "ms": 2951,
+            "log": "build/test-browser/os-hush-errexit.mjs.log"
+          },
+          {
+            "file": "os-keybind.mjs",
+            "status": "pass",
+            "ms": 16307,
+            "log": "build/test-browser/os-keybind.mjs.log"
+          },
+          {
+            "file": "os-loopguard.mjs",
+            "status": "pass",
+            "ms": 6108,
+            "log": "build/test-browser/os-loopguard.mjs.log"
+          },
+          {
+            "file": "os-mgpp.mjs",
+            "status": "pass",
+            "ms": 90733,
+            "log": "build/test-browser/os-mgpp.mjs.log"
+          },
+          {
+            "file": "os-minimal.mjs",
+            "status": "pass",
+            "ms": 15463,
+            "log": "build/test-browser/os-minimal.mjs.log"
+          },
+          {
+            "file": "os-mobile2x.mjs",
+            "status": "pass",
+            "ms": 6419,
+            "log": "build/test-browser/os-mobile2x.mjs.log"
+          },
+          {
+            "file": "os-netbridge-https.mjs",
+            "status": "pass",
+            "ms": 508,
+            "log": "build/test-browser/os-netbridge-https.mjs.log"
+          },
+          {
+            "file": "os-null-trap.mjs",
+            "status": "pass",
+            "ms": 3216,
+            "log": "build/test-browser/os-null-trap.mjs.log"
+          },
+          {
+            "file": "os-objc-exceptions.mjs",
+            "status": "pass",
+            "ms": 50892,
+            "log": "build/test-browser/os-objc-exceptions.mjs.log"
+          },
+          {
+            "file": "os-objc.mjs",
+            "status": "pass",
+            "ms": 11743,
+            "log": "build/test-browser/os-objc.mjs.log"
+          },
+          {
+            "file": "os-osk.mjs",
+            "status": "pass",
+            "ms": 92479,
+            "log": "build/test-browser/os-osk.mjs.log"
+          },
+          {
+            "file": "os-overview.mjs",
+            "status": "fail",
+            "ms": 204811,
+            "log": "build/test-browser/os-overview.mjs.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "os-paint.mjs",
+            "status": "pass",
+            "ms": 3227,
+            "log": "build/test-browser/os-paint.mjs.log"
+          },
+          {
+            "file": "os-paste-mac.mjs",
+            "status": "fail",
+            "ms": 37873,
+            "log": "build/test-browser/os-paste-mac.mjs.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "os-pollball.mjs",
+            "status": "pass",
+            "ms": 7539,
+            "log": "build/test-browser/os-pollball.mjs.log"
+          },
+          {
+            "file": "os-present.mjs",
+            "status": "pass",
+            "ms": 9477,
+            "log": "build/test-browser/os-present.mjs.log"
+          },
+          {
+            "file": "os-quake.mjs",
+            "status": "pass",
+            "ms": 11238,
+            "log": "build/test-browser/os-quake.mjs.log"
+          },
+          {
+            "file": "os-recycle.mjs",
+            "status": "pass",
+            "ms": 50666,
+            "log": "build/test-browser/os-recycle.mjs.log"
+          },
+          {
+            "file": "os-rendertarget.mjs",
+            "status": "pass",
+            "ms": 6292,
+            "log": "build/test-browser/os-rendertarget.mjs.log"
+          },
+          {
+            "file": "os-rust.mjs",
+            "status": "pass",
+            "ms": 5109,
+            "log": "build/test-browser/os-rust.mjs.log"
+          },
+          {
+            "file": "os-sameboy.mjs",
+            "status": "fail",
+            "ms": 92854,
+            "log": "build/test-browser/os-sameboy.mjs.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "os-saver.mjs",
+            "status": "pass",
+            "ms": 15574,
+            "log": "build/test-browser/os-saver.mjs.log"
+          },
+          {
+            "file": "os-scale.mjs",
+            "status": "pass",
+            "ms": 3597,
+            "log": "build/test-browser/os-scale.mjs.log"
+          },
+          {
+            "file": "os-screen.mjs",
+            "status": "pass",
+            "ms": 4495,
+            "log": "build/test-browser/os-screen.mjs.log"
+          },
+          {
+            "file": "os-sedit.mjs",
+            "status": "pass",
+            "ms": 3131,
+            "log": "build/test-browser/os-sedit.mjs.log"
+          },
+          {
+            "file": "os-shell.mjs",
+            "status": "fail",
+            "ms": 105798,
+            "log": "build/test-browser/os-shell.mjs.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "os-small.mjs",
+            "status": "pass",
+            "ms": 6213,
+            "log": "build/test-browser/os-small.mjs.log"
+          },
+          {
+            "file": "os-snap.mjs",
+            "status": "pass",
+            "ms": 4230,
+            "log": "build/test-browser/os-snap.mjs.log"
+          },
+          {
+            "file": "os-sounds.mjs",
+            "status": "pass",
+            "ms": 10876,
+            "log": "build/test-browser/os-sounds.mjs.log"
+          },
+          {
+            "file": "os-spawn-build.mjs",
+            "status": "pass",
+            "ms": 10547,
+            "log": "build/test-browser/os-spawn-build.mjs.log"
+          },
+          {
+            "file": "os-spawntrace.mjs",
+            "status": "pass",
+            "ms": 3250,
+            "log": "build/test-browser/os-spawntrace.mjs.log"
+          },
+          {
+            "file": "os-term.mjs",
+            "status": "pass",
+            "ms": 11952,
+            "log": "build/test-browser/os-term.mjs.log"
+          },
+          {
+            "file": "os-touch.mjs",
+            "status": "fail",
+            "ms": 57832,
+            "log": "build/test-browser/os-touch.mjs.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "os-ui-lifecycle.mjs",
+            "status": "pass",
+            "ms": 5538,
+            "log": "build/test-browser/os-ui-lifecycle.mjs.log"
+          },
+          {
+            "file": "os-undo.mjs",
+            "status": "fail",
+            "ms": 19396,
+            "log": "build/test-browser/os-undo.mjs.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "os-user32.mjs",
+            "status": "pass",
+            "ms": 7816,
+            "log": "build/test-browser/os-user32.mjs.log"
+          },
+          {
+            "file": "os-vsync.mjs",
+            "status": "pass",
+            "ms": 6436,
+            "log": "build/test-browser/os-vsync.mjs.log"
+          },
+          {
+            "file": "os-vt.mjs",
+            "status": "pass",
+            "ms": 5061,
+            "log": "build/test-browser/os-vt.mjs.log"
+          },
+          {
+            "file": "os-vt1mobile.mjs",
+            "status": "pass",
+            "ms": 33012,
+            "log": "build/test-browser/os-vt1mobile.mjs.log"
+          },
+          {
+            "file": "os-vt2zoom.mjs",
+            "status": "pass",
+            "ms": 4680,
+            "log": "build/test-browser/os-vt2zoom.mjs.log"
+          },
+          {
+            "file": "os-warmpool.mjs",
+            "status": "pass",
+            "ms": 18117,
+            "log": "build/test-browser/os-warmpool.mjs.log"
+          },
+          {
+            "file": "os-wheel.mjs",
+            "status": "fail",
+            "ms": 70589,
+            "log": "build/test-browser/os-wheel.mjs.log",
+            "code": 1,
+            "signal": null
+          },
+          {
+            "file": "os-winmine.mjs",
+            "status": "pass",
+            "ms": 6158,
+            "log": "build/test-browser/os-winmine.mjs.log"
+          },
+          {
+            "file": "os-wm.mjs",
+            "status": "pass",
+            "ms": 7132,
+            "log": "build/test-browser/os-wm.mjs.log"
+          }
+        ],
+        "evidence": {
+          "expected": 75,
+          "fresh": 75,
+          "resumedExistenceOnly": 0
+        }
+      }
+    }
+  }
+}

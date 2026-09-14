@@ -1,0 +1,158 @@
+{
+  "suite": "kernel suite",
+  "startedAt": "2026-09-14T11:38:29.687Z",
+  "node": "v25.8.2",
+  "jobs": 6,
+  "repeat": 3,
+  "underLoad": 10,
+  "done": true,
+  "elapsedMs": 281363,
+  "filter": "wm_service_e2e,term_e2e,os_apps_e2e,comp_park_e2e",
+  "files": {
+    "total": 210,
+    "selected": 4,
+    "executed": 4,
+    "resumed": 0,
+    "carried": 0,
+    "recorded": 4
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-14T11:38:29.687Z",
+      "filter": "wm_service_e2e,term_e2e,os_apps_e2e,comp_park_e2e",
+      "total": 210,
+      "selected": 4,
+      "executed": 4,
+      "resumed": 0,
+      "jobs": 6,
+      "repeat": 3,
+      "underLoad": 10,
+      "done": true,
+      "elapsedMs": 281363
+    }
+  ],
+  "results": [
+    {
+      "file": "test_wm_service_e2e.js",
+      "status": "pass",
+      "ms": 74419,
+      "log": "build/test-kernel/test_wm_service_e2e.js.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "test_wm_service_e2e.js",
+      "status": "pass",
+      "ms": 74433,
+      "log": "build/test-kernel/test_wm_service_e2e.js.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "test_wm_service_e2e.js",
+      "status": "pass",
+      "ms": 74212,
+      "log": "build/test-kernel/test_wm_service_e2e.js.rep3.log",
+      "repeatIdx": 3
+    },
+    {
+      "file": "test_os_apps_e2e.js",
+      "status": "pass",
+      "ms": 19277,
+      "log": "build/test-kernel/test_os_apps_e2e.js.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "test_os_apps_e2e.js",
+      "status": "pass",
+      "ms": 19324,
+      "log": "build/test-kernel/test_os_apps_e2e.js.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "test_term_e2e.js",
+      "status": "pass",
+      "ms": 269902,
+      "log": "build/test-kernel/test_term_e2e.js.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "test_term_e2e.js",
+      "status": "pass",
+      "ms": 269904,
+      "log": "build/test-kernel/test_term_e2e.js.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "test_term_e2e.js",
+      "status": "pass",
+      "ms": 270072,
+      "log": "build/test-kernel/test_term_e2e.js.rep3.log",
+      "repeatIdx": 3
+    },
+    {
+      "file": "test_comp_park_e2e.js",
+      "status": "pass",
+      "ms": 2609,
+      "log": "build/test-kernel/test_comp_park_e2e.js.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "test_comp_park_e2e.js",
+      "status": "pass",
+      "ms": 2655,
+      "log": "build/test-kernel/test_comp_park_e2e.js.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "test_comp_park_e2e.js",
+      "status": "pass",
+      "ms": 2571,
+      "log": "build/test-kernel/test_comp_park_e2e.js.rep3.log",
+      "repeatIdx": 3
+    },
+    {
+      "file": "test_os_apps_e2e.js",
+      "status": "pass",
+      "ms": 19688,
+      "log": "build/test-kernel/test_os_apps_e2e.js.rep3.log",
+      "repeatIdx": 3
+    }
+  ],
+  "flake": [
+    {
+      "file": "test_wm_service_e2e.js",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    },
+    {
+      "file": "test_os_apps_e2e.js",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    },
+    {
+      "file": "test_term_e2e.js",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    },
+    {
+      "file": "test_comp_park_e2e.js",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    }
+  ],
+  "evidence": {
+    "expected": 4,
+    "fresh": 4,
+    "resumedExistenceOnly": 0
+  },
+  "sibling": {
+    "repo": "gucos-packages",
+    "status": "ok",
+    "root": "/Users/jku/git/gucos-packages",
+    "via": "main-clone sibling",
+    "members": 2
+  }
+}

@@ -538,6 +538,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
         ci.callback = on_adapter; ci.userdata1 = NULL; ci.userdata2 = NULL;
         wgpuInstanceRequestAdapter(instance, &opts, ci);
     }
+    ShowWindow(hwnd, SW_SHOWNORMAL);
     return SDL_APP_CONTINUE;         /* the driver paces SDL_AppIterate */
 }
 

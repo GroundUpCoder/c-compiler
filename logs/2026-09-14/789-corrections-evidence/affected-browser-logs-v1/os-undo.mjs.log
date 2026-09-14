@@ -1,0 +1,9 @@
+  ok   boots to ready
+  ok   hostkeys=mac seeds /etc/keys with scheme=macos (the auto-detect cell)
+  ok   notepad listed
+  ok   fresh notepad: Edit popup lists Undo grayed (no record yet)
+  ok   after an edit: Edit popup lists Undo enabled (EM_CANUNDO armed)
+  ok   Cmd+Z (macos-scheme KA_UNDO) undoes the last insert
+  ok   a second Cmd+Z re-applies (the undo/undo toggle)
+
+os undo mac-cell (browser): PASS

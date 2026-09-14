@@ -1,0 +1,24 @@
+  ok   no-GPU path really ran (adapter unavailable on stderr)
+  ok   gpubox survived it: window + menu + pump lived to quit (QUIT-OK)
+  ok   top-level is the gpubox class window
+  ok   File popup in the tree
+  ok   Options popup in the tree
+  ok   Open Scene... present and grayed (no scene format — honest disable)
+  ok   Quit item present
+  ok   Spin starts CHECKED (spinning by default)
+  ok   Wireframe starts unchecked
+  ok   gpubox window listed at 100,100
+  ok   menubar strip is an anchored child at the window origin
+  ok   strip spans the window width at MENU_BAR_H
+  ok   bar click opened a real "#32768" popup child
+  ok   popup hangs off the bar (anchored below MENU_BAR_H)
+  ok   screen shot written
+  ok   bar strip composites COLOR_MENU over the GPU window
+  ok   popup child composites COLOR_MENU
+  ok   client plane is black (no-Dawn dead client)
+  ok   Spin unchecked after wmctl click Spin (WM_COMMAND -> CheckMenuItem)
+  ok   gpubox printed its spin-off marker
+  ok   Wireframe checked after wmctl click Wireframe
+  ok   gpubox printed its wireframe-on marker
+
+gpubox menu e2e (no Dawn): PASS

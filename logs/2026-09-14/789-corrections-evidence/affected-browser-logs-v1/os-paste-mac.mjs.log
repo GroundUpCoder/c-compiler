@@ -1,0 +1,13 @@
+  ok   boots to ready
+  ok   browser boot persists /run/host-platform = mac
+  ok   notepad listed
+  ok   ⌘V pastes the paste-event text flavor (clipboard-read NEVER granted)
+  ok   the event posted the slot exactly once (__osClipEvent probe)
+  ok   a second identical paste pastes once more (no double-paste, no drop)
+  ok   the clipSynced memo suppressed a duplicate slot post (__osClipEvent still 1)
+  ok   macos scheme: the Edit popup draws accel Cmd+V (menucore rewrite)
+  ok   stale windows-scheme volume: ⌘V still pastes (the implicit host row)
+  ok   no scheme flip: /etc/keys stays absent
+  ok   no user-config write: ~/.config/keys stays absent
+
+os paste mac-cell (browser): PASS

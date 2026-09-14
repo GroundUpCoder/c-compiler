@@ -675,6 +675,7 @@ int main(int argc, char **argv) {
     GB_set_sample_rate(&gb, AUDIO_RATE);
     GB_apu_set_sample_callback(&gb, sample_callback);
 
+    ShowWindow(hwnd, SW_SHOWNORMAL);
     __setAnimationFrameFunc(frame_callback);
     return 0;
 }

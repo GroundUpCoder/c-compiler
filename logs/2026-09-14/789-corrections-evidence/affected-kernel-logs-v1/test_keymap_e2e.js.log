@@ -1,0 +1,34 @@
+  ok   windows: ^A+^C fill the kernel slot
+  ok   windows: ^V pastes the slot
+  ok   windows: Ctrl+Right word-nav
+  ok   windows: unbound ⌘C drops instead of typing
+  ok   macos: ⌘A+⌘C fill the kernel slot
+  ok   macos: ^C is freed (paste delivers the sentinel, not the selection)
+  ok   macos readline: ^E moves to line end
+  ok   macos readline: ^A + ^K edit the line
+  ok   macos: ⌥Right word-nav
+  ok   macos: ⌘Right = line end
+  ok   macos: ⌘Left = line start
+  ok   macos: ⌘Up = doc start
+  ok   macos: ⌘Down = doc end
+  ok   readline off disarms the rows (live, no restart)
+  ok   live /etc/keys flip reaches a running app within the 1 Hz revalidate
+  ok   macos: fileman ⌘C+⌘V fire the FCONTROL accels (file pasted)
+  ok   macos: Ctrl chords do NOT fire the accels (exactly the two ⌘ copies)
+  ok   macos: term ⌘V pastes (hush executed the line)
+  ok   macos: term ⌘C drops (no stray letter on the command line)
+  ok   windows (live flip): Ctrl+Shift+V pastes again
+  ok   applet: macOS radio writes scheme to the user layer
+  ok   applet: readline checkbox delta-writes (scheme line kept)
+  ok   applet: Windows radio flips the scheme back
+  ok   autodetect: Mac host seeds scheme macos into the admin /etc/keys
+  ok   autodetect: the seeded macos default makes ⌘A/⌘C the EDIT verbs
+  ok   autodetect: the admin /etc/keys seed is still macos (default, not choice)
+  ok   override wins: user ~/.config/keys=windows -> ^A/^C are the verbs
+  ok   override wins: ⌘C is unbound under the windows override (drops, no typed c)
+  ok   windows: Ctrl+Alt+W (the macos chord) closes nothing (negative control)
+  ok   windows: Alt+F4 closes the focused window (grab -> EV_HOTKEY -> CLOSE_REQ)
+  ok   macos: Ctrl+Alt+W closes the focused window
+  ok   macos: Alt+F4 (the windows chord) closes nothing (negative control)
+
+keymap e2e: PASS

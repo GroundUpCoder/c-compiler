@@ -1,0 +1,20 @@
+  ok   boots to ready
+  ok   desktop composites (teal wallpaper + wm taskbar)
+  ok   compositor-stats probe is live
+  ok   settled desktop parks the rAF (parks > 0)
+  ok   parked: zero frames, zero submits, zero app-worker notifies
+  ok   Start menu open repaints (parked -> wake -> submit)
+  ok   re-parks after the transient (menu open/close)
+  ok   winmine window listed
+       [window] winmine 1Hz timer, 3500ms: {"frames":13,"submits":3,"skipped":10,"parks":4,"wakes":3,"notifies":39}
+  ok   WM_TIMER repaints reach a parked compositor (doorbell-on-present)
+  ok   ...re-parking between ticks (wake, submit, park each second)
+  ok   ...without free-running
+       [window] winbox churn, 1200ms: {"frames":104,"submits":104,"skipped":0,"parks":0,"wakes":0,"notifies":312,"submitRate":1}
+  ok   continuously-presenting app keeps submits flowing (no dropped frames)
+  ok   ...pinning the clock armed (a churning screen never parks)
+  ok   frozen clock parks an ANIMATING app (honest pause: all counters flat)
+  ok   unfreeze resumes the frame race
+  ok   parks again after the app exits
+
+os compositor (browser): PASS

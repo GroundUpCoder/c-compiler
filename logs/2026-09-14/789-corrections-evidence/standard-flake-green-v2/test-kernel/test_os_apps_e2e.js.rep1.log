@@ -1,0 +1,28 @@
+  ok   optional missing bin entry: seeding completes
+  ok     ...later entries still seeded
+  ok     ...the missing path is absent, not empty
+  ok   required missing bin entry still fails the boot
+  ok   doom1.wad present via the folded doom package (4196020 bytes)
+  ok   doom opens a WM-placed window titled "DOOM Shareware"
+  ok   doom window is 640x400 (native res — 0024 compositor scaling, no CPU pre-scale)
+  ok   gameboy opens a window titled "Peanut-GB" (built-in test ROM; local ROM absent)
+  ok   gameboy window is 480x432 (160x144 tripled)
+  ok   pak0.pak folded with the quake package (18689235 bytes)
+  ok   quake opens a window titled "Quake"
+  ok   quake window is 320x200 (native software renderer)
+  ok   quake requested relative mouse (r flag in wmctl list)
+  ok   wmctl relmove injects over the socket
+  ok   wmctl resize on fixed-res doom is refused (todos/0021)
+  ok   doom is not resizable (no R flag in wmctl list)
+  ok   wmctl shot wrote all three surface PNGs
+  ok   doom shot parses as PNG at full client size 640x400
+  ok   doom frame is a real render (rich color histogram, not a fill)
+  ok   gameboy shot parses as PNG at full client size 480x432
+  ok   gameboy frame has the LCD palette (>=2 colors, not a fill)
+  ok   quake shot parses as PNG at full client size 320x200 (todos/0018)
+  ok   quake frame is a real render (rich color histogram, not a fill)
+  ok   snake draws its board through the kernel tty
+  ok   snake reaches GAME OVER on q
+  ok   snake exits 0; shell survives
+
+os apps e2e: PASS

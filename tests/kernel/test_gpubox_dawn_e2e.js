@@ -54,7 +54,7 @@ const CLEAR = [Math.round(255 * 0.08), Math.round(255 * 0.08), Math.round(255 * 
 function sessionRender() {
   const script = [
     'gpubox -f 0 &',
-    'wmctl wait win gpubox',                         // window spawn (0155)
+    'wmctl wait visible gpubox',                         // window spawn (0155)
     'echo ==list1',
     'wmctl list',
     'SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//")',
@@ -72,7 +72,7 @@ function sessionRender() {
     'echo ==list2',
     'wmctl list',
     'gpubox -f 45 &',
-    'wmctl wait win gpubox',                         // window spawn (0155)
+    'wmctl wait visible gpubox',                         // window spawn (0155)
     'SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//")',
     'wmctl wait seq $SID 1',                         // first Dawn frame presented (0155)
     'wmctl shot $SID /root/g45.png && echo shot45-ok',

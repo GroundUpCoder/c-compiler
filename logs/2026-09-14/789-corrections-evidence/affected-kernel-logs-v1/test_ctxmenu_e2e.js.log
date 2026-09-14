@@ -1,0 +1,50 @@
+  ok   right-click empty desktop opens the menu (h 194 at 400,300, borderless)
+  ok   the menu rides the TOP layer like the bar
+  ok   menu shot written
+  ok   Esc dismisses it
+  ok   focus leaving dismisses it (outside-click rule)
+  ok   clicking New cascades the flyout (h 64 at root-right - 3, row-0 top)
+  ok   flyout FOLDER click creates /root/Desktop/New Folder
+  ok   selection dismissed the whole popup
+  ok   keyboard Down+Right cascades the New flyout
+  ok   Left backs out of the flyout (root stays)
+  ok   keyboard Enter on TEXT FILE creates New File.txt and dismisses
+  ok   Sort by cascades its flyout (h 34, row-1 aligned)
+  ok   Sort by Name forgets the .icons placements
+  ok   REFRESH selection dismisses the menu
+  ok   desktop shot after refresh written
+  ok   right-click while the Start menu is open: ctxmenu up, startmenu gone
+  ok   Start toggle while the ctxmenu is open: startmenu up, ctxmenu gone
+  ok   right-click an icon opens the Open/Cut/Copy/Download/Delete/Rename menu (h 194, 0103/0398)
+  ok   icon shot written
+  ok   OPEN runs the launcher through the activate path (winbox +1)
+  ok   DISPLAY spawns ctlpanel with the Display applet open (argv path)
+  ok   EDIT right-click raises the popup in the agent tree
+  ok   Undo is grayed (fresh EDIT: no undo record yet, 0135)
+  ok   Cut/Copy grayed with no selection
+  ok   Select All grayed on an empty field
+  ok   Paste is enabled (clipboard holds text)
+  ok   agent click "Paste" pastes the 0090 clipboard slot
+  ok   reopened menu re-gates: Select All now enabled (field has text)
+  ok   reopened menu re-gates: Undo now enabled (the paste armed the record, 0135)
+  ok   right-click the Start strip raises nothing (reserved)
+  ok   right-click button 0 opens the window menu (h 134, above the bar)
+  ok   grayed RESTORE click: menu stays open, window untouched
+  ok   MINIMIZE minimizes and dismisses
+  ok   RESTORE restores + focuses (the 0014 rule)
+  ok   MAXIMIZE fills the work area
+  ok   RESTORE from maximized returns the saved geometry
+  ok   taskbar motion with the window menu open raises no preview/tooltip
+  ok   ...and the window menu survives that motion
+  ok   a row of the survived menu still fires (MINIMIZE)
+  ok   right-clicking over a live preview drops it, stranding nothing
+  ok   opening the Start menu likewise drops a live preview
+  ok   CLOSE request-closes the window (button 0 winbox gone)
+  ok   menu face is the Win95 gray with a raised edge
+  ok   row 0 (New) has dark label text
+  ok   separator groove present (dark over light)
+  ok   sub rows carry the flyout arrow
+  ok   right-click selected the icon alone (alauncher navy, calc teal)
+  ok   zzz.txt icon tile present right after REFRESH
+
+ctxmenu e2e: PASS

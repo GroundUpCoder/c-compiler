@@ -1,0 +1,23 @@
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 51.8 GB free
+[fixture] os/os-system.img fresh (v293)
+[33m⚠ browser os sweep: --filter=os-ui-lifecycle.mjs,os-clipboard.mjs,os-shell.mjs selected 3 of 75 files — this run covers PART of the suite.[0m
+--- browser os sweep (9 runs = 3×3 repeat, UNDER LOAD ×10, 1 jobs) ---
+ok   os-shell.mjs #1  158.8s
+ok   os-shell.mjs #2  185.6s
+ok   os-shell.mjs #3  187.4s
+ok   os-clipboard.mjs #1  9.7s
+ok   os-clipboard.mjs #2  10.3s
+ok   os-clipboard.mjs #3  9.9s
+ok   os-ui-lifecycle.mjs #1  7.4s
+ok   os-ui-lifecycle.mjs #2  8.9s
+ok   os-ui-lifecycle.mjs #3  11.3s
+
+flake report (3× each, under load ×10):
+  [32mstable[0m os-shell.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-clipboard.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-ui-lifecycle.mjs  3/3 passed  (flake 0%)
+
+  [32mall 3 file(s) stable across 3 runs.[0m
+evidence: 3/3 selected members have logs post-dating the run start
+
+browser os sweep: 9 passed, 0 failed, 8 carried from earlier run(s)  (589.2s)  [3/75 selected, 11/75 recorded]  summary: build/test-browser/summary.json

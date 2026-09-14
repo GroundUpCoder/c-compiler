@@ -1,0 +1,19 @@
+  ok   boots to ready
+  ok   term window composited (black client)
+  ok   focused title bar navy
+  ok   freetype text rendered (banner region has glyph pixels)
+  ok   typed command echoed + rendered (bright pixels grew)
+  ok   unicode echo rendered on VT2 (glyph pixels grew)
+  ok   typed é/€/😀 reached the app as correct UTF-8 (VT1 cat round-trip)
+  ok   wmctl list sees the term window
+  ok   menu bar strip composited (BTNFACE band over the client)
+  ok   bar click opened the engine dropdown (anchored child "#32768")
+  ok   dropdown actually composited (menu face at its live geometry)
+  ok   Esc dismissed the dropdown
+  ok   Esc un-composited the dropdown (client pixels back at its spot)
+  ok   drag-resize shrank the window (desktop beyond new edge)
+  ok   reflowed terminal still renders text
+  ok   close box ended the session; desktop restored
+  ok   shell alive after the terminal session
+
+os term (browser): PASS

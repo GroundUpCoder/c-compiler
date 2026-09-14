@@ -1,0 +1,18 @@
+  ok   gpubox comes up under Dawn (device + surface configured)
+  ok   gpubox opens a WM-placed 256x256 window
+  ok   both poses shot to PNG
+  ok   wmctl resize renegotiates: window is 320x200 after the ack
+  ok   resized pose shot to PNG
+  ok   wmctl close quits it cleanly — no ghost window, no Dawn abort (pose 0)
+  ok   ...and again at pose 45
+  ok   pose-0 shot parses as PNG at full client size 256x256
+  ok   pose-0 center is the lit red +Z face (~208,28,28, tol 30)
+  ok   pose-0 corners are the clear color (20,20,64, tol 12)
+  ok   resized shot parses as PNG at the NEW client size 320x200
+  ok   resized center is still the lit red +Z face (re-rendered, not scaled)
+  ok   resized corners are the clear color (depth/color targets match)
+  ok   pose-45 shot parses as PNG 256x256
+  ok   pose-45 shows a rotated cube (>=3 flat-lit colors: faces + clear)
+  ok   poses differ (the rotation actually rotated)
+
+gpubox dawn e2e: PASS

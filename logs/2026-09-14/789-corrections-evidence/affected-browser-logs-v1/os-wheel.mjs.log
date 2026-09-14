@@ -1,0 +1,25 @@
+  ok   boots to ready
+  ok   term window composited
+  ok   term: marker band rendered mid-screen
+  ok   term: one sub-notch event does not scroll
+  ok   term: second sub-notch event scrolls one line (sum crossed)
+  ok   term: the 0.5-line remainder carries into the third event
+  ok   term: opposite sign cancels the remainder (no move)
+  ok   term: accumulated down-motion scrolls one line back
+  ok   term session closed (desktop teal back)
+  ok   fileman geometry derived
+  ok   fileman: selected row navy strip rendered
+  ok   fileman: one sub-notch event does not scroll
+  ok   fileman: second sub-notch event scrolls one row (sum crossed)
+  ok   fileman: the remainder carries into the third event
+  ok   fileman: opposite sign cancels the remainder (no move)
+  ok   fileman: accumulated up-motion scrolls one row back
+  ok   notepad geometry derived
+  ok   notepad: marker band rendered below 5 seq lines
+  ok   EDIT control: one sub-notch event does not scroll
+  ok   EDIT control: second sub-notch event scrolls one line (sum crossed)
+  ok   EDIT control: the remainder carries into the third event
+  ok   EDIT control: fourth event completes exactly (rem 0)
+  ok   EDIT control: an exactly-consumed remainder does not linger
+
+os wheel (browser): PASS

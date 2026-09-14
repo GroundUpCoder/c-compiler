@@ -1,0 +1,13 @@
+  ok   mac host: /run/host-platform records the verdict
+  ok   stale windows-scheme volume: ⌘V pastes (the implicit host row)
+  ok   stale windows-scheme volume: ^V still pastes (native row intact)
+  ok   no scheme flip: /etc/keys stays absent
+  ok   no user config write: ~/.config/keys stays absent
+  ok   windows scheme: the drawn menu accel is Ctrl+V (tree accel field)
+  ok   non-mac host: /run/host-platform records other
+  ok   non-mac host: ⌘V drops (no implicit row, no paste, no typed v)
+  ok   macos scheme: the drawn menu accel is Cmd+V (tree accel field)
+  ok   applet lists the macos-scheme chords (Cmd+V)
+  ok   a Windows radio click flips the listing live (Ctrl+Shift+V shown)
+
+hostpaste e2e: PASS

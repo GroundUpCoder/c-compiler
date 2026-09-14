@@ -1,0 +1,154 @@
+
+[1m━━━ flake gate: kernel leg ━━━[0m
+$ node tests/kernel/run.js --filter=wm_service_e2e,term_e2e,os_apps_e2e,comp_park_e2e --repeat=3 --under-load
+
+registry: 208 declared + 0 excluded == 208 on disk (tests/kernel/run.js)
+registry: 2 declared + 0 excluded == 2 on disk (gucos-packages/tests/manifest.json)
+sibling tests: gucos-packages at /Users/jku/git/gucos-packages (via main-clone sibling) — 2 member(s) join the suite
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 51.8 GB free
+[fixture] os/os-system.img fresh (v293)
+[33m⚠ kernel suite: --filter=wm_service_e2e,term_e2e,os_apps_e2e,comp_park_e2e selected 4 of 210 files — this run covers PART of the suite.[0m
+--- kernel suite (12 runs = 4×3 repeat, UNDER LOAD ×10, 6 jobs) ---
+FAIL test_wm_service_e2e.js #1  78.2s  → build/test-kernel/test_wm_service_e2e.js.rep1.log
+     |   ok   datepop rides the TOP layer
+     |   ok   datepop is shot-able (pixels live)
+     |   ok   a second clock-cell click toggles the tooltip off
+     |   ok   wmctl sysmenu succeeds on the focused window
+     |   ok   sysmenu opens the popup (anchored at the window top-left)
+     |   ok   picking Move keeps the popup up as the key grabber
+     |   ok   Move + arrows relocate the window (+32 x, +16 y)
+     |   ok   Enter commits the move and dismisses the popup
+     |   ok   mid-mode arrows nudge (-24 x) before Esc
+     |   ok   Esc reverts to the pre-mode position and dismisses
+     |   ok   Size grows the resizable winbox (+32 w, +32 h)
+     |   ok   Size is disabled on the fixed-size fixbox (gray row: click + arrows are no-ops)
+     |   ok   Close via the sysmenu tears the window down
+     |   ok   baseline: aaa + aab seeded on the desktop
+     |   ok   F2 + typed name + Enter renames the icon (aaa -> zzz)
+     |   ok   rename onto an existing name keeps both files (EEXIST)
+     |   ok   Esc leaves the file untouched (no partial "aabz")
+     |   ok   icon-menu Rename renames via the inline editor (aab -> mmm)
+     |   ok   #676: keysym-omitted injection derives from the scancode — the all-derived rename flow lands (aaa -> kkk)
+     |   ok   both launchers are present on the desktop (long name not lost)
+     |   ok   short spaced Desktop name launches on dblclick (winbox +1)
+     |   ok   36-char spaced Desktop name launches on dblclick (winbox +1) — no name[32] truncation
+     | 
+     | wm service e2e: 1 FAILED
+     | 
+FAIL test_wm_service_e2e.js #2  75.1s  → build/test-kernel/test_wm_service_e2e.js.rep2.log
+     |   ok   datepop rides the TOP layer
+     |   ok   datepop is shot-able (pixels live)
+     |   ok   a second clock-cell click toggles the tooltip off
+     |   ok   wmctl sysmenu succeeds on the focused window
+     |   ok   sysmenu opens the popup (anchored at the window top-left)
+     |   ok   picking Move keeps the popup up as the key grabber
+     |   ok   Move + arrows relocate the window (+32 x, +16 y)
+     |   ok   Enter commits the move and dismisses the popup
+     |   ok   mid-mode arrows nudge (-24 x) before Esc
+     |   ok   Esc reverts to the pre-mode position and dismisses
+     |   ok   Size grows the resizable winbox (+32 w, +32 h)
+     |   ok   Size is disabled on the fixed-size fixbox (gray row: click + arrows are no-ops)
+     |   ok   Close via the sysmenu tears the window down
+     |   ok   baseline: aaa + aab seeded on the desktop
+     |   ok   F2 + typed name + Enter renames the icon (aaa -> zzz)
+     |   ok   rename onto an existing name keeps both files (EEXIST)
+     |   ok   Esc leaves the file untouched (no partial "aabz")
+     |   ok   icon-menu Rename renames via the inline editor (aab -> mmm)
+     |   ok   #676: keysym-omitted injection derives from the scancode — the all-derived rename flow lands (aaa -> kkk)
+     |   ok   both launchers are present on the desktop (long name not lost)
+     |   ok   short spaced Desktop name launches on dblclick (winbox +1)
+     |   ok   36-char spaced Desktop name launches on dblclick (winbox +1) — no name[32] truncation
+     | 
+     | wm service e2e: 1 FAILED
+     | 
+FAIL test_wm_service_e2e.js #3  73.2s  → build/test-kernel/test_wm_service_e2e.js.rep3.log
+     |   ok   datepop rides the TOP layer
+     |   ok   datepop is shot-able (pixels live)
+     |   ok   a second clock-cell click toggles the tooltip off
+     |   ok   wmctl sysmenu succeeds on the focused window
+     |   ok   sysmenu opens the popup (anchored at the window top-left)
+     |   ok   picking Move keeps the popup up as the key grabber
+     |   ok   Move + arrows relocate the window (+32 x, +16 y)
+     |   ok   Enter commits the move and dismisses the popup
+     |   ok   mid-mode arrows nudge (-24 x) before Esc
+     |   ok   Esc reverts to the pre-mode position and dismisses
+     |   ok   Size grows the resizable winbox (+32 w, +32 h)
+     |   ok   Size is disabled on the fixed-size fixbox (gray row: click + arrows are no-ops)
+     |   ok   Close via the sysmenu tears the window down
+     |   ok   baseline: aaa + aab seeded on the desktop
+     |   ok   F2 + typed name + Enter renames the icon (aaa -> zzz)
+     |   ok   rename onto an existing name keeps both files (EEXIST)
+     |   ok   Esc leaves the file untouched (no partial "aabz")
+     |   ok   icon-menu Rename renames via the inline editor (aab -> mmm)
+     |   ok   #676: keysym-omitted injection derives from the scancode — the all-derived rename flow lands (aaa -> kkk)
+     |   ok   both launchers are present on the desktop (long name not lost)
+     |   ok   short spaced Desktop name launches on dblclick (winbox +1)
+     |   ok   36-char spaced Desktop name launches on dblclick (winbox +1) — no name[32] truncation
+     | 
+     | wm service e2e: 1 FAILED
+     | 
+ok   test_os_apps_e2e.js #1  19.5s
+ok   test_os_apps_e2e.js #2  19.4s
+ok   test_term_e2e.js #1  274.0s
+ok   test_term_e2e.js #3  274.5s
+ok   test_term_e2e.js #2  274.7s
+ok   test_comp_park_e2e.js #1  4.0s
+ok   test_comp_park_e2e.js #2  3.8s
+ok   test_comp_park_e2e.js #3  3.8s
+ok   test_os_apps_e2e.js #3  20.8s
+
+flake report (3× each, under load ×10):
+  [31mFLAKY [0m test_wm_service_e2e.js  0/3 passed  (flake 100%)
+  [32mstable[0m test_os_apps_e2e.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_term_e2e.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_comp_park_e2e.js  3/3 passed  (flake 0%)
+
+  [31m1 flaky file(s) — a timing/sleep regression is live.[0m
+evidence: 4/4 selected members have logs post-dating the run start
+
+kernel suite: 9 passed, 3 failed, 24 carried from earlier run(s)  (286.2s)  [4/210 selected, 20/210 recorded]  summary: build/test-kernel/summary.json
+
+[1m━━━ flake gate: browser leg ━━━[0m
+$ node tests/browser/os-sweep.mjs --filter=os-doom,os-term,os-compositor,os-wm --repeat=3 --under-load
+
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 51.7 GB free
+[fixture] os/os-system.img fresh (v293)
+[33m⚠ browser os sweep: --filter=os-doom,os-term,os-compositor,os-wm selected 6 of 75 files — this run covers PART of the suite.[0m
+--- browser os sweep (18 runs = 6×3 repeat, UNDER LOAD ×10, 1 jobs) ---
+ok   os-compositor.mjs #1  24.5s
+ok   os-compositor.mjs #2  24.2s
+ok   os-compositor.mjs #3  23.8s
+ok   os-doom.mjs #1  15.1s
+ok   os-doom.mjs #2  14.6s
+ok   os-doom.mjs #3  15.9s
+ok   os-doompage-motion.mjs #1  21.6s
+ok   os-doompage-motion.mjs #2  13.7s
+ok   os-doompage-motion.mjs #3  14.6s
+ok   os-doompage-renders.mjs #1  4.0s
+ok   os-doompage-renders.mjs #2  5.3s
+ok   os-doompage-renders.mjs #3  5.5s
+ok   os-term.mjs #1  13.6s
+ok   os-term.mjs #2  13.7s
+ok   os-term.mjs #3  14.0s
+ok   os-wm.mjs #1  56.1s
+ok   os-wm.mjs #2  68.5s
+ok   os-wm.mjs #3  36.8s
+
+flake report (3× each, under load ×10):
+  [32mstable[0m os-compositor.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-doom.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-doompage-motion.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-doompage-renders.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-term.mjs  3/3 passed  (flake 0%)
+  [32mstable[0m os-wm.mjs  3/3 passed  (flake 0%)
+
+  [32mall 6 file(s) stable across 3 runs.[0m
+evidence: 6/6 selected members have logs post-dating the run start
+
+browser os sweep: 18 passed, 0 failed, 17 carried from earlier run(s)  (385.3s)  [6/75 selected, 17/75 recorded]  summary: build/test-browser/summary.json
+
+[1m━━━ flake gate summary (3× each, under load) ━━━[0m
+  [31mFAIL[0m kernel  
+  [32mok  [0m browser 
+
+  [31mFLAKE GATE FAILED[0m  (672.3s)

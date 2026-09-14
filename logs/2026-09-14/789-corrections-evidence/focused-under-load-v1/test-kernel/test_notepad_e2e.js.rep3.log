@@ -1,0 +1,37 @@
+  ok   window titled "Untitled - Notepad"
+  ok   window is resizable (R flag)
+  ok   menu bar attached (File popup from the res pack)
+  ok   EDIT control present with focus
+  ok   status bar parked at the client bottom with parts
+  ok   Find grayed while the document is empty
+  ok   status-bar shot decodes as a valid PNG
+  ok   status-bar height derives from the stock font cell (0229)
+  ok   no text ink on the well bottom border row (part 1)
+  ok   descenders survive: EOLN "(" reaches >=3 rows below the UTF-8 caps
+  ok   status-bar middle pane clips at its cell (no bleed into UTF-8 pane)
+  ok   status-bar UTF-8 pane still renders its own text
+  ok   Save As opens the comdlg32 file dialog (listbox of /root)
+  ok   owner is disabled while the dialog is up (modal)
+  ok   Save wrote the file
+  ok   Save As is fully keyboard-driven (type name + Enter default) (0104)
+  ok   title tracks the saved name
+  ok   Open loaded readme.txt into the EDIT (LF, \r stripped)
+  ok   status bar shows the detected EOLN (Unix LF)
+  ok   Replace All rewrote both matches (FINDREPLACE protocol)
+  ok   Select All + Copy filled the clipboard slot
+  ok   CRLF file loads with every \r stripped (EM_SETHANDLE path)
+  ok   save keeps LF: no \r written back to the filesystem
+  ok   WM_SETTEXT strips \r\n and lone \r (agent settext path)
+  ok   EDIT scrollbar shot decodes as a valid PNG
+  ok   WS_VSCROLL draws the right-edge scrollbar channel
+  ok   WS_HSCROLL draws the bottom-edge scrollbar
+  ok   channel click below the thumb pages down (caret probe on the top row)
+  ok   thumb drag scrolls to the bottom of the document
+  ok   wheel scrolls 3 lines per notch (2 notches up = -6 lines)
+  ok   wheel down scrolls back (+3 lines)
+  ok   New Window spawned a second notepad (ShellExecuteW)
+  ok   #740: dirty-close confirmation is transient
+  ok   #740: dirty-close leaves exactly one taskbar-eligible application
+  ok   close on a modified doc asks Yes/No/Cancel (MB_YESNOCANCEL)
+  ok   No discards: notepad exits, no ghost windows
+ALL OK

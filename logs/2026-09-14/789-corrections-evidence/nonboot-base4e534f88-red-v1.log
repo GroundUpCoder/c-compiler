@@ -1,0 +1,24 @@
+FAIL placement unchanged geometry shows without activation
+FAIL placement already visible requests activation
+FAIL placement hides
+FAIL placement restores without activation
+FAIL invalid placement length refuses before effects
+FAIL explicitly focused hidden child receives key
+ok visible focused child receives key
+ok disabled focus target rejects key
+ok hidden top rejects key
+ok disabled ancestor rejects key
+USER32-LIFECYCLE-POLICY failures=6
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+1 !== 0
+
+    at /Users/jku/git/c-compiler-ui-lifecycle-fix/tests/kernel/test_user32_lifecycle_policy.js:29:61
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5) {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 1,
+  expected: 0,
+  operator: 'strictEqual',
+  diff: 'simple'
+}

@@ -1,0 +1,123 @@
+{
+  "sourceCommit": "86968e3339fe1c9339c81b6f4c6b01aebe519978",
+  "manualInteraction": false,
+  "suites": {
+    "test-kernel": {
+      "selected": 16,
+      "executed": 16,
+      "originalFailures": [
+        {
+          "file": "test_sameboy_e2e.js",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "test_notepad_menu_e2e.js",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "test_ctxmenu_e2e.js",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "test_keymap_e2e.js",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "test_hostpaste_e2e.js",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "test_calc_e2e.js",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "test_edit_punct_repro.js",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "test_notepad_e2e.js",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "test_gpubox_menu_e2e.js",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "gucos-packages/test_fontpkg_e2e.js",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "test_symbolfont_e2e.js",
+          "before": "fail",
+          "after": "pass"
+        }
+      ]
+    },
+    "test-browser": {
+      "selected": 11,
+      "executed": 11,
+      "originalFailures": [
+        {
+          "file": "os-clipboard.mjs",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "os-ctxmenu.mjs",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "os-gpubox.mjs",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "os-overview.mjs",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "os-paste-mac.mjs",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "os-sameboy.mjs",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "os-shell.mjs",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "os-touch.mjs",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "os-undo.mjs",
+          "before": "fail",
+          "after": "pass"
+        },
+        {
+          "file": "os-wheel.mjs",
+          "before": "fail",
+          "after": "pass"
+        }
+      ]
+    }
+  }
+}
