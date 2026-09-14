@@ -55,8 +55,32 @@ if (!mode) {
     if (options.reads !== undefined) assert.equal(tableReads, options.reads, 'lookup only at registration');
   }
   function c(source) { return compile(C, {'/tests/capture.c': source}, ['capture.c']).bytes; }
+  function objc(source) {
+    return compile(C, {'/tests/capture.m':
+      '@interface Dummy @end @implementation Dummy @end\n' + source}, ['capture.m']).bytes;
+  }
   (async () => {
     assert.equal(typeof WebAssembly.Suspending === 'function', mode === 'jspi');
+    // Objective-C callbacks need their uncaught-exception boundary, but the
+    // boundary belongs to the function, not to its original mutable table slot.
+    for (const mutateBeforeRegistration of [false, true]) {
+      await run(objc(`
+        __import void observe(int); __import void mutate(void(*)(void),void(*)(void));
+        __import void __sdl_set_animation_frame_func(void(*)(void));
+        int count;
+        void second(void) { observe(2); __sdl_set_animation_frame_func(0); }
+        void first(void) {
+          observe(1);
+          __sdl_set_animation_frame_func(++count == 1 ? first : 0);
+        }
+        int main(void) {
+          ${mutateBeforeRegistration ? 'mutate(first,second);' : ''}
+          __sdl_set_animation_frame_func(first);
+          ${mutateBeforeRegistration ? '' : 'mutate(first,second);'}
+          return 0;
+        }
+      `), mutateBeforeRegistration ? [2] : [1,2]);
+    }
     await run(c(`
       __import void observe(int); __import void mutate(void(*)(void),void(*)(void));
       __import void __sdl_set_animation_frame_func(void(*)(void));
