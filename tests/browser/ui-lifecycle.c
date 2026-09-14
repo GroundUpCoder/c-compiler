@@ -6,18 +6,22 @@
 #include <SDL_popup.h>
 #include <stdio.h>
 #include <string.h>
-static SDL_Window *control,*target,*popup;
-static SDL_Renderer *cr,*tr,*pr;
+static SDL_Window *control,*target,*popup,*helper;
+static SDL_Renderer *cr,*tr,*pr,*hr;
 static const char *driver;
 static int lastFocus=-1, lastViewable=-1, initialized;
 SDL_AppResult SDL_AppInit(void **state,int argc,char **argv) {
     driver=argc>1 && !strcmp(argv[1],"software")?"software":"gucos";
     SDL_Init(SDL_INIT_VIDEO);
+    /* The helper is an ordinary unowned window that stays visible throughout:
+       when the owner group hides (#794) keyboard focus falls to it, so the
+       test's keystrokes keep reaching this process. */
+    helper=SDL_CreateWindow("UI lifecycle helper",120,60,0);
     control=SDL_CreateWindow("UI lifecycle control",280,160,0);
     target=SDL_CreateWindow("UI lifecycle target",220,130,SDL_WINDOW_HIDDEN);
-    if(!control||!target) return SDL_APP_FAILURE;
-    cr=SDL_CreateRenderer(control,driver); tr=SDL_CreateRenderer(target,driver);
-    if(!cr||!tr) return SDL_APP_FAILURE;
+    if(!helper||!control||!target) return SDL_APP_FAILURE;
+    hr=SDL_CreateRenderer(helper,driver); cr=SDL_CreateRenderer(control,driver); tr=SDL_CreateRenderer(target,driver);
+    if(!hr||!cr||!tr) return SDL_APP_FAILURE;
     printf("RENDER-DRIVER %s\n",driver); fflush(stdout);
     return SDL_APP_CONTINUE;
 }
@@ -54,6 +58,7 @@ SDL_AppResult SDL_AppEvent(void *state,SDL_Event *e) {
     return SDL_APP_CONTINUE;
 }
 SDL_AppResult SDL_AppIterate(void *state) {
+    SDL_SetRenderDrawColor(hr,90,90,90,255); SDL_RenderClear(hr); SDL_RenderPresent(hr);
     SDL_SetRenderDrawColor(cr,32,100,180,255); SDL_RenderClear(cr); SDL_RenderPresent(cr);
     SDL_SetRenderDrawColor(tr,211,31,171,255); SDL_RenderClear(tr); SDL_RenderPresent(tr);
     if(popup) { SDL_SetRenderDrawColor(pr,240,220,20,255); SDL_RenderClear(pr); SDL_RenderPresent(pr); }
@@ -66,10 +71,11 @@ SDL_AppResult SDL_AppIterate(void *state) {
 }
 void SDL_AppQuit(void *state,SDL_AppResult result) {
     if(pr)SDL_DestroyRenderer(pr);
-    SDL_DestroyRenderer(tr);SDL_DestroyRenderer(cr);
+    SDL_DestroyRenderer(tr);SDL_DestroyRenderer(cr);SDL_DestroyRenderer(hr);
     /* Destroying the owner destroys the owned target (and any popup) with it (#794). */
     SDL_DestroyWindow(control);
     printf("OWNER-CASCADE %d\n",SDL_GetWindowFromID(SDL_GetWindowID(target))==NULL?1:0); fflush(stdout);
+    SDL_DestroyWindow(helper);
     SDL_Quit();
     printf("UI-LIFECYCLE-EXIT\n");fflush(stdout);
 }

@@ -119,7 +119,11 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kerne
    await key('p','ACTION p 1');
    let popupPx=0;for(let i=0;i<80&&popupPx<1000;i++){await count(driver+'-08-popup-'+i);popupPx=await countColor(240,220,20);}
    if(popupPx<1000)throw Error(driver+' popup pixels missing: '+popupPx);
-   await setVt(2);await page.mouse.click(3,3);   // outside the popup's window tree
+   await setVt(2);
+   {  // a press on the desktop, outside the popup's window tree (canvas-relative, the os-wm.mjs idiom)
+     const rect=await page.evaluate(()=>{const r=document.getElementById('screen').getBoundingClientRect();return {x:r.x,y:r.y};});
+     await page.mouse.click(rect.x+3,rect.y+3);
+   }
    await page.waitForFunction(()=>window.__osOut.includes('CLOSE-REASON 1 popup'),null,{timeout:15000});
    let popupGone=-1;for(let i=0;i<80&&popupGone!==0;i++){await count(driver+'-09-popup-dismissed-'+i);popupGone=await countColor(240,220,20);}
    if(popupGone!==0)throw Error(driver+' dismissed popup still painted: '+popupGone);
