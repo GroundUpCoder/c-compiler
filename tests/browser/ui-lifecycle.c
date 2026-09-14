@@ -38,8 +38,13 @@ SDL_AppResult SDL_AppEvent(void *state,SDL_Event *e) {
         if(w==popup) { SDL_DestroyRenderer(pr); SDL_DestroyWindow(popup); popup=NULL; pr=NULL; }
         return SDL_APP_CONTINUE;
     }
+    if(e->type==SDL_EVENT_WINDOW_FOCUS_GAINED) {   /* diagnostic: which window holds the keyboard */
+        SDL_Window *w=SDL_GetWindowFromID(e->window.windowID);
+        printf("FOCUS-GAINED %s\n",w==helper?"helper":w==control?"control":w==target?"target":w==popup?"popup":"other"); fflush(stdout);
+    }
     if(e->type==SDL_EVENT_KEY_DOWN) {
         int k=e->key.key, ok=1;
+        printf("KEY %c\n",(k>=32&&k<127)?(char)k:'?'); fflush(stdout);   /* diagnostic: the key reached the process */
         if(k=='s') ok=SDL_ShowWindow(target);
         else if(k=='h') ok=SDL_HideWindow(target);
         else if(k=='a') ok=SDL_RaiseWindow(target);

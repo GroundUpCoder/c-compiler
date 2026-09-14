@@ -83,10 +83,12 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kerne
    const before=await page.evaluate(()=>window.__osCompositorStats());
    await shell('/root/ui-lifecycle '+driver+' &','UI-LIFECYCLE-READY');
    const hidden=await count(driver+'-01-hidden');if(hidden!==0)throw Error(driver+' hidden frame flashed: '+hidden);
-   async function key(k,marker) {
+   async function key(k,marker,timeout=15000) {
+     evidence.phase=driver+': key '+k+' -> '+marker;
      await setVt(2);await page.keyboard.press(k);
-     await page.waitForFunction(m=>window.__osOut.includes(m),marker,{timeout:15000});
+     await page.waitForFunction(m=>window.__osOut.includes(m),marker,{timeout});
    }
+   const phase=(p)=>{evidence.phase=driver+': '+p;};
    await key('s','ACTION s 1');
    // Frame readiness is observed from screenshot pixels, not an elapsed nap.
    let shown=0;
@@ -108,39 +110,41 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kerne
    if(reshown<20000)throw Error(driver+' re-show pixels missing: '+reshown);
    await key('o','ACTION o 1');           // target is now owned by control
    await key('c','ACTION c 1');           // hide the OWNER only
-   await page.waitForFunction(()=>window.__osOut.includes('TARGET-VIEWABLE 0 hidden=0'),null,{timeout:15000});
-   let ownerHidden=-1;for(let i=0;i<80&&ownerHidden!==0;i++)ownerHidden=await count(driver+'-06-owner-hidden-'+i);
+   phase('await TARGET-VIEWABLE 0 hidden=0');await page.waitForFunction(()=>window.__osOut.includes('TARGET-VIEWABLE 0 hidden=0'),null,{timeout:15000});
+   phase('owner-hidden pixels');let ownerHidden=-1;for(let i=0;i<80&&ownerHidden!==0;i++)ownerHidden=await count(driver+'-06-owner-hidden-'+i);
    if(ownerHidden!==0)throw Error(driver+' owned window stayed on screen under a hidden owner: '+ownerHidden);
    await key('v','ACTION v 1');           // show the owner: the owned window comes back by itself
-   await page.waitForFunction(()=>window.__osOut.includes('TARGET-VIEWABLE 1 hidden=0'),null,{timeout:15000});
-   let ownerShown=0;for(let i=0;i<80&&ownerShown<20000;i++)ownerShown=await count(driver+'-07-owner-shown-'+i);
+   phase('await TARGET-VIEWABLE 1 hidden=0');await page.waitForFunction(()=>window.__osOut.includes('TARGET-VIEWABLE 1 hidden=0'),null,{timeout:15000});
+   phase('owner-shown pixels');let ownerShown=0;for(let i=0;i<80&&ownerShown<20000;i++)ownerShown=await count(driver+'-07-owner-shown-'+i);
    if(ownerShown<20000)throw Error(driver+' owned window did not return with its owner: '+ownerShown);
    // ---- #794: popup dismissal is reason 1, a close request is reason 0 ----
    await key('p','ACTION p 1');
-   let popupPx=0;for(let i=0;i<80&&popupPx<1000;i++){await count(driver+'-08-popup-'+i);popupPx=await countColor(240,220,20);}
+   phase('popup pixels');let popupPx=0;for(let i=0;i<80&&popupPx<1000;i++){await count(driver+'-08-popup-'+i);popupPx=await countColor(240,220,20);}
    if(popupPx<1000)throw Error(driver+' popup pixels missing: '+popupPx);
    await setVt(2);
    {  // a press on the desktop, outside the popup's window tree (canvas-relative, the os-wm.mjs idiom)
      const rect=await page.evaluate(()=>{const r=document.getElementById('screen').getBoundingClientRect();return {x:r.x,y:r.y};});
      await page.mouse.click(rect.x+3,rect.y+3);
    }
-   await page.waitForFunction(()=>window.__osOut.includes('CLOSE-REASON 1 popup'),null,{timeout:15000});
-   let popupGone=-1;for(let i=0;i<80&&popupGone!==0;i++){await count(driver+'-09-popup-dismissed-'+i);popupGone=await countColor(240,220,20);}
+   phase('await CLOSE-REASON 1 popup');await page.waitForFunction(()=>window.__osOut.includes('CLOSE-REASON 1 popup'),null,{timeout:15000});
+   phase('popup dismissed pixels');let popupGone=-1;for(let i=0;i<80&&popupGone!==0;i++){await count(driver+'-09-popup-dismissed-'+i);popupGone=await countColor(240,220,20);}
    if(popupGone!==0)throw Error(driver+' dismissed popup still painted: '+popupGone);
    await shell('S=$(wmctl list | grep "UI lifecycle target" | sed "s/[^0-9].*//"); wmctl close $S; echo CLOSE-S""ENT','CLOSE-SENT');
-   await page.waitForFunction(()=>window.__osOut.includes('CLOSE-REASON 0 target'),null,{timeout:15000});
+   phase('await CLOSE-REASON 0 target');await page.waitForFunction(()=>window.__osOut.includes('CLOSE-REASON 0 target'),null,{timeout:15000});
    // The app vetoed the close and kept pumping: it must still be alive and
    // responsive after the kernel's grace window, never force-quit.
    await page.waitForFunction(()=>new Promise(r=>setTimeout(()=>r(true),5500)),null,{timeout:20000});
    await key('a','ACTION a 1');
-   const vetoed=await count(driver+'-10-vetoed-alive');if(vetoed<20000)throw Error(driver+' target gone after a vetoed close: '+vetoed);
-   await key('q','UI-LIFECYCLE-EXIT');
+   phase('vetoed-alive pixels');let vetoed=0;for(let i=0;i<80&&vetoed<20000;i++)vetoed=await count(driver+'-10-vetoed-alive-'+i);
+   if(vetoed<20000)throw Error(driver+' target gone after a vetoed close: '+vetoed);
+   // Quitting tears down three renderers (GPU: pending Dawn work drains before the EXIT handshake) — a longer wait, still marker-driven.
+   await key('q','UI-LIFECYCLE-EXIT',60000);
    const finalOut=await page.evaluate(()=>window.__osOut);
    if(!finalOut.includes('OWNER-CASCADE 1'))throw Error(driver+' destroying the owner did not cascade to the owned window');
    evidence.runs.push({driver,hidden,shown,after,reshown,ownerHidden,ownerShown,popupPx,popupGone,vetoed,gpuShips,transcript:finalOut});
  }
  console.log('PASS installed gucOS software and WebGPU hidden/show/activate/hide + owner/viewable/dismiss-reason/veto keyboard probes');
-} finally {
+} catch(e) { evidence.failure=String(e&&e.message||e); throw e; } finally {
  if(page) evidence.finalTranscript=await page.evaluate(()=>window.__osOut).catch(String);
  fs.writeFileSync(path.join(dir,'evidence.json'),JSON.stringify(evidence,null,2)+'\n');
  console.log('Evidence: '+dir);await browser.close();server.kill();
