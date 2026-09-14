@@ -7,7 +7,9 @@ filesystem once per face, then opens memory-backed FreeType faces. Glyph and run
 operations execute locally, with no kernel RPC, browser font API or Canvas2D.
 The memory-only module traps attempted filesystem/process imports.
 
-`fontbridge.h` declares the C imports. Small can declare the same names using
+`<gucos/fontbridge.h>` declares the C imports. It is a compiler builtin header
+(compiler.js standardHeaders), baked to `/usr/include/gucos/fontbridge.h` by the
+same fold as every other builtin. Small can declare the same names using
 `@import("c", "__font_open") int openFont(int path, int pixels, int flags);` and
 ordinary scalar signatures. `path`/UTF-8/pixel pointers address the caller's linear
 memory. Fonts and results are opaque positive handles. No module pointer crosses

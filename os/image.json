@@ -15,8 +15,6 @@
     "dirs": [
       "/usr/bin",
       "/usr/lib",
-      "/usr/include",
-      "/usr/include/gucos",
       "/usr/share",
       "/usr/share/deck",
       "/usr/share/doc",
@@ -34,9 +32,6 @@
       "/usr/share/sounds"
     ],
     "files": {
-      "/usr/include/gucos/fontbridge.h": {
-        "bin": "os/fontbridge/fontbridge.h"
-      },
       "/usr/share/doc/fontbridge.md": {
         "bin": "os/fontbridge/README.md"
       },
