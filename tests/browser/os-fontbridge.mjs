@@ -7,6 +7,7 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {openOsSession} from './lib/os-harness.mjs';
 import {guestPng} from './lib/guest-png.mjs';
+import {imageIdentity,surfaceTransport} from './lib/render-evidence.mjs';
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const PORT = 3498;
 const source=fs.readFileSync(path.join(ROOT,'tests/browser/fixtures/fontbridge.c'),'utf8');
@@ -16,11 +17,12 @@ const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 const evidence={commit:execFileSync('git',['rev-parse','HEAD'],{cwd:ROOT,encoding:'utf8'}).trim(),files:{},runs:[],measurement:'CPU-side call/submission latency; not GPU completion or display latency'};
 const s=await openOsSession({port:PORT,serverTries:2400,serverInterval:250});
 const {page,setVt,waitOut,check}=s;
-for(const f of ['host.js','compiler.js','os/process-worker.js','os/image.json','os/os-system.img','os/os-system.img.small.json','tests/browser/fixtures/fontbridge.c']){
+for(const f of ['tests/browser/os-fontbridge.mjs','tests/browser/lib/render-evidence.mjs','tests/browser/lib/guest-png.mjs','host.js','compiler.js','os/process-worker.js','os/image.json','os/os-system.img','os/os-system.img.small.json','tests/browser/fixtures/fontbridge.c']){
  const p=path.join(ROOT,f);evidence.files[f]=fs.existsSync(p)?hash(fs.readFileSync(p)):null;
 }
 let cpu;
 try{
+ evidence.identity=await imageIdentity(s,ROOT);
  for(const f of ['host.js','compiler.js','os/process-worker.js']){
   const response=await page.request.get(new URL('/'+f,s.url).href);
   if(!response.ok()||hash(await response.body())!==evidence.files[f])throw new Error('served identity mismatch: '+f);
@@ -34,11 +36,11 @@ try{
  evidence.installed=await page.evaluate(start=>window.__osOut.slice(start),identityStart);
  for(const mode of ['CPU','GPU']){
   const start=await page.evaluate(()=>window.__osOut.length);
-  await page.keyboard.type(`/root/fonttest${mode==='CPU'?' software':''} & wmctl wait win fontbridge 15000 && wmctl move fontbridge 40 60\r`);
+  await page.keyboard.type(`/root/fonttest${mode==='CPU'?' software':''} & wmctl wait win fontbridge 15000 && FONTSID=$(wmctl list | grep "fontbridge$" | sed "s/[^0-9].*//") && wmctl move $FONTSID 40 60\r`);
   await page.waitForFunction(({start,mode})=>window.__osOut.slice(start).includes('FONT-READY '+mode),{start,mode},{timeout:90000});
   const out=await page.evaluate(start=>window.__osOut.slice(start),start);
   check(`${mode} cold and warm percentile records`,out.includes(`FONT-PERF ${mode} cold-`)&&out.includes(`FONT-PERF ${mode} warm-`));
-  const shot=await guestPng(s,'wmctl shot fontbridge');
+  const shot=await guestPng(s,'wmctl shot $FONTSID');
   check(`${mode} surface dimensions`,shot.w===512&&shot.h===192);
   let ink=0,childInk=0,leaked=0;
   for(let y=32;y<64;y++)for(let x=16;x<500;x++){const [r,g,b]=shot.px(x,y);if(r>80&&g>80&&b>80)ink++;}
@@ -50,9 +52,9 @@ try{
   }
   fs.writeFileSync(path.join(dir,`${mode}.png`),shot.bytes);
   fs.writeFileSync(path.join(dir,`${mode}-screen.png`),(await guestPng(s,'wmctl shot screen')).bytes);
-  evidence.runs.push({mode,ink,childInk,leaked,output:out});
-  await page.keyboard.type(`wmctl close fontbridge; wmctl wait nowin fontbridge 15000 && echo FONT-D""ONE-${mode}\r`);await waitOut(`FONT-DONE-${mode}`,30000);
+  evidence.runs.push({mode,transport:await surfaceTransport(s,'fontbridge',mode),ink,childInk,leaked,output:out});
+  await page.keyboard.type(`wmctl close $FONTSID; wmctl wait nowin fontbridge 15000 && echo FONT-D""ONE-${mode}\r`);await waitOut(`FONT-DONE-${mode}`,30000);
  }
  evidence.browser=await s.browser.version();
-}catch(e){s.fail(e);evidence.error=String(e.stack||e);}finally{fs.writeFileSync(path.join(dir,'evidence.json'),JSON.stringify(evidence,null,2));await s.close();}
+}catch(e){s.fail(e);evidence.error=String(e.stack||e);evidence.output=await page.evaluate(()=>window.__osOut||'').catch(String);}finally{fs.writeFileSync(path.join(dir,'evidence.json'),JSON.stringify(evidence,null,2));await s.close();}
 s.finish('fontbridge CPU and WebGPU');

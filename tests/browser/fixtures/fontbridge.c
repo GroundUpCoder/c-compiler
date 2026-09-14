@@ -42,7 +42,9 @@ SDL_AppResult SDL_AppIterate(void *state){
  }
  SDL_SetRenderDrawColor(renderer,16,24,40,255);SDL_RenderClear(renderer);
  SDL_SetRenderClipRect(renderer,NULL);
- SDL_SetRenderDrawColor(renderer,0,160,96,255);SDL_RenderLine(renderer,16,64,480,64);
+ /* Pixel-aligned baseline: line rasterization has backend-specific coverage. */
+ SDL_SetRenderDrawColor(renderer,0,160,96,255);
+ SDL_FRect baseline={16,64,464,1};SDL_RenderFillRect(renderer,&baseline);
  SDL_FRect first={16+left,64-top,width,height};SDL_RenderTexture(renderer,text,NULL,&first);
  SDL_Rect child={80,96,220,40};SDL_SetRenderClipRect(renderer,&child);
  SDL_FRect second={32+left,124-top,width,height};SDL_RenderTexture(renderer,text,NULL,&second);

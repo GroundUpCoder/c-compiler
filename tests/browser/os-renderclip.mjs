@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { openOsSession } from './lib/os-harness.mjs';
 import { guestPng } from './lib/guest-png.mjs';
+import {imageIdentity,surfaceTransport} from './lib/render-evidence.mjs';
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
 const PORT = 3499;
 const source=fs.readFileSync(path.join(ROOT,'tests/browser/fixtures/sdl-clip.c'),'utf8');
@@ -15,10 +16,11 @@ fs.mkdirSync(dir,{recursive:true});
 const s=await openOsSession({port:PORT,serverTries:2400,serverInterval:250});
 const {page,setVt,waitOut,check}=s;
 const evidence={commit:execFileSync('git',['rev-parse','HEAD'],{cwd:ROOT,encoding:'utf8'}).trim(),source:hash(source),files:{},runs:[]};
-for(const f of ['host.js','compiler.js','os/process-worker.js','os/image.json','os/os-system.img']){
+for(const f of ['tests/browser/os-renderclip.mjs','tests/browser/lib/render-evidence.mjs','tests/browser/lib/guest-png.mjs','host.js','compiler.js','os/process-worker.js','os/image.json','os/os-system.img']){
  const p=path.join(ROOT,f);evidence.files[f]=fs.existsSync(p)?hash(fs.readFileSync(p)):null;
 }
 try{
+ evidence.identity=await imageIdentity(s,ROOT);
  for(const f of ['host.js','compiler.js','os/process-worker.js']){
   const response=await page.request.get(new URL('/'+f,s.url).href);
   if(!response.ok()||hash(await response.body())!==evidence.files[f])throw new Error('served identity mismatch: '+f);
@@ -33,7 +35,7 @@ try{
  evidence.installed=await page.evaluate(start=>window.__osOut.slice(start),identityStart);
  for(const mode of ['CPU','GPU']){
   const start=await page.evaluate(()=>window.__osOut.length);
-  await page.keyboard.type(`/root/cliptest${mode==='CPU'?' software':''} & wmctl wait win cliptest 15000 && wmctl move cliptest 40 60 && echo CLIP-U""P-${mode}\r`);
+  await page.keyboard.type(`/root/cliptest${mode==='CPU'?' software':''} & wmctl wait win cliptest 15000 && CLIPSID=$(wmctl list | grep "cliptest$" | sed "s/[^0-9].*//") && wmctl move $CLIPSID 40 60 && echo CLIP-U""P-${mode}\r`);
   await waitOut(`CLIP-UP-${mode}`,30000);await waitOut(`CLIP-READY ${mode}`,30000);
   await setVt(2);await s.waitScreen();
   const probes=[[2,2,[12,18,24]],[10,10,[255,0,0]],[25,21,[0,255,0]],[49,21,[255,0,0]],
@@ -41,14 +43,14 @@ try{
    [121,9,[0,0,255]],[119,9,[12,18,24]],[150,20,[12,18,24]],
    [9,81,[0,255,255]],[17,89,[255,255,0]],[39,111,[0,255,255]],[65,81,[255,255,255]],[100,100,[12,18,24]]];
   await page.waitForFunction(start=>window.__osOut.slice(start).includes('CLIP-FRAME'),start,{timeout:30000});
-  const surface=await guestPng(s,'wmctl shot cliptest');
+  const surface=await guestPng(s,'wmctl shot $CLIPSID');
   for(const [x,y,c] of probes)check(`${mode} clip ${x},${y}`,s.near(surface.px(x,y).slice(0,3),c,1),surface.px(x,y));
   fs.writeFileSync(path.join(dir,`${mode}.png`),surface.bytes);
   const screen=await guestPng(s,'wmctl shot screen');
   fs.writeFileSync(path.join(dir,`${mode}-screen.png`),screen.bytes);
-  evidence.runs.push({mode,probes:probes.length,screenshot:`${mode}.png`});
-  await setVt(1);await page.keyboard.type(`wmctl close cliptest; wmctl wait nowin cliptest 15000 && echo CLIP-D""ONE-${mode}\r`);await waitOut(`CLIP-DONE-${mode}`,30000);
+  evidence.runs.push({mode,transport:await surfaceTransport(s,'cliptest',mode),probes:probes.length,screenshot:`${mode}.png`});
+  await setVt(1);await page.keyboard.type(`wmctl close $CLIPSID; wmctl wait nowin cliptest 15000 && echo CLIP-D""ONE-${mode}\r`);await waitOut(`CLIP-DONE-${mode}`,30000);
  }
  evidence.browser=await s.browser.version();evidence.output=await page.evaluate(()=>window.__osOut||'');
-}catch(e){s.fail(e);evidence.error=String(e.stack||e);}finally{fs.writeFileSync(path.join(dir,'evidence.json'),JSON.stringify(evidence,null,2));await s.close();}
+}catch(e){s.fail(e);evidence.error=String(e.stack||e);evidence.output=await page.evaluate(()=>window.__osOut||'').catch(String);}finally{fs.writeFileSync(path.join(dir,'evidence.json'),JSON.stringify(evidence,null,2));await s.close();}
 s.finish('SDL clipping CPU and WebGPU');
