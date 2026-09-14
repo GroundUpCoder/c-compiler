@@ -1,0 +1,31 @@
+
+[1mdiff-aware plan[0m (vs 16cb5333)
+  50 changed path(s), 31 ignored (docs/logs)
+    compiler.js  →  todos, unit, kernel, blockfs, host, sweep, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, disw, sourcemap, tcc, libc, fuzz, fakegit
+    host.js  →  todos, unit, blockfs, kernel, sweep, host, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, tcc, libc, fuzz, fakegit
+    kernel.js  →  todos, kernel, sweep
+    os/doc/sdl-api-index.md  →  kernel, sweep
+    os/doc/sdl-gucos.md  →  kernel, sweep
+    os/win32/user32.c  →  todos, kernel, sweep
+    os/wm.c  →  todos, kernel, sweep
+    os/wm_proto.h  →  todos, kernel, sweep
+    tests/host/run.js  →  host
+    tests/host/test_callback_capture.js  →  host
+    tests/kernel/run.js  →  kernel
+    tests/kernel/test_sdl_util_e2e.js  →  kernel
+    todos/SDL3.md  →  todos
+    tools/mksdlindex.js  →  host
+    tests/browser/os-ui-lifecycle.mjs  →  sweep
+    tests/browser/ui-lifecycle.c  →  sweep
+    tests/kernel/test_ui_lifecycle_e2e.js  →  kernel
+    tests/kernel/test_wm_lifecycle.js  →  kernel
+    tests/kernel/ui_lifecycle_probe.c  →  kernel
+
+  [1msuites:[0m todos, unit, kernel, blockfs, host, sweep, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, disw, sourcemap, tcc, libc, fuzz, fakegit
+
+[1m━━━ tier: diff ━━━[0m
+  runs: todos, unit, host, blockfs, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, disw, sourcemap, tcc, libc, fuzz, fakegit, kernel, sweep
+  [33mdeliberately NOT run: netsurf-patch[0m
+  a green diff is NOT a full gate — ships require `node tests/run.js full`.
+
+plan: todos, unit, host, blockfs, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, disw, sourcemap, tcc, libc, fuzz, fakegit, kernel, sweep

@@ -75,3 +75,28 @@ browser screenshots, no Canvas2D readback helper. This is NOT human/manual evide
 Versioned artifacts go to a fresh `build/test-browser/ui-lifecycle-<timestamp>/`.
 Image manifest 292 is an author candidate, not a deployment. No main merge, main
 push, deployment or completed manual test is claimed.
+
+
+## Independent review fixes
+
+External reviewer `01a09ecd-a80c-78e3-b4da-c443469da62a` was created via cc-meta;
+metadata verified executor codex/model gpt-6-astra. Review found popup-grab
+restoration, saved WM restore geometry, stale activation after hide/show, stale
+overview membership and forbidden SDL popup raising cases. The corrective pass
+retains hidden WM policy records until show/destruction, restores only surviving
+undismissed popup grabs, and rejects popup activation. Activation requests and
+WM FOCUS grants now echo a visibility serial, so a hide/show cycle invalidates
+an old grant. Legacy one-word FOCUS remains an explicit WM/agent action. Overview
+snapshots filter application-hidden sids even when the WM snapshot is stale.
+
+The coordinator independently fixed the callback wrapper identity defect as
+`0ae66dc8` (reviewed there). This author integrated that change with its preceding
+Objective-C regression test `27c19208`; no independent authorship is claimed.
+
+At checkpoint 37b9752f, the compiled SDL/User32 probe passed in the kernel runner
+(1/208 selected, not a broad gate); evidence is retained under 789-evidence.
+The earlier mixed-source failure's attribution to version mismatch is an inference
+from boot/load timing and the capability check, not a traced runtime observation.
+A main-kernel red control failed 20 lifecycle assertions; focused expanded tests
+pass with the review fixes. Final re-review, browser evidence and mapped gate
+remain pending.

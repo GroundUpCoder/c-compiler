@@ -169,7 +169,7 @@ enum {
                                           (todos/0105; the R_IDLE precedent) */
     /* events */
     WMP_EV_VISIBILITY = 0x95,       /* full window record, requested visibility */
-    WMP_EV_ACTIVATION_REQUEST = 0x96, /* { sid }, grant using WMP_FOCUS */
+    WMP_EV_ACTIVATION_REQUEST = 0x96, /* { sid, visibility serial }, echo both in WMP_FOCUS */
     WMP_EV_CREATED = 0x80, WMP_EV_DESTROYED = 0x81, WMP_EV_TITLE = 0x82,
     WMP_EV_FOCUS = 0x83, WMP_EV_MOVED = 0x84, WMP_EV_MINIMIZED = 0x85,
     WMP_EV_CONFIGURED = 0x86,          /* { sid, w, h }: resize ack landed */

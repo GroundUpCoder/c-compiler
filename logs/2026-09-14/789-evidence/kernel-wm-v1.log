@@ -1,0 +1,171 @@
+  ok   boots
+  ok   spawned app
+  ok   create without SABs -> EINVAL
+  ok   create -> sid 1
+  ok   placement below the title bar
+  ok   create with mismatched fb dims -> EINVAL
+  ok   wmList has the window, focused
+  ok   no WM subscribed: created MAPPED (todos/0069 fallback is pre-0069 exact)
+  ok   screenshot sees the presented frame
+  ok   second present flips buffers
+  ok   frameSeq advanced
+  ok   GPU shot without readback refuses instead of a valid shm image
+  ok   GPU shot uses asynchronous readback
+  ok   GPU thumbnail filters readback pixels
+  ok   GPU screen composite uses readback pixels
+  ok   overview captures GPU miniatures
+  ok   pending capture retains request-time geometry across moves
+  ok   readback rejection settles as an error, never an image
+  ok   composite: desktop teal at a corner
+  ok   composite: client pixels at (x,y)
+  ok   composite: focused title bar navy
+  ok   composite: close box drawn
+  ok   key events routed (down+up), windowId set
+  ok   doorbell rung for input
+  ok   no WM: the cycle chord passes through to the app
+  ok   wmCycle refuses with no subscriber: ENODEV (cycling IS policy)
+  ok   no WM: the snap chord passes through to the app
+  ok   wmSnap refuses with no subscriber: ENODEV (snap IS policy)
+  ok   wmIdleMs: the key input above stamped the idle clock
+  ok   wmIdleMs grows without input
+  ok   wmPointer stamps the idle clock
+  ok   wmSaver refuses with no subscriber: ENODEV (the saver IS policy)
+  ok   client click routed with LOCAL coords
+  ok   title mousedown starts a drag
+  ok   drag moved the window (+40,+30)
+  ok   drag did not leak events to the app
+  ok   first title down is a plain drag-start
+  ok   quick second title down -> title-activate
+  ok   the activating down started NO drag (window unmoved)
+  ok   a third quick click starts over (drag, not activate)
+  ok   two SLOW clicks never activate
+  ok   quick pair outside the slop still drags
+  ok   double-click leg leaked no app events
+  ok   second window focused on create
+  ok   composite honors z-order (top window pixels win)
+  ok   hit test picks the topmost window (windowId tags)
+  ok   wmFocus raises: window 1 pixels on top again
+  ok   blurred title bar gray behind
+  ok   restack-lower leaves focus alone
+  ok   raise-only focus reorders z (window 1 back on top)
+  ok   raise-only focus bumps the scene version (todos/0165)
+  ok   close box posts QUIT
+  ok   max box with no WM is a no-op
+  ok   max box started no drag (window unmoved)
+  ok   max box leaked no app events
+  ok   min box minimizes directly (kernel mechanism)
+  ok   focus falls off the min-box minimize
+  ok   min box leaked no app events
+  ok   composite: three box faces at the expected offsets
+  ok   composite: min bar + max frame glyph pixels
+  ok   inject: key/button/wheel all land, targeted at sid 1
+  ok   set title
+  ok   inject into a full ring reports EAGAIN (todos/0242)
+  ok   overflow drops newest, keeps cap, counts drops
+  ok   10k-event storm: every event delivered in order
+  ok   wmResize asks the client
+  ok   geometry unchanged while pending
+  ok   WINDOW_RESIZED event in the ring
+  ok   old-size in-flight frame still shows (old buffer live)
+  ok   CONFIGURE without a new SAB -> EINVAL
+  ok   CONFIGURE with mismatched SAB dims -> EINVAL
+  ok   CONFIGURE ack accepted
+  ok   geometry + pending updated at ack
+  ok   screenshot reads the swapped buffer
+  ok   old-buffer flips are ignored after the swap
+  ok   CONFIGURE with nothing pending -> EINVAL (kernel-initiated only)
+  ok   both configure events pushed (latest wins)
+  ok   stale ack accepted (newer than the old buffer)
+  ok   kernel re-asks for the still-pending size
+  ok   final ack settles
+  ok   SE border mousedown starts a resize drag
+  ok   drag previews only (no configure yet)
+  ok   release sends ONE configure at the dragged size
+  ok   #388: press just inside the fat E band starts a drag
+  ok   #388: one px past the fat band is the desktop
+  ok   #388: W band stays thin (one px past WM_BORDER is desktop)
+  ok   #388: N band stays thin (one px past WM_BORDER is desktop)
+  ok   #388: E-band press within WM_GRIP_HIT of the corner widens to SE
+  ok   #388: above the widened corner stays a width-only E drag
+  ok   #388: SE grip reaches WM_GRIP_IN into the resizable client
+  ok   #388: one px left of the inward grip is the client
+  ok   #388: moves in the inward grip still reach the app (down-only steal)
+  ok   #388: cursor overlay agrees with the hit test
+  ok   E border starts a width-only drag
+  ok   E drag: width tracks (clamped at the floor), height fixed
+  ok   clamped configure at release
+  ok   left border is focus-only
+  ok   composite: frame border pixels flank the client
+  ok   wmResize below the floor is refused: EINVAL
+  ok   wmResize on a bogus sid is refused: EINVAL
+  ok   wmList: no-flags create is not resizable
+  ok   wmList: bit2 create is resizable
+  ok   create defaults dst to the buffer dims
+  ok   wmResize on a non-resizable surface is refused: EPERM (todos/0242)
+  ok   refusal leaves nothing pending, no event to the client
+  ok   #388: inward grip does not steal a fixed-size client corner
+  ok   SE grip on a fixed window starts a SCALE drag (todos/0024)
+  ok   scale drag previews only (rubber band, no dst change yet)
+  ok   release applies the raw dst (no-WM fallback): buffer untouched, no client event
+  ok   scaled composite: 2x NN left half red
+  ok   scaled composite: 2x NN right half blue at the dst edge
+  ok   chrome tracks the dst rect (frame border past the scaled edge, title bar above)
+  ok   client click inside the scaled area inverse-maps (90,60 -> 45,30)
+  ok   hit test covers the whole dst rect (what you see is what you click)
+  ok   injection stays in buffer coords (post-hit-test, resolution-independent)
+  ok   min box hits at the SCALED offsets (dst rect)
+  ok   wmSetDst on a RESIZABLE surface is refused: EPERM
+  ok   wmSetDst below the floor is refused: EINVAL
+  ok   wmSetDst on a bogus sid is refused: EINVAL
+  ok   screen clamp uses the dst width (x -> 40 - dstW)
+  ok   SET_FLAGS bit2 makes it resizable
+  ok   the grant resets dst to the buffer (exclusive modes)
+  ok   SE grip works after the grant
+  ok   wmResize works after the grant
+  ok   SET_FLAGS on a bogus sid -> EINVAL
+  ok   no pointer-lock events yet
+  ok   SET_FLAGS bit1 sets relativeMouse
+  ok   focused relative surface -> onPointerLock(true)
+  ok   wmScene exposes the wanted state
+  ok   inject rel: MOUSEMOTION with deltas + rel flag
+  ok   unlocked motion still hit-tests
+  ok   locked motion -> rel record to the focused surface (no hit test)
+  ok   locked button -> focused surface at the client center
+  ok   unlocked motion hit-tests again
+  ok   window drags while unlocked
+  ok   focus to a non-relative surface -> onPointerLock(false)
+  ok   active routing dropped with the wanted state
+  ok   refocus re-wants the lock
+  ok   minimize withdraws the lock
+  ok   restore re-wants the lock
+  ok   client click re-offers the lock (the gesture path)
+  ok   title click does NOT re-offer
+  ok   locked client click does not re-offer
+  ok   SET_FLAGS clearing bit1 -> onPointerLock(false)
+  ok   CREATE with flags bit1 wants the lock at birth
+  ok   destroy withdraws the lock
+  ok   exit reclaims surfaces + focus clears
+  ok   window up before kill
+  ok   SIGKILL leaves no ghost windows
+  ok   worker terminated
+  ok   close box on the wedged app requests close
+  ok   still running inside the grace period
+  ok   hung app force-quit within grace (zombie)
+  ok   hung app: surfaces reclaimed
+  ok   hung app: worker terminated
+  ok   legible reason emitted (title + "not responding")
+  ok   CLOSE_REQ path delivers
+  ok   polite app received the QUIT
+  ok   responsive app never touched by the watchdog
+  ok   re-close after consumption is a fresh request
+  ok   second close during grace force-quits immediately
+  ok   escalation emitted the reason
+  ok   flooded ring: close request reports EAGAIN
+  ok   undeliverable close still force-quits at the deadline
+  ok   flooded reason emitted
+  ok   slow consumer: close request delivers
+  ok   slow consumer: still running mid-grace (watchdog is patient)
+  ok   slow consumer: the QUIT was waiting in the ring
+  ok   slow consumer: mid-grace drain disarms — never force-quit
+
+test_wm: all passed

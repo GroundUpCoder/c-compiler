@@ -1,0 +1,73 @@
+  ok   parent created
+  ok   anchored create with unknown parent -> EINVAL
+  ok   child created at parent + offset
+  ok   grandchild (child-of-child) accepted — A1 arbitrary depth
+  ok   children are implicitly borderless + flagged anchored
+  ok   no focus steal at create — parent keeps focus
+  ok   cross-pid parent -> EINVAL
+  ok   wmMove carries the subtree
+  ok   title drag starts
+  ok   title drag carries the subtree
+  ok   wmMove on a child -> EPERM
+  ok   wmSetLayer on a child -> EPERM
+  ok   wmMinimize on a child -> EPERM
+  ok   wmRestack on a child -> EPERM
+  ok   wmSetDst on a child -> EPERM
+  ok   wmResize on a child -> EPERM
+  ok   wmSetDst on the parent accepted
+  ok   child dst rides the parent scale (2x)
+  ok   grandchild compounds through the chain
+  ok   grabbed child clamps into the screen at create
+  ok   clamp re-derives on parent move (never accumulates)
+  ok   non-grab child is NOT clamped (rigid attachment)
+  ok   non-grab child rigidly tracks the parent off-screen
+  ok   creating Q leaves the subtree contiguous
+  ok   raise-as-subtree: focus P re-slots children directly above it
+  ok   wmFocus on a child redirects to the root
+  ok   child client click routes to the child
+  ok   ...delivers to the child surface
+  ok   ...and focuses the PARENT, not the child
+  ok   composite shows child pixels over the parent
+  ok   minimizing the parent hides the whole subtree
+  ok   hidden children leave the hit test
+  ok   scene keeps children during the live min fly (group fly)
+  ok   scene excludes hidden children once the fly expires
+  ok   restore-direction children carry the group-fly linkage
+  ok   linkage clears once the restore fly expires
+  ok   restore shows the subtree again
+  ok   thumbnail shows child pixels at anchor position
+  ok   SURFACE_RESIZE on a child accepted (owner-side resize)
+  ok   child got WINDOW_RESIZED
+  ok   configure ack accepted
+  ok   resized child keeps anchor + inherited dst
+  ok   post-resize child still rides parent scale
+  ok   grab popup created
+  ok   outside press is consumed
+  ok   matching release is consumed too
+  ok   holder got the dismiss (QUIT)
+  ok   the press never reached Q
+  ok   focus unchanged by the consumed click
+  ok   grab released: next click routes normally
+  ok   ...and reaches Q
+  ok   client press inside the tree routes with the grab up
+  ok   ...to the child surface
+  ok   own-title press dismisses + consumes
+  ok   holder got that dismiss too
+  ok   desktop press dismisses + consumes
+  ok   holder got the desktop dismiss
+  ok   destroying the holder releases the grab
+  ok   pointer lock outranks the grab (locked routing, no dismissal)
+  ok   ...locked events reach the locked surface
+  ok   wmInjectPointer bypasses the grab
+  ok   wmFocus: LOST to the old owner
+  ok   wmFocus: GAINED to the new owner
+  ok   create-steal: LOST to the prior focus owner
+  ok   create-steal: GAINED to the new window
+  ok   focus fall: LOST to the minimized window
+  ok   focus fall: GAINED to the fall target
+  ok   pre-cascade: c1 subtree live
+  ok   destroying a mid-tree child cascades its own subtree only
+  ok   destroying the parent cascades every child
+  ok   nothing orphaned in the z-order
+
+wm anchored: PASS

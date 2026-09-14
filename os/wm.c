@@ -336,6 +336,29 @@ static void fatal_sdl(int code, const char *what) {
 static void die(const char *what) { fatal(1, what); }
 static win_t wins[MAX_WIN];
 static int nwins = 0;
+/* Hidden windows leave the taskbar/cycle set, but keep their policy history.
+ * Kernel records carry current geometry, not saved maximize/snap restore data. */
+typedef struct hidden_win { win_t value; struct hidden_win *next; } hidden_win;
+static hidden_win *hidden_wins;
+static int hidden_take(int32_t sid, win_t *out) {
+    hidden_win **p = &hidden_wins;
+    while (*p) {
+        hidden_win *n = *p;
+        if (n->value.sid == sid) {
+            if (out) *out = n->value;
+            *p = n->next; free(n); return 1;
+        }
+        p = &n->next;
+    }
+    return 0;
+}
+static void hidden_save(const win_t *w) {
+    hidden_take(w->sid, NULL);
+    hidden_win *n = malloc(sizeof *n);
+    if (!n) die("hidden window state allocation");
+    n->value = *w; n->next = hidden_wins; hidden_wins = n;
+}
+
 static int32_t bar_sid = 0;        /* our own taskbar surface */
 static int own_pid = 0;
 static int overview_active = 0;    /* window overview / Exposé (todos/EXPOSE):
@@ -3756,10 +3779,13 @@ static void handle_event(wmp_hdr *h) {
     if (h->type == WMP_EV_CREATED || h->type == WMP_EV_VISIBILITY) {
         wmp_rec r;
         if (h->plen != sizeof r || wmp_read_all(sock, &r, (int)sizeof r) != 0) die("EV_CREATED read");
+        win_t restored;
+        int has_restored = 0;
         if (h->type == WMP_EV_VISIBILITY) {
             /* Hidden surfaces retain their kernel placement/backing store, but
              * are absent from desktop policy (taskbar, cycle and overview). */
             for (int i = 0; i < nwins; i++) if (wins[i].sid == r.sid) {
+                if (r.flags & WMP_F_HIDDEN) hidden_save(&wins[i]);
                 memmove(&wins[i], &wins[i + 1], (size_t)(nwins - i - 1) * sizeof wins[0]);
                 nwins--; break;
             }
@@ -3769,6 +3795,7 @@ static void handle_event(wmp_hdr *h) {
                 overview_relayout();
                 return;
             }
+            has_restored = hidden_take(r.sid, &restored);
             if (r.pid == own_pid) return;
         }
         if (r.flags & WMP_F_HIDDEN) {
@@ -3934,15 +3961,18 @@ static void handle_event(wmp_hdr *h) {
         }
         if (nwins < MAX_WIN) {
             win_t *w = &wins[nwins++];
+            if (has_restored) *w = restored;
             w->sid = r.sid; w->pid = r.pid;
             w->x = r.x; w->y = r.y; w->w = r.w; w->h = r.h;
             w->dst_w = r.dst_w; w->dst_h = r.dst_h;
             w->minimized = (r.flags & WMP_F_MINIMIZED) ? 1 : 0;
             w->focused = (r.flags & WMP_F_FOCUSED) ? 1 : 0;
             w->resizable = (r.flags & WMP_F_RESIZABLE) ? 1 : 0;
-            w->maximized = 0;          /* slots are reused: reset (0025) */
-            w->snapped = 0;            /* likewise (todos/0095) */
-            w->stamp = ++zctr;         /* newest (create focuses; 0032) */
+            if (!has_restored) {
+                w->maximized = 0;
+                w->snapped = 0;
+                w->stamp = ++zctr;
+            }
             memcpy(w->title, r.title, 32);
             w->title[31] = 0;
         }
@@ -3956,13 +3986,14 @@ static void handle_event(wmp_hdr *h) {
     if (h->plen > sizeof p && h->type != WMP_EV_TITLE) { wmp_skip(sock, h->plen); return; }
     switch (h->type) {
     case WMP_EV_ACTIVATION_REQUEST:
-        if (h->plen != 4 || wmp_read_all(sock, p, 4) != 0) die("activation request read");
+        if (h->plen != 8 || wmp_read_all(sock, p, 8) != 0) die("activation request read");
         /* Current desktop policy grants owner requests; the kernel rechecks
          * visibility when FOCUS arrives, so a later hide wins this race. */
-        wmp_send(sock, WMP_FOCUS, p, 1);
+        wmp_send(sock, WMP_FOCUS, p, 2);
         break;
     case WMP_EV_DESTROYED: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_DESTROYED read");
+        hidden_take(p[0], NULL);
         if (p[0] == smroot.sid) smroot.sid = 0;           /* defensive (0028) */
         if (p[0] == run_sid) run_sid = 0;                 /* likewise (0078) */
         for (int d = 0; d < MENU_MAX_DEPTH; d++)          /* likewise (0091) */

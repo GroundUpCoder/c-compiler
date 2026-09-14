@@ -15,11 +15,21 @@ try {
  await waitForServer(url,{tries:2400,interval:100});
  const context=await browser.newContext({viewport:{width:1050,height:800}}),page=await context.newPage();
  await page.goto(url);await page.waitForFunction(()=>window.__osState==='ready',null,{timeout:180000});
+ evidence.served={};
+ for(const name of Object.keys(evidence.files)) {
+   const response=await fetch(new URL('/'+name,url));
+   if(!response.ok)throw Error('fingerprint fetch failed: '+name);
+   const sha=crypto.createHash('sha256').update(Buffer.from(await response.arrayBuffer())).digest('hex');
+   evidence.served[name]=sha;
+   if(sha!==evidence.files[name])throw Error('served source mismatch: '+name);
+ }
  const {setVt,waitScreen}=osHelpers(page);
  async function shell(command,marker) {
    await setVt(1);await page.keyboard.type(command+'\r');
    await page.waitForFunction(m=>window.__osOut.includes(m),marker,{timeout:120000});
  }
+ await shell("cat /usr/share/os-release; echo UI-IMAGE-PIN-O''K",'UI-IMAGE-PIN-OK');
+ evidence.installed=await page.evaluate(()=>window.__osOut);
  await shell("cat > /root/ui-lifecycle.c <<'EOF'\n"+source+"EOF\ncc /root/ui-lifecycle.c -o /root/ui-lifecycle && echo UI-COMPILE-O''K",'UI-COMPILE-OK');
  async function count(name) {
    await setVt(2);await waitScreen();

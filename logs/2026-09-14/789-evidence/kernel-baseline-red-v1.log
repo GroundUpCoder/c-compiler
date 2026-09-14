@@ -1,0 +1,29 @@
+  FAIL hidden creation retains real storage
+  FAIL hidden creation does not steal focus
+  FAIL hidden frame does not enter composition
+  FAIL browser scene excludes hidden frame
+  FAIL hidden target rejects keyboard injection
+  FAIL hidden target rejects pointer injection
+  FAIL wrong-owner hide rejected
+  FAIL wrong-owner activation rejected
+  FAIL hidden activation rejected
+  FAIL show keeps sid and storage, without focus
+  FAIL show emits one visibility event
+  ok   duplicate show is idempotent
+  ok   explicit activation focuses in no-WM mode
+  FAIL hide active window selects visible fallback
+  FAIL popup hidden with parent
+  FAIL hide revokes popup grab
+  FAIL popup cannot receive hidden input
+  ok   hide preserves popup resources
+  ok   show restores requested-visible descendants
+  ok   WM managed hidden creation waits for placement
+  FAIL placement and stale timer cannot reveal hidden window
+  FAIL activation request routed to WM, not implicit grant
+  FAIL late WM activation cannot undo hide
+  FAIL last subscriber loss preserves explicit hide
+  ok   stale timer after destroy cannot resurrect
+  FAIL stale lifecycle request fails
+  ok   destroy cascades popup
+
+lifecycle: FAIL 20

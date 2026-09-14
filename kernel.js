@@ -4741,6 +4741,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         y: WM_TITLE_H + 8 + ((n * 24) % Math.max(64, this._wmScreen.h >> 2)),
         bitmap: null,             // gpu transport: latest ImageBitmap (browser)
         requestedVisible: !((req.flags | 0) & 256),
+        visibilitySerial: 1,
         minimized: false,
         borderless: !!((req.flags | 0) & 1),      // bit0: no kernel chrome (taskbar-class)
         relativeMouse: !!((req.flags | 0) & 2),   // bit1: wants pointer lock (0018)
@@ -4850,8 +4851,9 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         this._wmSetVisible(sv, req.visible);
         this._respond(pcb, {});
       } else {
+        if (sv.parentSid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
         if (this._wmRequestedHidden(sv)) { this._respond(pcb, { errno: 'EACCES' }); break; }
-        if (this._wmSubs.size) this._wmEmit(WMP.EV_ACTIVATION_REQUEST, [sv.sid]);
+        if (this._wmSubs.size) this._wmEmit(WMP.EV_ACTIVATION_REQUEST, [sv.sid, sv.visibilitySerial]);
         else this.wmFocus(sv.sid);
         this._respond(pcb, {});
       }
@@ -5017,6 +5019,7 @@ Kernel.prototype._wmRequestedHidden = function (s) {
 Kernel.prototype._wmSetVisible = function (s, visible) {
   if (s.requestedVisible === visible) return;
   s.requestedVisible = visible;
+  s.visibilitySerial = (s.visibilitySerial + 1) >>> 0;
   if (!visible) {
     var self = this;
     function inTree(sid) {
@@ -5034,8 +5037,17 @@ Kernel.prototype._wmSetVisible = function (s, visible) {
     if (this._wmDrag && inTree(this._wmDrag.sid)) this._wmDrag = null;
     if (this._wmResizeDrag && inTree(this._wmResizeDrag.sid)) this._wmResizeDrag = null;
     if (inTree(this._focusSid)) this._wmFocusFall();
-  } else if (s.grab && !this._wmAnchorHidden(s) && this._wmGrabs.indexOf(s.sid) < 0) {
-    this._wmGrabs.push(s.sid);
+  } else {
+    // Restore surviving popup authority in tree order. A popup explicitly
+    // hidden by its own client stays hidden; a dismissed grab (grabDismissed)
+    // never rearms merely because an ancestor was shown.
+    var self = this;
+    function restoreGrabs(t) {
+      if (self._wmRequestedHidden(t) || self._wmAnchorHidden(t)) return;
+      if (t.grab && !t.grabDismissed && self._wmGrabs.indexOf(t.sid) < 0) self._wmGrabs.push(t.sid);
+      t.children.forEach(function (sid) { var c = self._surfaces.get(sid); if (c) restoreGrabs(c); });
+    }
+    restoreGrabs(s);
   }
   this._wmEventTo(s.sid, [visible ? WMEV.WINDOW_SHOWN : WMEV.WINDOW_HIDDEN, 0, 0, 0, 0, 0, 0, 0]);
   this._wmEmit(WMP.EV_VISIBILITY, this._wmpRecord(s));
@@ -5257,6 +5269,7 @@ Kernel.prototype._wmGrabConsume = function (target, isClient) {
     return null;                                       // inside: route normally
   }
   this._wmGrabs.pop();
+  holder.grabDismissed = true; // dismissal consumes authority, not popup geometry
   this._wmGrabSwallowUp = true;
   // Deliberately NOT wmCloseRequest (#486): a grab dismissal is UI
   // housekeeping, not a user close request — a momentarily-busy owner must
@@ -5976,7 +5989,8 @@ Kernel.prototype.wmOverviewSet = function (conn, dv, plen) {
   for (var i = 0; i < n; i++) {
     var o = 8 + 4 * (1 + 5 * i);
     var sid = dv.getInt32(o, true) | 0;
-    if (!this._surfaces.get(sid)) continue;       // dropped: dead sid
+    var s = this._surfaces.get(sid);
+    if (!s || this._wmRequestedHidden(s)) continue; // stale WM snapshot
     cells.push({ sid: sid, x: dv.getInt32(o + 4, true) | 0,
                  y: dv.getInt32(o + 8, true) | 0,
                  w: Math.max(1, dv.getInt32(o + 12, true) | 0),
@@ -6511,10 +6525,12 @@ Kernel.prototype.wmSetLayer = function (sid, layer) {
   return 0;
 };
 
-Kernel.prototype.wmFocus = function (sid) {
+Kernel.prototype.wmFocus = function (sid, expectedVisibility) {
+
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
   if (this._wmRequestedHidden(s)) return 'EACCES';
+  if (expectedVisibility !== undefined && s.visibilitySerial !== (expectedVisibility >>> 0)) return 'EAGAIN';
   // Anchored children never take focus (todos/0256, §3.1) — focusing one
   // focuses (and raises, restores) its top-level root instead, the same
   // policy as a client click on the child.
@@ -7507,7 +7523,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
 
     case WMP.SET_LAYER: ok(this.wmSetLayer(g(0), g(1))); break;
     case WMP.GLASS: ok(this.wmGlass(g(0) !== 0)); break;   // Aero tier (0063)
-    case WMP.FOCUS: ok(this.wmFocus(g(0))); break;
+    case WMP.FOCUS: ok(this.wmFocus(g(0), plen >= 8 ? g(1) : undefined)); break;
     case WMP.MINIMIZE: ok(this.wmMinimize(g(0))); break;
     case WMP.RESTORE: ok(this.wmFocus(g(0))); break;    // focus restores
     case WMP.RESTACK: ok(this.wmRestack(g(0), g(1))); break;

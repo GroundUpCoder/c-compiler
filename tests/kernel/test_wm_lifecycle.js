@@ -149,6 +149,12 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('hide preserves popup resources', kernel._surfaces.has(popup));
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:hidden,visible:true});
   check('show restores requested-visible descendants', kernel.wmScene().surfaces.some(s=>s.sid===popup));
+  check('show restores surviving popup grab', kernel._wmGrabs.includes(popup));
+  check('restored grab consumes outside press', kernel._wmGrabConsume(null,false)==='grab-dismiss');
+  check('popup dismissal never starts watchdog', !kernel._surfaces.get(popup).closeWd);
+  await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:hidden,visible:false});
+  await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:hidden,visible:true});
+  check('dismissed grab never resurrects on parent show', !kernel._wmGrabs.includes(popup));
   // Capture placement timers deterministically, then exercise late callbacks.
   // No wall-clock nap: these are the actual callbacks registered by CREATE.
   const pending=[], emitted=[];
@@ -162,10 +168,19 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   kernel.wmMove(delayed,190,170); pending[0]();
   check('placement and stale timer cannot reveal hidden window', ds.mapped && !kernel.wmScene().surfaces.some(s=>s.sid===delayed));
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:delayed,visible:true});
+  const requestedEpoch=ds.visibilitySerial;
   await rpc(app,K.OP.SURFACE_ACTIVATE,{sid:delayed});
   check('activation request routed to WM, not implicit grant', kernel._focusSid===visible && emitted.some(b=>new DataView(b.buffer,b.byteOffset).getUint32(4,true)===K.WMP.EV_ACTIVATION_REQUEST));
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:delayed,visible:false});
   check('late WM activation cannot undo hide', kernel.wmFocus(delayed)==='EACCES');
+  const ov=new DataView(new ArrayBuffer(32));
+  [1,delayed,10,10,80,48].forEach((v,i)=>ov.setInt32(8+4*i,v,true));
+  kernel.wmOverviewSet(wm,ov,24);
+  check('delayed overview cannot recreate hidden hit targets', !kernel._wmOverview);
+  await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:delayed,visible:true});
+  check('old activation grant cannot focus a later show', kernel.wmFocus(delayed,requestedEpoch)==='EAGAIN');
+  await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:delayed,visible:false});
+  check('popup activation rejected', (await rpc(app,K.OP.SURFACE_ACTIVATE,{sid:popup})).errno==='EINVAL');
   kernel._wmSubDrop(wm); pending[0]();
   check('last subscriber loss preserves explicit hide', !kernel.wmScene().surfaces.some(s=>s.sid===delayed));
   await rpc(app,K.OP.SURFACE_DESTROY,{sid:delayed}); pending[0]();
