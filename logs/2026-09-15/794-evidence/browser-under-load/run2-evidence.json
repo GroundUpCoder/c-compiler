@@ -1,0 +1,68 @@
+{
+  "commit": "ababced5d5e25653ab80533de720ed5edcaf56b7",
+  "kind": "automated Playwright keyboard and screenshot probes; no manual interaction",
+  "url": "http://localhost:3349/os/os.html?hostkeys=off",
+  "files": {
+    "host.js": "2460f707138e4f1bc3935ae56e246a9441f0c8ec2f8f01c99339fa6f98f6a5c0",
+    "kernel.js": "4205d58e2e1cd9cb225a4fffc058f8578d335de1db433d3a0e348bbece23115c",
+    "compiler.js": "1f9bab38231acae28467883688ed8caa1d8402ec8eedfc4a3ea3b60d8fda4efe",
+    "os/image.json": "802afb8774ea1805069fea95ba696c01308a622ed7851fe2a8015434d1fdbd69",
+    "os/kernel-worker.js": "cd5de99c5bb5984589f9795dd36548b55aba06acf34b3b8561b5d2777ea9e17b",
+    "os/process-worker.js": "345c96d10dcb06a0ccfbec092a6dd9c21d13f2a40204bee8e9a25e741f50c4a2",
+    "tests/browser/os-ui-lifecycle.mjs": "5e1dd7175ed8acaaafb7a8c52294edfb31130f2da0f111b35f9f07e4f0b1a2ab",
+    "tests/browser/ui-lifecycle.c": "cd83620ce894b295383b9de471d0139c1266dbf8f5613df6e232b203929b8c8e",
+    "os/os-system.img": "fa5990de6b97f1b3e924b96af81c6355055c86db0e3902e663aca5df59626e64",
+    "os/os-system.img.small.json": "d42d9e40745d2869cf6d2415df39361bf79f3fddc4aa6e6d5b48a1866163c823"
+  },
+  "runs": [
+    {
+      "driver": "software",
+      "hidden": 0,
+      "shown": 28600,
+      "after": 0,
+      "reshown": 28600,
+      "ownerHidden": 0,
+      "ownerShown": 28600,
+      "popupPx": 3200,
+      "popupGone": 0,
+      "vetoed": 28600,
+      "gpuShips": 0,
+      "transcript": "/root/ui-lifecycle software &\n[1] 8 /root/ui-lifecycle software\n~ # RENDER-DRIVER software\nFOCUS-GAINED helper\nFOCUS-GAINED control\nTARGET-FOCUS 0\nTARGET-VIEWABLE 0 hidden=1\nUI-LIFECYCLE-READY\nKEY s\nACTION s 1\nTARGET-VIEWABLE 1 hidden=0\nKEY a\nACTION a 1\nTARGET-FOCUS 1\nFOCUS-GAINED target\nKEY h\nACTION h 1\nFOCUS-GAINED control\nTARGET-FOCUS 0\nTARGET-VIEWABLE 0 hidden=1\nKEY s\nACTION s 1\nTARGET-VIEWABLE 1 hidden=0\nKEY o\nACTION o 1\nKEY c\nACTION c 1\nFOCUS-GAINED helper\nTARGET-VIEWABLE 0 hidden=0\nKEY v\nACTION v 1\nTARGET-VIEWABLE 1 hidden=0\nKEY p\nACTION p 1\nCLOSE-REASON 1 popup\nS=$(wmctl list | grep \"UI lifecycle target\" | sed \"s/[^0-9].*//\"); wmctl close $S; echo CLOSE-S\"\"ENT\nCLOSE-SENT\n~ # CLOSE-REASON 0 target\nKEY a\nACTION a 1\nTARGET-FOCUS 1\nFOCUS-GAINED target\nKEY q\nOWNER-CASCADE 1\nUI-LIFECYCLE-EXIT\n"
+    },
+    {
+      "driver": "gpu",
+      "hidden": 0,
+      "shown": 28600,
+      "after": 0,
+      "reshown": 28600,
+      "ownerHidden": 0,
+      "ownerShown": 28600,
+      "popupPx": 3200,
+      "popupGone": 0,
+      "vetoed": 28600,
+      "gpuShips": 189,
+      "transcript": "/root/ui-lifecycle gpu &\n[2] 14 /root/ui-lifecycle gpu\n[1] Done                   /root/ui-lifecycle software\n~ # RENDER-DRIVER gucos\nFOCUS-GAINED helper\nFOCUS-GAINED control\nTARGET-FOCUS 0\nTARGET-VIEWABLE 0 hidden=1\nUI-LIFECYCLE-READY\nKEY s\nACTION s 1\nTARGET-VIEWABLE 1 hidden=0\nKEY a\nACTION a 1\nFOCUS-GAINED target\nTARGET-FOCUS 1\nKEY h\nACTION h 1\nFOCUS-GAINED control\nTARGET-FOCUS 0\nTARGET-VIEWABLE 0 hidden=1\nKEY s\nACTION s 1\nTARGET-VIEWABLE 1 hidden=0\nKEY o\nACTION o 1\nKEY c\nACTION c 1\nFOCUS-GAINED helper\nTARGET-VIEWABLE 0 hidden=0\nKEY v\nACTION v 1\nTARGET-VIEWABLE 1 hidden=0\nKEY p\nACTION p 1\nCLOSE-REASON 1 popup\nS=$(wmctl list | grep \"UI lifecycle target\" | sed \"s/[^0-9].*//\"); wmctl close $S; echo CLOSE-S\"\"ENT\nCLOSE-SENT\n~ # CLOSE-REASON 0 target\nKEY a\nACTION a 1\nFOCUS-GAINED target\nTARGET-FOCUS 1\nKEY q\nOWNER-CASCADE 1\nUI-LIFECYCLE-EXIT\n"
+    }
+  ],
+  "browser": "149.0.7827.55",
+  "errors": [],
+  "small": {
+    "format": 1,
+    "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1"
+  },
+  "served": {
+    "host.js": "2460f707138e4f1bc3935ae56e246a9441f0c8ec2f8f01c99339fa6f98f6a5c0",
+    "kernel.js": "4205d58e2e1cd9cb225a4fffc058f8578d335de1db433d3a0e348bbece23115c",
+    "compiler.js": "1f9bab38231acae28467883688ed8caa1d8402ec8eedfc4a3ea3b60d8fda4efe",
+    "os/image.json": "802afb8774ea1805069fea95ba696c01308a622ed7851fe2a8015434d1fdbd69",
+    "os/kernel-worker.js": "cd5de99c5bb5984589f9795dd36548b55aba06acf34b3b8561b5d2777ea9e17b",
+    "os/process-worker.js": "345c96d10dcb06a0ccfbec092a6dd9c21d13f2a40204bee8e9a25e741f50c4a2",
+    "tests/browser/os-ui-lifecycle.mjs": "5e1dd7175ed8acaaafb7a8c52294edfb31130f2da0f111b35f9f07e4f0b1a2ab",
+    "tests/browser/ui-lifecycle.c": "cd83620ce894b295383b9de471d0139c1266dbf8f5613df6e232b203929b8c8e",
+    "os/os-system.img": "fa5990de6b97f1b3e924b96af81c6355055c86db0e3902e663aca5df59626e64",
+    "os/os-system.img.small.json": "d42d9e40745d2869cf6d2415df39361bf79f3fddc4aa6e6d5b48a1866163c823"
+  },
+  "installed": "\n\nBusyBox v1.37.0-wasm (2026-07-09 14:38:25 KST) hush - the humble shell\nEnter 'help' for a list of built-in commands.\n\n~ # cat /usr/share/os-release; cat /usr/lib/small/snapshot.json; echo UI-IMAGE-P\r\nIN-O''K\nNAME=gucOS\nPRETTY_NAME=\"gucOS (groundupcoder OS)\"\nVERSION_ID=294\nPACKAGES=cairo,cairodemo,calc,cjson,demos,doom,foundation,freetype,gameboy,gcode,giflib,git,jq,libgit2,libjpeg,libnsbmp,libnsgif,libpng,lua,mgba,micropython,netsurf,netsurf-demos,paint,pixman,punes,quake,sameboy,sent,sqlite3,win32,winmine,zlib\n{\"format\":1,\"sha256\":\"aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1\"}\nUI-IMAGE-PIN-OK\n~ # ",
+  "phase": "gpu: key q -> UI-LIFECYCLE-EXIT",
+  "finalTranscript": "/root/ui-lifecycle gpu &\n[2] 14 /root/ui-lifecycle gpu\n[1] Done                   /root/ui-lifecycle software\n~ # RENDER-DRIVER gucos\nFOCUS-GAINED helper\nFOCUS-GAINED control\nTARGET-FOCUS 0\nTARGET-VIEWABLE 0 hidden=1\nUI-LIFECYCLE-READY\nKEY s\nACTION s 1\nTARGET-VIEWABLE 1 hidden=0\nKEY a\nACTION a 1\nFOCUS-GAINED target\nTARGET-FOCUS 1\nKEY h\nACTION h 1\nFOCUS-GAINED control\nTARGET-FOCUS 0\nTARGET-VIEWABLE 0 hidden=1\nKEY s\nACTION s 1\nTARGET-VIEWABLE 1 hidden=0\nKEY o\nACTION o 1\nKEY c\nACTION c 1\nFOCUS-GAINED helper\nTARGET-VIEWABLE 0 hidden=0\nKEY v\nACTION v 1\nTARGET-VIEWABLE 1 hidden=0\nKEY p\nACTION p 1\nCLOSE-REASON 1 popup\nS=$(wmctl list | grep \"UI lifecycle target\" | sed \"s/[^0-9].*//\"); wmctl close $S; echo CLOSE-S\"\"ENT\nCLOSE-SENT\n~ # CLOSE-REASON 0 target\nKEY a\nACTION a 1\nFOCUS-GAINED target\nTARGET-FOCUS 1\nKEY q\nOWNER-CASCADE 1\nUI-LIFECYCLE-EXIT\n"
+}

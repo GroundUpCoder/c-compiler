@@ -1,0 +1,65 @@
+RED CONTROL: tests/kernel/test_wm_owned.js against kernel.js @6a130848 (pre-#794, worktree c-compiler-791-fix) — fails 41 oks 22 exit 1
+  FAIL create advertises lifecycle level 2 (#794)  1
+  FAIL cross-process owner is EPERM  ENOSYS
+  FAIL a foreign caller cannot re-own my window (EPERM)  ENOSYS
+  FAIL self-ownership is EINVAL  ENOSYS
+  FAIL unknown owner is EINVAL  ENOSYS
+  FAIL same-process owner link accepted  ENOSYS
+  FAIL ownership cycle is EINVAL  ENOSYS
+  FAIL GET_STATE reports the owner and viewable  {"visible":true,"focused":false,"minimized":false,"mapped":true}
+  FAIL WMP record carries WMP_F_OWNED (1024) + VIEWABLE (512)  512
+  ok   the owner itself is not OWNED
+  FAIL an anchored popup cannot take an owner (EINVAL)  ENOSYS
+  FAIL an anchored popup cannot own (EINVAL)  ENOSYS
+  ok   owned stacks above its owner
+  ok   focusing a foreign window puts it above the group
+  FAIL focusing the owned window raises the owner group (owner above foreign)
+  ok   focus lands on the owned window itself
+  FAIL raising the owner carries the owned window above it
+  ok   owned pixels composite before the owner hides
+  FAIL hiding the owner sends WINDOW_HIDDEN to the owned window too
+  FAIL owned requested state preserved (visible) but not viewable  {"visible":true,"focused":false,"minimized":false,"mapped":true}
+  FAIL WMP: owned keeps HIDDEN clear, VIEWABLE clear  512
+  FAIL owned pixels leave the composite with the owner
+  FAIL popup of the owned window leaves too
+  FAIL the popup grab was revoked (no grab holder while hidden)
+  ok   focus fell off the hidden group
+  FAIL activating an owned window under a hidden owner is EACCES
+  ok   a press where the owned window was does not reach it
+  FAIL showing the owner sends WINDOW_SHOWN to the owned window
+  FAIL owned viewable again without any request of its own
+  ok   owned + popup pixels are back
+  ok   the surviving popup grab is restored with the group
+  FAIL an explicitly hidden owned window stays hidden when its owner shows
+  ok   its own show brings it back
+  ok   minimize owner accepted
+  FAIL minimizing the owner sends WINDOW_HIDDEN to the owned window
+  FAIL owned pixels gone while the owner is minimized
+  FAIL WMP: owned VIEWABLE clear, not MINIMIZED itself
+  ok   focus fell off the minimized group
+  FAIL focusing the owned window restores its minimized owner
+  FAIL ...and the owned window gets WINDOW_SHOWN
+  ok   ...with focus on the owned window
+  FAIL owned windows can own (depth 2)  ENOSYS
+  ok   depth-2 stacking: owned2 above owned above owner
+  FAIL root hide reaches the depth-2 owned window
+  FAIL destroying the owner cascades to owned, owned2 and the popup
+  FAIL cascade order is deepest-first (popup, owned2, owned, owner)  [1]
+  FAIL four surfaces gone  4
+  FAIL no live owner links remain
+  ok   foreign window untouched by the cascade
+  FAIL B hidden with A
+  FAIL clearing the owner link is accepted  ENOSYS
+  FAIL ...and B becomes viewable again on its own
+  FAIL GET_STATE owner is 0 after clearing
+  ok   destroying an unlinked window leaves the ex-owner alone
+  ok   outside press dismisses the popup
+  FAIL dismissal is a POPUP_DISMISSED record with reason 1
+  FAIL dismissal is never a QUIT record
+  ok   dismissal never arms the close watchdog
+  ok   close request on an owned window delivers QUIT to it
+  ok   a pumped-but-vetoed close never force-quits the process
+  ok   no force-quit was logged
+  FAIL process exit reclaims every surface incl. owner chains
+  ok   foreign process still has its window
+wm owned: 41 FAILED

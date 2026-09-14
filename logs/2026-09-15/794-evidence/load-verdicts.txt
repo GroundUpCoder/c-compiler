@@ -1,0 +1,12 @@
+== browser 3x under load (build/794-browser-load.log)
+  [32mall 1 file(s) stable across 3 runs.[0m
+browser os sweep: 3 passed, 0 failed  (272.5s)  [1/77 selected, 1/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== kernel 3x under load (build/794-kernel-load.log)
+  [32mstable[0m test_user32_lifecycle_policy.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_wm_owned.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_wm_lifecycle_policy.js  3/3 passed  (flake 0%)
+  [32mall 4 file(s) stable across 3 runs.[0m
+kernel suite: 12 passed, 0 failed  (15.1s)  [4/211 selected, 4/211 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== focused kernel + compiled e2e (build/794-kernel-focused.log, after the SDL_popup.h + settle fix: rerun below)

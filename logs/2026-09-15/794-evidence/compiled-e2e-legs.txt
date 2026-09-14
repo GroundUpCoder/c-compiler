@@ -1,0 +1,36 @@
+ok hidden top-level creation
+ok hidden style clear
+ok show returns previous hidden
+ok shown top-level
+ok duplicate show returns previous visible
+ok duplicate show does not notify
+ok hide returns previous visible
+ok hide releases capture
+ok hide preserves HWND and clears visible style
+ok duplicate hide returns hidden
+ok show again reuses HWND
+ok placement unchanged geometry shows hidden top
+ok placement hides top
+ok placement restores hidden top
+ok owned creation succeeds
+ok GetParent of an owned top-level is its owner
+ok GetWindow(GW_OWNER)
+ok owner hide preserves the owned window's requested state
+ok owner shows again
+ok DestroyWindow(owner) cascades to owned and owned-of-owned
+ok SDL_SetWindowParent links an owner
+ok cycle refused
+ok self refused
+ok both viewable before the owner hides
+ok hiding the owner suppresses the owned window's effective visibility
+ok owned activation refused under a hidden owner
+ok showing the owner restores it
+ok a popup's parent is fixed
+ok no close event yet: reason 0
+ok SDL_DestroyWindow(owner) destroys the owned window and its popup
+ok SDL hidden flag
+ok SDL show
+ok SDL hide retains surface
+ok hidden activation refused
+ok invalid show refused
+LIFECYCLE-DONE failures=0

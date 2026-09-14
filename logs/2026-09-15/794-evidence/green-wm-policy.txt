@@ -1,0 +1,19 @@
+ok title activation maximizes
+ok hidden leaves selectable set
+ok capacity remains bounded
+ok show at capacity is kept pending (#794)
+ok freed slot readmits the pending show automatically, history intact (#794)
+ok readmission consumes the stash entry
+ok readmitted window takes its launch-order slot (first created)
+ok retry show preserves maximize history
+ok duplicate show keeps launch order
+ok restore after hide and capacity pressure uses floating rect
+ok hidden geometry echoes retained
+ok screen resize refits hidden snapped window
+ok snap restore survives hidden resize
+ok single survivor before the order leg
+ok A/B/C launch order
+ok hide B leaves A/C
+ok show B restores A/B/C, not A/C/B (#794)
+ok a new window still appends after a close
+WM-LIFECYCLE-POLICY failures=0
