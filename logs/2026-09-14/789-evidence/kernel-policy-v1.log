@@ -1,0 +1,249 @@
+  ok   wmServe plants S_IFSOCK at /run/wm.sock
+  ok   wmServe is idempotent (re-plant after reboot)
+  ok   connect to the kernel endpoint (no listener process)
+  ok   MENU with no subscriber -> R_ERR ENODEV (todos/0242)
+  ok   OVERVIEW with no subscriber -> R_ERR ENODEV
+  ok   OVERVIEW_SET with no subscriber -> R_ERR ENODEV
+  ok   OVERVIEW_END with no subscriber -> R_ERR ENODEV
+  ok   SUBSCRIBE -> R_OK with screen dims
+  ok   empty snapshot is just EV_FOCUS 0
+  ok   EV_CREATED pushed with the full record
+  ok   record flag bit4 = resizable (todos/0021)
+  ok   EV_FOCUS follows create
+  ok   LIST -> one 72-byte record
+  ok   MOVE -> R_OK
+  ok   scene moved
+  ok   EV_MOVED echoed to the subscriber
+  ok   reassembles a frame split across three writes
+  ok   dispatches two frames from one write
+  ok   MOVE bogus sid -> R_ERR EINVAL
+  ok   borderless create: flag bit2 in the record
+  ok   taskbar moved to the bottom edge
+  ok   borderless has no chrome band
+  ok   borderless click routes without stealing focus
+  ok   composite: borderless pixels, no chrome above
+  ok   FOCUS -> R_OK
+  ok   EV_FOCUS echo
+  ok   MINIMIZE -> R_OK
+  ok   EV_MINIMIZED 1
+  ok   focus falls off the minimized window
+  ok   wmList reports minimized
+  ok   composite skips the minimized window
+  ok   hit test skips the minimized window
+  ok   RESTORE -> R_OK
+  ok   EV_MINIMIZED 0 on restore
+  ok   restore refocuses
+  ok   restored + unminimized
+  ok   RESTACK lower -> bottom of z
+  ok   RESTACK raise -> top of z
+  ok   INJECT_KEY -> R_OK
+  ok   INJECT_POINTER down -> R_OK
+  ok   CLOSE_REQ -> R_OK
+  ok   key + button + QUIT landed in the app ring
+  ok   INJECT_POINTER rel -> R_OK
+  ok   rel inject: deltas + buttons + rel flag in the record
+  ok   record flag bit3 = relative-mouse
+  ok   R_SHOT: dims + presented pixel
+  ok   R_SHOT screen: 640x480 rides the socket in chunks (1.2MB)
+  ok   screen shot pixels match the direct composite
+  ok   THUMB -> R_SHOT with aspect-fit dims (64x48 into 16x16 = 16x12)
+  ok   THUMB pixels are the box-filtered present
+  ok   THUMB bogus sid -> R_ERR EINVAL
+  ok   GLASS on -> R_OK + scene bit
+  ok   GLASS off -> R_OK + scene bit
+  ok   EV_CREATED record flag bit5 = has-alpha (todos/0063)
+  ok   RESIZE -> R_OK
+  ok   client got WINDOW_RESIZED
+  ok   SURFACE_CONFIGURE ack ok
+  ok   EV_CONFIGURED { sid, w, h } at the ack
+  ok   kernel geometry follows the ack
+  ok   RESIZE bogus sid -> R_ERR EINVAL
+  ok   RESIZE below the size floor -> R_ERR EINVAL
+  ok   RESIZE into a full client ring -> R_ERR EAGAIN (todos/0242)
+  ok   ring-full RESIZE left nothing pending
+  ok   RESIZE a non-resizable surface -> R_ERR EPERM (todos/0021, 0242)
+  ok   non-resizable stays unchanged, nothing pending
+  ok   record flag bit4 clear on the non-resizable surface
+  ok   fixed-size create: record dst defaults to the buffer
+  ok   SET_DST on a RESIZABLE surface -> R_ERR EPERM (it configures, never scales)
+  ok   SET_DST below the size floor -> R_ERR EINVAL
+  ok   SET_DST -> R_OK
+  ok   EV_SCALED echo { sid, dstW, dstH }
+  ok   scene tracks the dst, buffer untouched
+  ok   LIST record carries the dst dims
+  ok   park the fixed surface -> R_OK
+  ok   SE grip on the scaled surface starts a scale drag
+  ok   release ends the drag
+  ok   EV_SCALE_REQ { sid, w, h } with the dragged box
+  ok   kernel waits for policy (dst unchanged, nothing configured)
+  ok   policy answer applies
+  ok   no WINDOW_RESIZED ever reached the client (app oblivious)
+  ok   pointer input inverse-maps through the scale (90,60 -> 30,20)
+  ok   scaled SHOT_SCREEN: exact NN halves at 3x
+  ok   focus falls off the destroyed surface
+  ok   fixed surface destroyed
+  ok   pre-shrink park at the bottom-right -> R_OK
+  ok   EV_SCREEN { w, h } pushed on wmSetScreen
+  ok   one-shot clamp: EV_MOVED to a reachable spot (280,232)
+  ok   clamped geometry in the scene (title bar reachable)
+  ok   borderless surface skipped by the clamp (WM policy owns it)
+  ok   MOVE after the no-op resize -> R_OK
+  ok   same-dims wmSetScreen pushed nothing (next event is the MOVE echo)
+  ok   grow emits EV_SCREEN and clamps nothing
+  ok   connection quiescent before the park
+  ok   event read parks when idle
+  ok   parked read woken by EV_TITLE
+  ok   EV_TITLE truncation snaps to a whole UTF-8 sequence
+  ok   EV_TITLE carries whole UTF-8 when it fits
+  ok   title restored for the later legs
+  ok   wmctl-style connection: LIST works unsubscribed
+  ok   wmctl MOVE ok
+  ok   subscriber got the wmctl move, and ONLY that
+  ok   clamp works with no WM connected (title bar reachable)
+  ok   WM gone: kernel-chrome drag still works
+  ok   WM reconnects
+  ok   resubscribe -> R_OK with the CURRENT screen dims (todos/0023)
+  ok   snapshot has both windows + focus
+  ok   service spawns parentless
+  ok   service auto-reaped on exit (no zombie)
+  ok   service spawn of a missing binary resolves 0
+  ok   first title down: drag-start
+  ok   drag-end EV_MOVED echo
+  ok   a motionless title click emits NO snap drop (0095: a click is not a drag)
+  ok   quick second title down: title-activate
+  ok   EV_TITLE_ACTIVATE { sid } pushed to the subscriber
+  ok   ACTIVATE -> R_OK
+  ok   ACTIVATE rides the same event (wmctl max = the double-click)
+  ok   ACTIVATE bogus sid -> R_ERR EINVAL
+  ok   ACTIVATE on a borderless surface -> R_ERR EPERM (no title bar, no gesture)
+  ok   max box click -> title-activate
+  ok   max box rides EV_TITLE_ACTIVATE to the subscriber
+  ok   min box click minimizes (kernel mechanism)
+  ok   EV_MINIMIZED 1 pushed for the min box
+  ok   focus fall follows the min-box minimize
+  ok   restore c1 for the cycle legs -> R_OK
+  ok   chord down intercepted
+  ok   EV_CYCLE { +1 } pushed
+  ok   chord keyup swallowed (no half-chord to the app)
+  ok   Shift reverses: EV_CYCLE { -1 }
+  ok   CYCLE command -> R_OK
+  ok   CYCLE rides the same EV_CYCLE (wmctl cycle = the chord)
+  ok   plain Tab (no Alt) still reaches the app
+  ok   start chord down intercepted
+  ok   EV_MENU pushed
+  ok   start chord keyup swallowed (no half-chord to the app)
+  ok   plain Esc (no Ctrl) still reaches the app
+  ok   MENU command -> R_OK
+  ok   MENU rides the same EV_MENU (wmctl menu = the chord)
+  ok   Alt+Space intercepted
+  ok   EV_SYSMENU carries the focused sid
+  ok   sysmenu chord keyup swallowed (no half-chord to the app)
+  ok   plain Space (no Alt) still reaches the app
+  ok   SYSMENU command -> R_OK
+  ok   SYSMENU rides the same EV_SYSMENU (wmctl sysmenu = the chord)
+  ok   park c1 mid-screen for the snap drag -> R_OK
+  ok   snap leg: title down starts a drag
+  ok   mid-screen motion emits no snap event
+  ok   EV_SNAP_EDGE { sid, 1 } on entering the left zone
+  ok   no re-emit while the zone is unchanged
+  ok   EV_SNAP_EDGE { sid, 0 } on leaving the zone
+  ok   corner zone reports the quarter edge (TR = 5)
+  ok   release ends the drag
+  ok   the drag-end EV_MOVED comes first
+  ok   EV_SNAP_DROP { sid, edge, preX, preY } carries the zone + pre-drag spot
+  ok   the kernel committed no geometry itself (mechanism only)
+  ok   second snap drag starts
+  ok   plain drop rides EV_SNAP_DROP { sid, 0 }
+  ok   Win+Left intercepted
+  ok   EV_SNAP_KEY { 0 } for Left
+  ok   snap chord keyup swallowed (no half-chord to the app)
+  ok   RGUI works too: EV_SNAP_KEY { 1 } for Right
+  ok   EV_SNAP_KEY { 2 } for Up
+  ok   EV_SNAP_KEY { 3 } for Down
+  ok   plain arrow (no GUI) still reaches the app
+  ok   SNAP command -> R_OK
+  ok   SNAP rides the same EV_SNAP_KEY (wmctl snap = the chord)
+  ok   INJECT_SCREEN down -> R_OK
+  ok   INJECT_SCREEN move -> R_OK
+  ok   INJECT_SCREEN up -> R_OK
+  ok   screen-injected title drag moved the window (+50,+50)
+  ok   ...and rode the drop event out (edge 0)
+  ok   INJECT_WMKEY chord down -> R_OK
+  ok   the chord traversed the grab table: EV_MENU emitted
+  ok   INJECT_WMKEY chord up -> R_OK
+  ok   both chord edges swallowed (the focused app saw nothing)
+  ok   plain key down -> R_OK
+  ok   plain key up -> R_OK
+  ok   unmatched key routed to the focused app, repeat flag intact
+  ok   INJECT_KEY same chord bytes -> R_OK
+  ok   INJECT_KEY chord up -> R_OK
+  ok   INJECT_KEY bypassed the grab table: raw pair to the app, no EV_MENU
+  ok   per-window inject -> R_OK
+  ok   ...and leaves the idle clock alone (backdated idle survives)
+  ok   screen-path key edge -> R_OK
+  ok   INJECT_WMKEY stamped the idle clock (real input, the 0x22 rule)
+  ok   OVERVIEW command -> R_OK
+  ok   OVERVIEW rides EV_OVERVIEW (wmctl overview = the chord)
+  ok   OVERVIEW_SET -> R_OK
+  ok   overview scene set with the live cell only (dead sid dropped)
+  ok   overview hover: pointer inside the cell sets hoverSid
+  ok   overview hover: pointer outside all cells clears hoverSid
+  ok   overview PICK: down in a cell -> EV_OVERVIEW_PICK{sid}
+  ok   overview swallows all pointer input (app ring stays empty)
+  ok   overview PICK: down on empty space -> EV_OVERVIEW_PICK{0}
+  ok   overview: Esc down -> EV_OVERVIEW_PICK{0}
+  ok   overview swallows all keys (app ring stays empty)
+  ok   OVERVIEW_END -> R_OK
+  ok   overview scene cleared
+  ok   OVERVIEW_SET with only dead sids -> R_OK + no overview
+  ok   SET_LAYER top -> R_OK
+  ok   the pinned taskbar jumps above the focused window
+  ok   record word 11 carries the layer
+  ok   create raises to the top of the NORMAL layer only
+  ok   RESTACK raise stops below the pinned taskbar
+  ok   FOCUS raise stops below the pinned taskbar too
+  ok   park the window over the strip -> R_OK
+  ok   composite: the strip pixel is still the taskbar (bar above)
+  ok   hit test on the strip resolves the bar (furniture stays clickable)
+  ok   SET_LAYER bottom -> R_OK + bottom of z
+  ok   RESTACK lower stops above the bottom layer
+  ok   focusing the bottom-layer window keeps it pinned
+  ok   SET_LAYER back to normal -> R_OK
+  ok   SET_LAYER bogus sid -> R_ERR EINVAL
+  ok   SET_LAYER out-of-range layer -> R_ERR EINVAL
+  ok   focus a normal window under the pinned bar
+  ok   MINIMIZE the focused window -> R_OK
+  ok   EV_MINIMIZED echo
+  ok   minimize focus fall skips the pinned bar (lands on the normal window)
+  ok   RESTORE -> R_OK
+  ok   destroy focus fall skips the pinned bar too
+  ok   EV_DESTROYED follows the fall
+  ok   MINIMIZE the unfocused normal window -> R_OK
+  ok   MINIMIZE the last normal window -> R_OK
+  ok   no normal window left: furniture takes the focus (degenerate fall)
+  ok   EV_CREATED still pushed for the unmapped surface
+  ok   created UNMAPPED while a WM is subscribed
+  ok   composite skips the unmapped surface (no cascade-default flash)
+  ok   hit test skips the unmapped surface
+  ok   injection works while unmapped (agents unaffected)
+  ok   single-surface SHOT works while unmapped (the app's own pixels)
+  ok   placement MOVE -> R_OK
+  ok   the WM MOVE maps the surface
+  ok   first composited position IS the placed position
+  ok   hit test sees the mapped surface at the placed spot
+  ok   second surface also starts unmapped
+  ok   SET_LAYER maps too (any geometry/stacking op is the ack)
+  ok   unmapped before the backstop
+  ok   the WM_MAP_TIMEOUT_MS backstop maps a never-placed surface
+  ok   foreign borderless maps at create (not the WM's to place)
+  ok   subscriber-owned borderless (the start-menu case) waits unmapped
+  ok   its self-park MOVE maps it
+  ok   subscriber-owned anchored child maps AT CREATE (todos/0282)
+  ok   FOCUS the flyout's owner -> R_OK
+  ok   anchored flyout stays ABOVE its owner after the owner raise (0282)
+  ok   pending unmapped before the WM dies
+  ok   overview active before the WM dies
+  ok   last subscriber gone: overview force-ended (the safety valve)
+  ok   last subscriber gone: everything pending maps at once
+
+test_wm_policy: all passed

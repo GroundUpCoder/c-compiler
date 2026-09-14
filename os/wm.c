@@ -336,6 +336,29 @@ static void fatal_sdl(int code, const char *what) {
 static void die(const char *what) { fatal(1, what); }
 static win_t wins[MAX_WIN];
 static int nwins = 0;
+/* Hidden windows leave the taskbar/cycle set, but keep their policy history.
+ * Kernel records carry current geometry, not saved maximize/snap restore data. */
+typedef struct hidden_win { win_t value; struct hidden_win *next; } hidden_win;
+static hidden_win *hidden_wins;
+static int hidden_take(int32_t sid, win_t *out) {
+    hidden_win **p = &hidden_wins;
+    while (*p) {
+        hidden_win *n = *p;
+        if (n->value.sid == sid) {
+            if (out) *out = n->value;
+            *p = n->next; free(n); return 1;
+        }
+        p = &n->next;
+    }
+    return 0;
+}
+static void hidden_save(const win_t *w) {
+    hidden_take(w->sid, NULL);
+    hidden_win *n = malloc(sizeof *n);
+    if (!n) die("hidden window state allocation");
+    n->value = *w; n->next = hidden_wins; hidden_wins = n;
+}
+
 static int32_t bar_sid = 0;        /* our own taskbar surface */
 static int own_pid = 0;
 static int overview_active = 0;    /* window overview / Exposé (todos/EXPOSE):
@@ -3560,6 +3583,20 @@ static int make_bar(void) {
  * design), give focus back (a create steals it), and re-clamp windows so
  * every title bar stays reachable and clear of the taskbar. Policy: clamp,
  * don't re-cascade — no placement churn on a mere resize. */
+static void screen_refit(win_t *w) {
+    if (w->maximized) { maximize(w); return; }   /* re-fit (todos/0025) */
+    if (w->snapped) { snap_place(w); return; }   /* re-fit (todos/0095) */
+    int nx = w->x, ny = w->y;
+    if (nx > scr_w - 40) nx = scr_w - 40;
+    if (nx < 40 - w->dst_w) nx = 40 - w->dst_w;   /* on-screen size (0024) */
+    if (ny > scr_h - BAR_H - 8) ny = scr_h - BAR_H - 8;
+    if (ny < TITLE_H) ny = TITLE_H;
+    if (nx != w->x || ny != w->y) {
+        int32_t a[3] = { w->sid, nx, ny };
+        wmp_send(sock, WMP_MOVE, a, 3);   /* echo updates the model */
+    }
+}
+
 static void screen_changed(void) {
     menu_dismiss();                    /* geometry is stale; reopen re-lays */
     run_dismiss();                     /* likewise (todos/0078) */
@@ -3581,20 +3618,8 @@ static void screen_changed(void) {
             wmp_send(sock, WMP_FOCUS, a, 1);
             break;
         }
-    for (int i = 0; i < nwins; i++) {
-        win_t *w = &wins[i];
-        if (w->maximized) { maximize(w); continue; }   /* re-fit (todos/0025) */
-        if (w->snapped) { snap_place(w); continue; }   /* re-fit (todos/0095) */
-        int nx = w->x, ny = w->y;
-        if (nx > scr_w - 40) nx = scr_w - 40;
-        if (nx < 40 - w->dst_w) nx = 40 - w->dst_w;   /* on-screen size (0024) */
-        if (ny > scr_h - BAR_H - 8) ny = scr_h - BAR_H - 8;
-        if (ny < TITLE_H) ny = TITLE_H;
-        if (nx != w->x || ny != w->y) {
-            int32_t a[3] = { w->sid, nx, ny };
-            wmp_send(sock, WMP_MOVE, a, 3);   /* echo updates the model */
-        }
-    }
+    for (int i = 0; i < nwins; i++) screen_refit(&wins[i]);
+    for (hidden_win *n = hidden_wins; n; n = n->next) screen_refit(&n->value);
 }
 
 /* ---- window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) ----
@@ -3753,9 +3778,31 @@ static void hotkey_dispatch(int token, int flags, int sid) {
 }
 
 static void handle_event(wmp_hdr *h) {
-    if (h->type == WMP_EV_CREATED) {
+    if (h->type == WMP_EV_CREATED || h->type == WMP_EV_VISIBILITY) {
         wmp_rec r;
         if (h->plen != sizeof r || wmp_read_all(sock, &r, (int)sizeof r) != 0) die("EV_CREATED read");
+        win_t restored;
+        int has_restored = 0;
+        if (h->type == WMP_EV_VISIBILITY) {
+            /* Hidden surfaces retain their kernel placement/backing store, but
+             * are absent from desktop policy (taskbar, cycle and overview). */
+            for (int i = 0; i < nwins; i++) if (wins[i].sid == r.sid) {
+                if (r.flags & WMP_F_HIDDEN) hidden_save(&wins[i]);
+                memmove(&wins[i], &wins[i + 1], (size_t)(nwins - i - 1) * sizeof wins[0]);
+                nwins--; break;
+            }
+            if (r.flags & WMP_F_HIDDEN) {
+                if (peek_for == r.sid) peek_dismiss();
+                if (sys_mode && sys_target == r.sid) sys_end(0);
+                overview_relayout();
+                return;
+            }
+            if (r.pid == own_pid) return;
+        }
+        if (r.flags & WMP_F_HIDDEN) {
+            if (!(r.flags & WMP_F_BORDERLESS)) place(r.sid, r.w, r.h);
+            return;
+        }
         if (r.pid == own_pid) {        /* our own furniture: park by title */
             if (r.flags & WMP_F_ANCHORED) {
                 /* A menucore chain level (todos/0282): kernel-positioned
@@ -3910,24 +3957,28 @@ static void handle_event(wmp_hdr *h) {
              * (we send no FOCUS), so the modal has the keyboard as it should.
              * (The WMP_F_TRANSIENT flag could later also suppress the min/max
              * title-bar boxes on modals — deliberately NOT done here, 0281.) */
-            place(r.sid, r.w, r.h);
+            if (h->type == WMP_EV_CREATED) place(r.sid, r.w, r.h);
             return;
         }
         if (nwins < MAX_WIN) {
+            has_restored = hidden_take(r.sid, &restored);
             win_t *w = &wins[nwins++];
+            if (has_restored) *w = restored;
             w->sid = r.sid; w->pid = r.pid;
             w->x = r.x; w->y = r.y; w->w = r.w; w->h = r.h;
             w->dst_w = r.dst_w; w->dst_h = r.dst_h;
             w->minimized = (r.flags & WMP_F_MINIMIZED) ? 1 : 0;
             w->focused = (r.flags & WMP_F_FOCUSED) ? 1 : 0;
             w->resizable = (r.flags & WMP_F_RESIZABLE) ? 1 : 0;
-            w->maximized = 0;          /* slots are reused: reset (0025) */
-            w->snapped = 0;            /* likewise (todos/0095) */
-            w->stamp = ++zctr;         /* newest (create focuses; 0032) */
+            if (!has_restored) {
+                w->maximized = 0;
+                w->snapped = 0;
+                w->stamp = ++zctr;
+            }
             memcpy(w->title, r.title, 32);
             w->title[31] = 0;
         }
-        place(r.sid, r.w, r.h);
+        if (h->type == WMP_EV_CREATED) place(r.sid, r.w, r.h);
         overview_relayout();            /* a new window joins the grid (EXPOSE) */
         return;
     }
@@ -3936,8 +3987,15 @@ static void handle_event(wmp_hdr *h) {
     int32_t p[8];
     if (h->plen > sizeof p && h->type != WMP_EV_TITLE) { wmp_skip(sock, h->plen); return; }
     switch (h->type) {
+    case WMP_EV_ACTIVATION_REQUEST:
+        if (h->plen != 8 || wmp_read_all(sock, p, 8) != 0) die("activation request read");
+        /* Current desktop policy grants owner requests; the kernel rechecks
+         * visibility when FOCUS arrives, so a later hide wins this race. */
+        wmp_send(sock, WMP_FOCUS, p, 2);
+        break;
     case WMP_EV_DESTROYED: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_DESTROYED read");
+        hidden_take(p[0], NULL);
         if (p[0] == smroot.sid) smroot.sid = 0;           /* defensive (0028) */
         if (p[0] == run_sid) run_sid = 0;                 /* likewise (0078) */
         for (int d = 0; d < MENU_MAX_DEPTH; d++)          /* likewise (0091) */
@@ -4027,12 +4085,16 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_MOVED: {                /* tracked for the EV_SCREEN re-clamp */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_MOVED read");
         win_t *w = find(p[0]);
+        if (!w) for (hidden_win *n = hidden_wins; n; n = n->next)
+            if (n->value.sid == p[0]) { w = &n->value; break; }
         if (w) { w->x = p[1]; w->y = p[2]; }
         break;
     }
     case WMP_EV_CONFIGURED: {
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_CONFIGURED read");
         win_t *w = find(p[0]);
+        if (!w) for (hidden_win *n = hidden_wins; n; n = n->next)
+            if (n->value.sid == p[0]) { w = &n->value; break; }
         /* configure implies resizable: dst tracks the buffer (todos/0024) */
         if (w) { w->w = p[1]; w->h = p[2]; w->dst_w = p[1]; w->dst_h = p[2]; }
         break;
@@ -4040,6 +4102,8 @@ static void handle_event(wmp_hdr *h) {
     case WMP_EV_SCALED: {               /* dst viewport changed (todos/0024) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SCALED read");
         win_t *w = find(p[0]);
+        if (!w) for (hidden_win *n = hidden_wins; n; n = n->next)
+            if (n->value.sid == p[0]) { w = &n->value; break; }
         if (w) { w->dst_w = p[1]; w->dst_h = p[2]; }
         break;
     }

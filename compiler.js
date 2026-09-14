@@ -24121,6 +24121,9 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_INIT_SENSOR 0x00008000u
 #define SDL_INIT_CAMERA 0x00010000u
 #define SDL_WINDOW_FULLSCREEN 0x0000000000000001ULL
+#define SDL_WINDOW_HIDDEN 0x0000000000000008ULL
+#define SDL_WINDOW_MINIMIZED 0x0000000000000040ULL
+#define SDL_WINDOW_INPUT_FOCUS 0x0000000000000200ULL
 /* Borderless: under the OS WM this is a kernel surface with no chrome
    (taskbar-class windows — todos/0014); standalone runtimes ignore it. */
 #define SDL_WINDOW_BORDERLESS 0x0000000000000010ULL
@@ -24395,14 +24398,15 @@ SDL_Surface *SDL_GetWindowSurface(SDL_Window *window);
 bool SDL_UpdateWindowSurface(SDL_Window *window);
 bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h);
 bool SDL_SetWindowSize(SDL_Window *window, int w, int h);
-/* Create-time window flags (#601). The contract here is what the veneer
-   really knows: the flags the window was created with (which are also what
-   the kernel surface honours — borderless/resizable/transparent/utility/
-   popup; a popup additionally reports BORDERLESS, since that is how it is
-   created). DYNAMIC state bits (INPUT_FOCUS, MOUSE_FOCUS, MINIMIZED,
-   MAXIMIZED, ...) are never reported — the same honesty contract as
-   SDL_GetGlobalMouseState: no invented state. */
+/* gucOS queries current HIDDEN, INPUT_FOCUS and MINIMIZED state from the
+   owning kernel. Other bits retain the declared creation flags. Standalone
+   runtimes without this state query retain their create-time flags. */
 SDL_WindowFlags SDL_GetWindowFlags(SDL_Window *window);
+/* gucOS: showing preserves focus; raising separately requests WM activation.
+   Runtimes without a window-system lifecycle fail with SDL_GetError(). */
+bool SDL_ShowWindow(SDL_Window *window);
+bool SDL_HideWindow(SDL_Window *window);
+bool SDL_RaiseWindow(SDL_Window *window);
 /* Window placement is the WM's job in gucOS, so SDL_SetWindowPosition is an
    honest accept-and-succeed no-op (a self-placing app would only fight the
    compositor). SDL_SetWindowIcon likewise succeeds without a taskbar-icon
@@ -29739,6 +29743,9 @@ static bool __sdl_texture_live(SDL_Texture *t) {
    The host (host.js) knows nothing about C struct layouts. */
 __import int __sdl_init(int flags);
 __import void __sdl_quit(void);
+__import int __sdl_set_window_visible(int handle, int visible);
+__import int __sdl_raise_window(int handle);
+__import int __sdl_get_window_state(int handle);
 __import int __sdl_create_window(const char *title, int x, int y, int w, int h, int flags);
 __import void __sdl_destroy_window(int handle);
 __import void __sdl_set_window_title(int handle, const char *title);
@@ -29928,7 +29935,7 @@ SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags fl
     if (handle <= 0) { SDL_SetError("SDL_CreateWindow: host failed to create a window"); return NULL; }
     int pitch = w * 4;
     SDL_Window *win = (SDL_Window *)malloc(sizeof(SDL_Window));
-    if (!win) { SDL_SetError("Out of memory"); return NULL; }
+    if (!win) { __sdl_destroy_window(handle); SDL_SetError("Out of memory"); return NULL; }
     win->handle = handle;
     win->surface.flags = 0;
     win->surface.format = SDL_PIXELFORMAT_RGBA32;
@@ -29938,7 +29945,7 @@ SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags fl
     win->surface.refcount = 1;
     win->surface.reserved = NULL;
     win->surface.pixels = malloc(pitch * h);
-    if (!win->surface.pixels) { free(win); SDL_SetError("Out of memory"); return NULL; }
+    if (!win->surface.pixels) { __sdl_destroy_window(handle); free(win); SDL_SetError("Out of memory"); return NULL; }
     memset(win->surface.pixels, 0, pitch * h);
     win->pixels_cap = pitch * h;
     win->relative_mouse = 0;
@@ -29966,11 +29973,33 @@ bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h) {
     return 1;
 }
 
-/* Create-time flags only — the static honesty contract in SDL.h (#601):
-   dynamic state bits are never reported, not guessed at. */
+/* Query authoritative lifecycle state; never infer focus from a request. */
 SDL_WindowFlags SDL_GetWindowFlags(SDL_Window *window) {
     if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return 0; }
-    return window->flags;
+    int state = __sdl_get_window_state(window->handle);
+    if (state < 0) return window->flags;
+    return (window->flags & ~(SDL_WINDOW_HIDDEN | SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_MINIMIZED)) | (SDL_WindowFlags)state;
+}
+
+bool SDL_ShowWindow(SDL_Window *window) {
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
+    if (__sdl_set_window_visible(window->handle, 1) != 0)
+        return SDL_SetError("SDL_ShowWindow: window system refused visibility");
+    window->flags &= ~SDL_WINDOW_HIDDEN;
+    return 1;
+}
+bool SDL_HideWindow(SDL_Window *window) {
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
+    if (__sdl_set_window_visible(window->handle, 0) != 0)
+        return SDL_SetError("SDL_HideWindow: window system refused visibility");
+    window->flags |= SDL_WINDOW_HIDDEN;
+    return 1;
+}
+bool SDL_RaiseWindow(SDL_Window *window) {
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
+    if (__sdl_raise_window(window->handle) != 0)
+        return SDL_SetError("SDL_RaiseWindow: window system refused activation");
+    return 1;
 }
 
 /* Ask the window system for a new size (todos/0068). ASYNC like upstream

@@ -1,0 +1,95 @@
+{
+  "tool": "tests/run.js",
+  "node": "v25.8.2",
+  "elapsedMs": 242025,
+  "runId": "20260914-072514-26698",
+  "host": {
+    "hostname": "mftmm.local",
+    "start": {
+      "t": "2026-09-14T07:25:14.470Z",
+      "load1": 8.17,
+      "totalGb": 16,
+      "measured": true,
+      "pressure": 1,
+      "memFreePct": 61,
+      "availBytes": 8206237696,
+      "availGb": 7.64,
+      "freeGb": 4.42,
+      "swapUsedGb": 1.78,
+      "compressorGb": 3.32
+    },
+    "end": {
+      "t": "2026-09-14T07:29:16.500Z",
+      "load1": 4.4,
+      "totalGb": 16,
+      "measured": true,
+      "pressure": 1,
+      "memFreePct": 62,
+      "availBytes": 7903428608,
+      "availGb": 7.36,
+      "freeGb": 3.38,
+      "swapUsedGb": 1.78,
+      "compressorGb": 3.46
+    }
+  },
+  "hostHealth": {
+    "level": "ok",
+    "reasons": []
+  },
+  "filter": "test_ui_lifecycle_e2e",
+  "tier": null,
+  "suites": [
+    "kernel"
+  ],
+  "results": [
+    {
+      "suite": "kernel",
+      "status": "pass",
+      "ms": 242011,
+      "exit": 0,
+      "artifact": "build/test-kernel/summary.json",
+      "files": {
+        "filter": "test_ui_lifecycle_e2e",
+        "total": 208,
+        "selected": 1,
+        "executed": 1,
+        "resumed": 0,
+        "carried": 0,
+        "recorded": 1
+      },
+      "tallies": {
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0
+      },
+      "host": {
+        "before": {
+          "t": "2026-09-14T07:25:14.475Z",
+          "load1": 8.17,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 61,
+          "availBytes": 8200486912,
+          "availGb": 7.64,
+          "freeGb": 4.42,
+          "swapUsedGb": 1.78,
+          "compressorGb": 3.32
+        },
+        "after": {
+          "t": "2026-09-14T07:29:16.492Z",
+          "load1": 4.4,
+          "totalGb": 16,
+          "measured": true,
+          "pressure": 1,
+          "memFreePct": 62,
+          "availBytes": 7907852288,
+          "availGb": 7.36,
+          "freeGb": 3.38,
+          "swapUsedGb": 1.78,
+          "compressorGb": 3.46
+        }
+      }
+    }
+  ]
+}

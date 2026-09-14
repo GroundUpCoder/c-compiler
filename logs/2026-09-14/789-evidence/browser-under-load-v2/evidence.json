@@ -1,0 +1,55 @@
+{
+  "commit": "cf6c5175ef68dfbef3e21eff18b5c442e1ef5512",
+  "kind": "automated Playwright keyboard and screenshot probes; no manual interaction",
+  "url": "http://localhost:3349/os/os.html?hostkeys=off",
+  "files": {
+    "host.js": "881fa3b31d11fca934684d3fdabfd30f7d7bcb801abeccdfc640b0abad6c31b5",
+    "kernel.js": "983e2c85fac695ffcea3c36be958eb5dff0ea989e053500ee4b55feee1aa5cf6",
+    "compiler.js": "bd117fcf838da9cb0c22e4e351c19b844c0d32bdc2cc71b5f3bbbd2538d0733b",
+    "os/image.json": "437fef62840b8e972c8969dbf155df2beb42e91ba6d56b6bc2ab0ae2053ce8ae",
+    "os/kernel-worker.js": "cd5de99c5bb5984589f9795dd36548b55aba06acf34b3b8561b5d2777ea9e17b",
+    "os/process-worker.js": "345c96d10dcb06a0ccfbec092a6dd9c21d13f2a40204bee8e9a25e741f50c4a2",
+    "tests/browser/os-ui-lifecycle.mjs": "ecc580def778a83eba6d83caf5a0f78d700b6b99c61fbd5e1581dfd8b13655dd",
+    "tests/browser/ui-lifecycle.c": "9816911b4c2e9d7d298f4e5c5498bce319cf0f7dfa21cdc157392d9fa93a5c3b",
+    "os/os-system.img": "48b29eec218130eacc6517a19828f7e614f5c19dc1fc0c502d4e0937747ef446",
+    "os/os-system.img.small.json": "d42d9e40745d2869cf6d2415df39361bf79f3fddc4aa6e6d5b48a1866163c823"
+  },
+  "runs": [
+    {
+      "driver": "software",
+      "hidden": 0,
+      "shown": 28600,
+      "after": 0,
+      "gpuShips": 0,
+      "transcript": "/root/ui-lifecycle software &\n[1] 8 /root/ui-lifecycle software\n~ # RENDER-DRIVER software\nTARGET-FOCUS 0\nUI-LIFECYCLE-READY\nACTION s 1\nACTION a 1\nTARGET-FOCUS 1\nACTION h 1\nTARGET-FOCUS 0\nUI-LIFECYCLE-EXIT\n"
+    },
+    {
+      "driver": "gpu",
+      "hidden": 0,
+      "shown": 28600,
+      "after": 0,
+      "gpuShips": 102,
+      "transcript": "/root/ui-lifecycle gpu &\n[2] 9 /root/ui-lifecycle gpu\n[1] Done                   /root/ui-lifecycle software\n~ # RENDER-DRIVER gucos\nTARGET-FOCUS 0\nUI-LIFECYCLE-READY\nACTION s 1\nACTION a 1\nTARGET-FOCUS 1\nACTION h 1\nTARGET-FOCUS 0\nUI-LIFECYCLE-EXIT\n"
+    }
+  ],
+  "browser": "149.0.7827.55",
+  "errors": [],
+  "small": {
+    "format": 1,
+    "smallSnapshot": "aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1"
+  },
+  "served": {
+    "host.js": "881fa3b31d11fca934684d3fdabfd30f7d7bcb801abeccdfc640b0abad6c31b5",
+    "kernel.js": "983e2c85fac695ffcea3c36be958eb5dff0ea989e053500ee4b55feee1aa5cf6",
+    "compiler.js": "bd117fcf838da9cb0c22e4e351c19b844c0d32bdc2cc71b5f3bbbd2538d0733b",
+    "os/image.json": "437fef62840b8e972c8969dbf155df2beb42e91ba6d56b6bc2ab0ae2053ce8ae",
+    "os/kernel-worker.js": "cd5de99c5bb5984589f9795dd36548b55aba06acf34b3b8561b5d2777ea9e17b",
+    "os/process-worker.js": "345c96d10dcb06a0ccfbec092a6dd9c21d13f2a40204bee8e9a25e741f50c4a2",
+    "tests/browser/os-ui-lifecycle.mjs": "ecc580def778a83eba6d83caf5a0f78d700b6b99c61fbd5e1581dfd8b13655dd",
+    "tests/browser/ui-lifecycle.c": "9816911b4c2e9d7d298f4e5c5498bce319cf0f7dfa21cdc157392d9fa93a5c3b",
+    "os/os-system.img": "48b29eec218130eacc6517a19828f7e614f5c19dc1fc0c502d4e0937747ef446",
+    "os/os-system.img.small.json": "d42d9e40745d2869cf6d2415df39361bf79f3fddc4aa6e6d5b48a1866163c823"
+  },
+  "installed": "\n\nBusyBox v1.37.0-wasm (2026-07-09 14:38:25 KST) hush - the humble shell\nEnter 'help' for a list of built-in commands.\n\n~ # cat /usr/share/os-release; cat /usr/lib/small/snapshot.json; echo UI-IMAGE-P\r\nIN-O''K\nNAME=gucOS\nPRETTY_NAME=\"gucOS (groundupcoder OS)\"\nVERSION_ID=292\nPACKAGES=cairo,cairodemo,calc,cjson,demos,doom,foundation,freetype,gameboy,gcode,giflib,git,jq,libgit2,libjpeg,libnsbmp,libnsgif,libpng,lua,mgba,micropython,netsurf,netsurf-demos,paint,pixman,punes,quake,sameboy,sent,sqlite3,win32,winmine,zlib\n{\"format\":1,\"sha256\":\"aba6f88a4dd392b6e0c91d9a3253740b692b49a2bc4d28e20889a55f68a576a1\"}\nUI-IMAGE-PIN-OK\n~ # ",
+  "finalTranscript": "/root/ui-lifecycle gpu &\n[2] 9 /root/ui-lifecycle gpu\n[1] Done                   /root/ui-lifecycle software\n~ # RENDER-DRIVER gucos\nTARGET-FOCUS 0\nUI-LIFECYCLE-READY\nACTION s 1\nACTION a 1\nTARGET-FOCUS 1\nACTION h 1\nTARGET-FOCUS 0\nUI-LIFECYCLE-EXIT\n"
+}

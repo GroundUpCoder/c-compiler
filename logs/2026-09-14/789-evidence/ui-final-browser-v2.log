@@ -1,0 +1,14 @@
+Evidence: /Users/jku/git/c-compiler-ui-lifecycle/build/test-browser/ui-lifecycle-1789376053915
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+page.evaluate: InvalidStateError: Failed to execute 'copyExternalImageToTexture' on 'GPUQueue': Cannot copy from a canvas that has had transferControlToOffscreen() called.
+    at eval (eval at evaluate (:303:30), <anonymous>:7:14)
+    at async <anonymous>:329:30
+    at count (/Users/jku/git/c-compiler-ui-lifecycle/tests/browser/os-ui-lifecycle.mjs:51:26)
+    at async file:///Users/jku/git/c-compiler-ui-lifecycle/tests/browser/os-ui-lifecycle.mjs:76:17 {
+  log: []
+}
+
+Node.js v25.8.2

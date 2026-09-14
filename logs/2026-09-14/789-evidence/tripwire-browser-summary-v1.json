@@ -1,0 +1,245 @@
+{
+  "suite": "browser os sweep",
+  "startedAt": "2026-09-14T09:01:01.545Z",
+  "node": "v25.8.2",
+  "jobs": 1,
+  "repeat": 3,
+  "underLoad": 10,
+  "done": true,
+  "elapsedMs": 251054,
+  "filter": "os-doom,os-term,os-compositor,os-wm",
+  "files": {
+    "total": 75,
+    "selected": 6,
+    "executed": 6,
+    "resumed": 0,
+    "carried": 1,
+    "recorded": 7
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-14T08:55:54.347Z",
+      "filter": "os-ui-lifecycle",
+      "total": 75,
+      "selected": 1,
+      "executed": 1,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 3,
+      "underLoad": 10,
+      "done": true,
+      "elapsedMs": 19404
+    },
+    {
+      "startedAt": "2026-09-14T09:01:01.545Z",
+      "filter": "os-doom,os-term,os-compositor,os-wm",
+      "total": 75,
+      "selected": 6,
+      "executed": 6,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 3,
+      "underLoad": 10,
+      "done": true,
+      "elapsedMs": 251054
+    }
+  ],
+  "results": [
+    {
+      "file": "os-ui-lifecycle.mjs",
+      "status": "pass",
+      "ms": 6890,
+      "log": "build/test-browser/os-ui-lifecycle.mjs.rep1.log",
+      "repeatIdx": 1,
+      "carried": true,
+      "carriedFrom": "2026-09-14T08:55:54.347Z"
+    },
+    {
+      "file": "os-ui-lifecycle.mjs",
+      "status": "pass",
+      "ms": 6106,
+      "log": "build/test-browser/os-ui-lifecycle.mjs.rep2.log",
+      "repeatIdx": 2,
+      "carried": true,
+      "carriedFrom": "2026-09-14T08:55:54.347Z"
+    },
+    {
+      "file": "os-ui-lifecycle.mjs",
+      "status": "pass",
+      "ms": 6403,
+      "log": "build/test-browser/os-ui-lifecycle.mjs.rep3.log",
+      "repeatIdx": 3,
+      "carried": true,
+      "carriedFrom": "2026-09-14T08:55:54.347Z"
+    },
+    {
+      "file": "os-compositor.mjs",
+      "status": "pass",
+      "ms": 24247,
+      "log": "build/test-browser/os-compositor.mjs.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "os-compositor.mjs",
+      "status": "pass",
+      "ms": 23212,
+      "log": "build/test-browser/os-compositor.mjs.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "os-compositor.mjs",
+      "status": "pass",
+      "ms": 23162,
+      "log": "build/test-browser/os-compositor.mjs.rep3.log",
+      "repeatIdx": 3
+    },
+    {
+      "file": "os-doom.mjs",
+      "status": "pass",
+      "ms": 13682,
+      "log": "build/test-browser/os-doom.mjs.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "os-doom.mjs",
+      "status": "pass",
+      "ms": 13530,
+      "log": "build/test-browser/os-doom.mjs.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "os-doom.mjs",
+      "status": "pass",
+      "ms": 14679,
+      "log": "build/test-browser/os-doom.mjs.rep3.log",
+      "repeatIdx": 3
+    },
+    {
+      "file": "os-doompage-motion.mjs",
+      "status": "pass",
+      "ms": 15380,
+      "log": "build/test-browser/os-doompage-motion.mjs.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "os-doompage-motion.mjs",
+      "status": "pass",
+      "ms": 13068,
+      "log": "build/test-browser/os-doompage-motion.mjs.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "os-doompage-motion.mjs",
+      "status": "pass",
+      "ms": 13053,
+      "log": "build/test-browser/os-doompage-motion.mjs.rep3.log",
+      "repeatIdx": 3
+    },
+    {
+      "file": "os-doompage-renders.mjs",
+      "status": "pass",
+      "ms": 3931,
+      "log": "build/test-browser/os-doompage-renders.mjs.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "os-doompage-renders.mjs",
+      "status": "pass",
+      "ms": 5524,
+      "log": "build/test-browser/os-doompage-renders.mjs.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "os-doompage-renders.mjs",
+      "status": "pass",
+      "ms": 3807,
+      "log": "build/test-browser/os-doompage-renders.mjs.rep3.log",
+      "repeatIdx": 3
+    },
+    {
+      "file": "os-term.mjs",
+      "status": "pass",
+      "ms": 11847,
+      "log": "build/test-browser/os-term.mjs.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "os-term.mjs",
+      "status": "pass",
+      "ms": 12043,
+      "log": "build/test-browser/os-term.mjs.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "os-term.mjs",
+      "status": "pass",
+      "ms": 11855,
+      "log": "build/test-browser/os-term.mjs.rep3.log",
+      "repeatIdx": 3
+    },
+    {
+      "file": "os-wm.mjs",
+      "status": "pass",
+      "ms": 26181,
+      "log": "build/test-browser/os-wm.mjs.rep1.log",
+      "repeatIdx": 1
+    },
+    {
+      "file": "os-wm.mjs",
+      "status": "pass",
+      "ms": 9869,
+      "log": "build/test-browser/os-wm.mjs.rep2.log",
+      "repeatIdx": 2
+    },
+    {
+      "file": "os-wm.mjs",
+      "status": "pass",
+      "ms": 11968,
+      "log": "build/test-browser/os-wm.mjs.rep3.log",
+      "repeatIdx": 3
+    }
+  ],
+  "flake": [
+    {
+      "file": "os-compositor.mjs",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    },
+    {
+      "file": "os-doom.mjs",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    },
+    {
+      "file": "os-doompage-motion.mjs",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    },
+    {
+      "file": "os-doompage-renders.mjs",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    },
+    {
+      "file": "os-term.mjs",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    },
+    {
+      "file": "os-wm.mjs",
+      "pass": 3,
+      "total": 3,
+      "flaky": false
+    }
+  ],
+  "evidence": {
+    "expected": 6,
+    "fresh": 6,
+    "resumedExistenceOnly": 0
+  }
+}

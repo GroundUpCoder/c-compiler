@@ -1,0 +1,16 @@
+Independent code review APPROVED for #789 at exact commit 101912eb348be64bf8d138f5aa8b9afc166f120d, ui-lifecycle-batch1, /Users/jku/git/c-compiler-ui-lifecycle. No remaining blocking findings in the reviewed lifecycle changes. This supersedes my changes-requested reviews of 37b9752f, f5e517d1 and a1ea95a5; it is not browser/full-gate acceptance or authorization to merge, push or deploy.
+
+Independently executed on this exact tip:
+- node tests/kernel/test_wm_lifecycle.js: PASS, all 39 assertions.
+- node tests/kernel/test_wm_lifecycle_policy.js: PASS, all eight checks. Inspected the harness: it compiles actual os/wm.c with the repository compiler, redirects socket read/send at a deterministic seam, and calls actual event/policy handlers. It is not an OS boot or browser execution.
+- Negative control in a separate Node process: removed only the _wmMap call to _wmRestoreGrabs in memory. Result: exit 1 with exactly one failure, 'placement restores pending popup grab'. No repository source/test files were edited.
+
+Closure of the last blockers:
+- wmFocus restores eligible grabs after clearing minimization. The new minimize/outside-click/restore test passes and is followed by actual outside dismissal, so the grab is useful rather than merely retained metadata.
+- The placement test now removes the dormant grab while unmapped before requiring mapping to restore it; the independently executed negative control proves sensitivity.
+- Hidden WM policy retains maximize/snap saved floating geometry, shares screen refitting with visible records, and accepts hidden geometry echoes. The compiled test verifies restore history under capacity pressure and hidden snap resize. Its socket seam and injected records are explicit; these results do not prove browser transport/rendering.
+- Capacity check precedes hidden_take, retaining history on failed visible-table admission. The compiled test demonstrates later event-based admission retains that history. Automatic admission when another slot is freed remains the previously noted lower-severity limitation, not something this test proves; the test explicitly injects another visibility event. Launch-order changes across hide/show also remain the previously reported nonblocking observation.
+
+Earlier reviewed closures remain intact: actual hidden creation; show/hide storage reuse; ownership and stale-id refusal; serial-checked activation after hide/show; hidden overview filtering; popup activation refusal; ordinary popup restoration and explicit popup reopening without ancestor-only resurrection. No callback source changes since the preceding independent review; the integrated Objective-C identity fix had passed my JSPI/sync callback tests there, and I did not rerun unchanged callbacks this turn.
+
+Validation still owed under author/coordinator scheduling: final compiled SDL/User32 integration, installed-browser software/WebGPU evidence, applicable flake checks and exact-tree mapped gate. The historical compiled checkpoint result is not a substitute. No manual interaction, heavy suite, source edit, additional agent, merge, push or deployment was performed by this reviewer. Working tree was clean and HEAD remained 101912eb at the final check.

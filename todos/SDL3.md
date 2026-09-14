@@ -309,7 +309,7 @@ gained/lost, exposed);
 `SDL_SetWindowSize` (app-initiated resize) / `GetWindowSizeInPixels` / position / min/max; fullscreen
 toggle at runtime; `SDL_GetWindowPixelDensity`/display scale (HiDPI);
 `SDL_SetWindowResizable`/`Bordered`; display enumeration (`SDL_GetDisplays`,
-desktop/current mode); `SDL_ShowWindow`/`Hide`; `SDL_GetWindowFlags`;
+desktop/current mode);
 `CreateWindowWithProperties` (needs SDL_properties). Web: canvas resize observer,
 `devicePixelRatio`, Fullscreen API.
 

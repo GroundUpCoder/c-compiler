@@ -1,0 +1,65 @@
+  ok   boots to ready
+  ok   VT2 screen tracks the viewport pane (todos/0023)
+  ok   desktop teal before any window
+  ok   taskbar strip composited (wm autostart)
+  ok   taskbar spans the RESIZED screen width (EV_SCREEN re-lay)
+  ok   taskbar is borderless (no chrome band above it)
+  ok   winbox window composited (orange fill)
+  ok   WM placement settled (kernel cascade spot vacated)
+  ok   white app border
+  ok   focused title bar navy
+  ok   close box present
+  ok   taskbar button sunken while winbox focused
+  ok   taskbar click minimized winbox (window off screen)
+  ok   taskbar click restored winbox
+  ok   client click painted at local coords
+  ok   key toggled the fill green
+  ok   title drag moved the window
+  ok   old spot back to desktop
+  ok   drag-resize: client re-rendered at 300x200
+  ok   new white border at the new right edge
+  ok   area beyond the old width is client now
+  ok   frame border flanks the resized client
+  ok   resizable right frame edge -> ew-resize
+  ok   resizable SE corner -> nwse-resize
+  ok   client area -> default arrow
+  ok   desktop -> default arrow
+  ok   title double-click maximized winbox to the work area
+  ok   maximized fill reaches the left edge (client at x=0)
+  ok   maximized title bar spans the top
+  ok   taskbar still visible below the maximized window
+  ok   second double-click restored the saved geometry
+  ok   the maximized area is desktop again
+  ok   restored frame at the restored edge
+  ok   min/max box faces composited
+  ok   min box minimized the window
+  ok   taskbar restored after the min box
+  ok   max box maximized to the work area (same policy as the double-click)
+  ok   max box again restored the saved geometry
+  ok   close box quit the app; desktop restored
+  ok   taskbar button removed after close
+  ok   shell alive after windowed app exits
+  ok   wmctl list from the in-browser shell sees the taskbar
+  ok   two more winboxes composited
+  ok   second winbox focused (navy title)
+  ok   first winbox blurred (gray title)
+  ok   chord flipped focus to the other winbox
+  ok   chord again flipped back
+  ok   third winbox (C) composited and focused
+  ok   Alt+Space opened the window system menu (popup holds focus)
+  ok   the Space keydown was swallowed (fill = exactly the Alt toggle)
+  ok   keyboard Move relocated C (+40,+16)
+  ok   Close via the sysmenu tore C down
+  ok   strip is furniture before the drag
+  ok   winbox dragged onto the strip
+  ok   taskbar still composited above the dragged window (todos/0038)
+  ok   taskbar button under the overlap still clicks (B minimized)
+  ok   ...and restores
+  ok   wmctl list: top of z is the taskbar (todos/0038)
+  ok   winbox dragged back off the strip
+  ok   wm dead: taskbar reclaimed
+  ok   no WM: the chord reaches the app (fill toggled)
+  ok   no WM: the Alt keydown reaches the app (fill toggled)
+  ok   no WM: Alt+Space is not a chord — the Space toggles it back
+
+os wm (browser): PASS

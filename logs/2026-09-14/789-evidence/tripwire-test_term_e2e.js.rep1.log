@@ -1,0 +1,114 @@
+  ok   term opens a WM window titled "term"
+  ok   term window is 640x486 (80x24 at the 8x19 mono cell + the menu bar)
+  ok   all four shots written
+  ok   resize acked: geometry is 500x260 (SURFACE_CONFIGURE landed)
+  ok   typed exit ends the session: term window gone
+  ok   vi-in-term wrote the file (insert + ESC + :wq over the pty)
+  ok   shot1 parses at 640x486
+  ok   shot1 shows rendered text (hush banner + prompt)
+  ok   shot2 parses at 640x486
+  ok   ls /bin rendered more text (echo + output over the pty)
+  ok   vi shot parses at 640x486
+  ok   vi status line rendered in the bottom row
+  ok   vi cleared the shell scrollback (alt screen row is tilde-only)
+  ok   post-resize shot parses at 500x260 (reflowed present)
+  ok   post-resize shot still renders text
+  ok   nested: term-in-term brings up two term windows
+  ok   nested: SIGKILL of the parent takes the child session down (no ghosts)
+  ok   nested: typed exit orphans the bg child — window stays up, process alive
+  ok   nested: the orphaned term still executes typed input (not wedged)
+  ok   nested: close box reclaims the orphan
+  ok   less shot written
+  ok   q quits less back to the shell, exit 0 (typed echo ran at hush)
+  ok   less shot parses at 640x486
+  ok   less rendered the file body (numbered lines fill the screen)
+  ok   less status row rendered in the bottom cell row
+  ok   dim shot written
+  ok   dim shot parses at 640x486
+  ok   SGR 2 renders dim glyph cores at half theme fg (110,110,110)
+  ok   normal text (banner/prompt + post-SGR-22 tail) stays full fg (220,220,220)
+  ok   unicode: all three shots written
+  ok   unicode: typed é/€/😀 reached the app as correct UTF-8 bytes
+  ok   unicode: selection copy re-encoded cell code points to UTF-8 (clip bytes)
+  ok   unicode: baseline shot parses at 640x486
+  ok   unicode: post-cat shot parses
+  ok   unicode: é/€/α/λ/ж rendered as real glyphs (fg pixels grew)
+  ok   unicode: tofu shot parses
+  ok   unicode: CJK tofu box + U+FFFD rendered (fg pixels grew again)
+  ok   wide: all three shots written
+  ok   wide: w0 parses
+  ok   wide: 2-cell tofu spans cells 0 AND 1
+  ok   wide: narrow X advanced to cell 2 (cursor moved 2)
+  ok   wide: cell 3 stays blank
+  ok   wide: w1 parses
+  ok   wide: typed CJK echo renders into the continuation cell
+  ok   wide: w2 parses
+  ok   wide: ONE erase wiped the continuation cell too
+  ok   scrollback: all five shots written
+  ok   scrollback: all six fractional-wheel shots written (#347)
+  ok   scrollback: live view shows a seq number at the top (not the marker)
+  ok   scrollback: PageUp scrolls UP into history — the off-screen marker is now visible
+  ok   scrollback: PageDown returns to the live bottom (clamped)
+  ok   scrollback: mouse-wheel scrolls UP into history (marker visible)
+  ok   scrollback: new output snaps the view back to live
+  ok   fractional wheel: marker visible mid-screen before the leg
+  ok   fractional wheel: one 0.25-notch event (0.75 lines) cannot move a line
+  ok   fractional wheel: the second event crosses one line (carry summed)
+  ok   fractional wheel: the 0.5-line remainder carries into the third event
+  ok   fractional wheel: opposite sign cancels the remainder (no move)
+  ok   fractional wheel: accumulated down-motion scrolls one line back
+  ok   autoscroll: all eight shots written
+  ok   autoscroll: P2 triggered output really arrived (done2)
+  ok   autoscroll: P4 triggered output really arrived (done4)
+  ok   autoscroll: P1 scrolled up to the marker (key absent)
+  ok   autoscroll: P1 output snapped the view (absent = on, the default preserved)
+  ok   autoscroll: P2 scrolled up to the marker (after the live off edit)
+  ok   autoscroll: P2 output did NOT move the view (off, applied live — no restart)
+  ok   autoscroll: P3 scrolled up to the marker (after the live `1` edit)
+  ok   autoscroll: P3 output snapped the view (numeric 1 parses as on)
+  ok   autoscroll: P4 thumb drag reached the marker (autoscroll on)
+  ok   autoscroll: P4 mid-drag output never snapped (sb_drag hold composes)
+  ok   selscroll: X1 both shots written
+  ok   selscroll: X1 copy while scrolled returns the marker under the cursor (not live rows)
+  ok   selscroll: X1 scrolled selection renders inverted cells at the dragged row
+  ok   selscroll: X2 live-view baseline copy (identity mapping)
+  ok   selscroll: X2 selection follows its content into history (copy after pushes)
+  ok   selscroll: X2 eviction clears the selection (chord no-op, sentinel intact)
+  ok   selscroll: X3 RIS clears the selection (chord no-op, sentinel intact)
+  ok   scrollbar: all four shots written
+  ok   scrollbar: hidden with no history (right strip is pure background)
+  ok   scrollbar: appears once history exists (right strip has ink)
+  ok   scrollbar: live view parks the bright thumb at the bottom
+  ok   scrollbar: no thumb at the top while live (track only)
+  ok   scrollbar: thumb drag scrolled the view to the top (marker row visible)
+  ok   scrollbar: the thumb followed the drag to the top of the track
+  ok   scrollbar: track click below the thumb pages down (marker leaves row 0)
+  ok   menubar: bar/popup/top shots written
+  ok   menubar: New Window item spawned an independent sibling term
+  ok   menubar: bar strip shot parses at 640x30 (the full-width GRID_Y band)
+  ok   menubar: Shell/Edit/View labels rendered on the strip (dark ink)
+  ok   menubar: dropdown shot parses (3 x MENU_ITEM_H rows + separator)
+  ok   menubar: engine-drawn item labels on the dropdown (dark ink)
+  ok   menubar: Scroll-to-Top shot parses
+  ok   menubar: View > Scroll to Top moved the view — the marker row is at the grid top
+  ok   settings: "Term Settings" opened at 300x286 via Shell > Settings...
+  ok   settings: pane/term2/relaunch shots written
+  ok   settings: Font Size + at the box BOTTOM (y=40) re-sized the live window off 640x486
+  ok   settings: user layer persisted fontsize 15
+  ok   settings: user layer persisted theme light
+  ok   settings: user layer persisted scrollback 1500
+  ok   settings: user layer persisted cursor under
+  ok   settings: user layer persisted bell visual
+  ok   settings: user layer persisted autoscroll off
+  ok   settings: the relaunched term reopened the pane at 300x286
+  ok   settings: Autoscroll row read the PERSISTED off, so one > wrote on
+  ok   settings: relaunch equals the live-applied geometry (fontsize persisted)
+  ok   settings: pane shot parses at 300x286
+  ok   settings: pane labels rendered (dark ink on BTNFACE)
+  ok   settings: no glyph ink outside a row box (margins + gutters clean)
+  ok   settings: term2 shot parses
+  ok   settings: term2 band went LIGHT via the FS_WATCH cross-process reload
+  ok   settings: relaunch shot parses
+  ok   settings: relaunched term band is LIGHT (theme persisted to startup)
+
+term e2e: PASS

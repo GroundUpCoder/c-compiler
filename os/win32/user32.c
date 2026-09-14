@@ -59,8 +59,8 @@
  *     Esc=IDCANCEL, radio-group arrows, over WM_GETDLGCODE; wired into both
  *     modal loops. The clipboard landed with 0048 (file) and rides the
  *     kernel store since 0090
- *   - hidden top-levels: ShowWindow(SW_HIDE) on a top-level is a no-op
- *     (the kernel surface has no hide op; minimize is the WM's)
+ *   - top-level visibility: WS_VISIBLE and ShowWindow map to SDL lifecycle
+ *     (application visibility is separate from WM minimization)
  *   - WM_CLOSE from the kernel (title-bar 'x' / wmctl close) is per-
  *     window when several top-levels are live (SDL_EVENT_WINDOW_
  *     CLOSE_REQUESTED, todos/0089); the only/last window gets the
@@ -1917,6 +1917,7 @@ static void update_cursor(HWND target) {
 
 static void route_mouse(HWND top, UINT downMsg, int btnIdx, float fx, float fy,
                         int clicks, Uint32 state) {
+    if (!hwnd_shown(top)) return;
     int x = (int)fx, y = (int)fy;
     /* menu overlays route BEFORE capture (Windows lets the menu win):
      * parent-coordinate events reach the chain via the surface router —
@@ -1965,6 +1966,17 @@ static void route_mouse(HWND top, UINT downMsg, int btnIdx, float fx, float fy,
  * First consumer: os/gpubox.c. */
 void __u32_feed_sdl_event(SDL_Event e) {
         switch (e.type) {
+        case SDL_EVENT_WINDOW_FOCUS_GAINED: {
+            HWND top = top_by_windowid(e.window.windowID);
+            if (top && hwnd_shown(top)) g_activeTop = top;
+            break;
+        }
+        case SDL_EVENT_WINDOW_FOCUS_LOST: {
+            HWND top = top_by_windowid(e.window.windowID);
+            if (top && g_capture && g_capture->top == top) ReleaseCapture();
+            if (top && g_activeTop == top) g_activeTop = NULL;
+            break;
+        }
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP: {
             HWND top = top_by_windowid(e.key.windowID);
@@ -1978,7 +1990,7 @@ void __u32_feed_sdl_event(SDL_Event e) {
                 break;
             }
             HWND target = top->focus ? top->focus : top;
-            if (!hwnd_able(target)) break;
+            if (!hwnd_able(target) || !hwnd_shown(target)) break;
             int vk = vk_of((int)e.key.key, (int)e.key.scancode);
             LPARAM lp = 1 | ((e.key.scancode & 0xFF) << 16);
             if (e.type == SDL_EVENT_KEY_UP) lp |= (1 << 30) | (1u << 31);
@@ -2915,7 +2927,8 @@ static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowNam
                             : (owned || (exStyle & WS_EX_TOOLWINDOW) != 0);
         hw->win = SDL_CreateWindow(windowName ? windowName : "", w, h,
                                    ((style & WS_THICKFRAME) ? SDL_WINDOW_RESIZABLE : 0) |
-                                   (transient ? SDL_WINDOW_UTILITY : 0));
+                                   (transient ? SDL_WINDOW_UTILITY : 0) |
+                                   ((style & WS_VISIBLE) ? 0 : SDL_WINDOW_HIDDEN));
         if (!hw->win) { free(hw->text); free(hw); return NULL; }
         int placed = 0;
         for (int i = 0; i < g_nTops; i++)
@@ -2923,7 +2936,7 @@ static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowNam
         if (!placed && g_nTops < (int)(sizeof g_tops / sizeof g_tops[0]))
             g_tops[g_nTops++] = hw;
         if (!g_activeTop) g_activeTop = hw;
-        hw->visible = 1;                         /* a kernel surface is visible */
+        hw->visible = (style & WS_VISIBLE) != 0;
         /* menus attach BEFORE WM_CREATE — apps call GetMenu there (0068);
          * an explicit hMenu wins over the class menu, Windows-style */
         if (menu) hw->menu = menu;
@@ -3144,13 +3157,21 @@ BOOL ShowWindow(HWND h, int cmd) {
         WIN32_UNSUPPORTED("ShowWindow(SW_%d) minimize/maximize (the WM owns "
                           "window state; shown normal)", cmd);
     if (cmd == SW_HIDE) {
-        if (is_top(h)) return was;               /* no kernel surface hide */
+        if (__mc.open && __mc.owner == (void *)h) mc_close();
+        if (is_top(h) && !SDL_HideWindow(h->win)) return was;
+        if (g_capture && (g_capture == h || (is_top(h) && g_capture->top == h))) ReleaseCapture();
+        if (g_activeTop == h) g_activeTop = NULL;
+        h->style &= ~WS_VISIBLE;
         h->visible = 0;
-        SendMessage(h, WM_SHOWWINDOW, FALSE, 0);
+        if (was) SendMessage(h, WM_SHOWWINDOW, FALSE, 0);
         if (h->parent) InvalidateRect(h->parent, NULL, TRUE);
     } else {
+        if (is_top(h) && !SDL_ShowWindow(h->win)) return was;
+        h->style |= WS_VISIBLE;
         h->visible = 1;
-        SendMessage(h, WM_SHOWWINDOW, TRUE, 0);
+        if (is_top(h) && cmd != SW_SHOWNOACTIVATE && cmd != SW_SHOWNA && cmd != SW_SHOWMINNOACTIVE)
+            SDL_RaiseWindow(h->win);
+        if (!was) SendMessage(h, WM_SHOWWINDOW, TRUE, 0);
         InvalidateRect(h, NULL, TRUE);
     }
     return was;

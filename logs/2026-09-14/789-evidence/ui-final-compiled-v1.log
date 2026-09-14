@@ -1,0 +1,21 @@
+
+[1m━━━ kernel suite ━━━[0m
+$ node -r /Users/jku/git/c-compiler-ui-lifecycle/tests/lib/parent-watch.js tests/kernel/run.js --filter=test_ui_lifecycle_e2e
+
+registry: 207 declared + 0 excluded == 207 on disk (tests/kernel/run.js)
+registry: 2 declared + 0 excluded == 2 on disk (gucos-packages/tests/manifest.json)
+sibling tests: gucos-packages at /Users/jku/git/gucos-packages (via main-clone sibling) — 2 member(s) join the suite
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 55.7 GB free
+[fixture] os/os-system.img input-stale (os/wm.c is newer) — baking once (node tools/mkimage.js --packages=all)…
+[fixture] baked in 219.9s
+[33m⚠ kernel suite: --filter=test_ui_lifecycle_e2e selected 1 of 209 files — this run covers PART of the suite.[0m
+--- kernel suite (1 files, 6 jobs) ---
+ok   test_ui_lifecycle_e2e.js  2.7s
+evidence: 1/1 selected members have logs post-dating the run start
+
+kernel suite: 1 passed, 0 failed  (2.7s)  [1/209 selected, 1/209 recorded]  summary: build/test-kernel/summary.json
+
+[1m━━━ tests/run.js summary ━━━[0m
+  [32mok  [0m kernel                       223.1s  [33m[1/209 files — PARTIAL][0m  [1P/0F/0S]  → build/test-kernel/summary.json
+
+  1 passed, 0 failed  (223.2s)  → build/test-run/summary.json

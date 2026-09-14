@@ -1,0 +1,14 @@
+  ok   boot present while UNPARKED leaves no pin
+  ok   keepAlive false with the app parked in WaitEvent
+  ok   present while UNPARKED posts no want-frame
+  ok   ...and fires no damage hook
+  ok   compSetParked stamps the pcb page
+  ok   present while PARKED posts want-frame (pcb pinned)
+  ok   the doorbell fired the damage hook (compositor wake)
+  ok   keepAlive true while pinned
+  ok   WaitEvent entry posts frame-idle (pin released)
+  ok   keepAlive falls — the compositor may re-park
+  ok   SIGKILL mid-pin clears it (a dead app cannot pin the clock)
+  ok   keepAlive false after the kill (zombie ignored)
+
+comp-park e2e: PASS
