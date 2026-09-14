@@ -7426,7 +7426,9 @@ Kernel.prototype._wmpRecord = function (s) {
               (s.borderless ? 4 : 0) | (s.relativeMouse ? 8 : 0) |
               (s.resizable ? 16 : 0) | (s.hasAlpha ? 32 : 0) |
               (s.parentSid ? 64 : 0) |    // WMP_F_ANCHORED (todos/0256)
-              (s.transient ? 128 : 0) | (s.requestedVisible === false ? 256 : 0);   // WMP_F_TRANSIENT (todos/0281)
+              (s.transient ? 128 : 0) | (s.requestedVisible === false ? 256 : 0) |
+              (!s.minimized && s.mapped && !this._wmRequestedHidden(s) &&
+               !this._wmAnchorHidden(s) ? 512 : 0); // WMP_F_VIEWABLE
   var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
                 this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ),
                 s.dstW, s.dstH, s.layer | 0];

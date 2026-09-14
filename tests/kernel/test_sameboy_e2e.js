@@ -75,7 +75,7 @@ const waitTree = (pattern) =>
 function sessionApps() {
   const script = [
     'sameboy &',
-    'wmctl wait win SameBoy',                       // window spawn (0155)
+    'wmctl wait visible SameBoy',                       // window spawn (0155)
     // M3 red state: the pre-conversion (plain-SDL) sameboy has no menu bar
     // child — this wait timing out IS the red run.
     'wmctl wait win menubar 8000',
@@ -137,7 +137,7 @@ function sessionApps() {
     'echo QUIT-OK',
   ].concat(HAVE_GBC ? [
     'sameboy /root/roms/SuperMarioDeluxe.gbc &',
-    'wmctl wait win SameBoy',                       // window spawn (0155)
+    'wmctl wait visible SameBoy',                       // window spawn (0155)
     'sleep 20',                                    // timing subject: cgb_boot animation + game intro frames render
     'CSID=$(wmctl list | grep "SameBoy$" | sed "s/[^0-9].*//")',
     'wmctl shot $CSID /root/sbc.png && echo shot-cgb-ok',

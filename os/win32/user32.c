@@ -1981,7 +1981,10 @@ void __u32_feed_sdl_event(SDL_Event e) {
         case SDL_EVENT_KEY_UP: {
             HWND top = top_by_windowid(e.key.windowID);
             if (!top) top = g_activeTop;
-            if (!top) break;
+            /* System visibility gates the surface, not the explicitly focused
+             * child: Win32 focus proxies can be hidden controls (#789). Check
+             * before menu dispatch too, so hidden tops cannot consume keys. */
+            if (!top || !hwnd_shown(top)) break;
             g_activeTop = top;
             g_mod = (int)e.key.mod;
             if (__mc.open && e.type == SDL_EVENT_KEY_DOWN) {
@@ -1990,7 +1993,7 @@ void __u32_feed_sdl_event(SDL_Event e) {
                 break;
             }
             HWND target = top->focus ? top->focus : top;
-            if (!hwnd_able(target) || !hwnd_shown(target)) break;
+            if (!hwnd_able(target)) break;
             int vk = vk_of((int)e.key.key, (int)e.key.scancode);
             LPARAM lp = 1 | ((e.key.scancode & 0xFF) << 16);
             if (e.type == SDL_EVENT_KEY_UP) lp |= (1 << 30) | (1u << 31);
@@ -6874,12 +6877,15 @@ BOOL GetWindowPlacement(HWND hwnd, WINDOWPLACEMENT *wp) {
 }
 
 BOOL SetWindowPlacement(HWND hwnd, const WINDOWPLACEMENT *wp) {
-    if (!hwnd || !wp) return FALSE;
+    if (!hwnd || !wp || wp->length != sizeof *wp) return FALSE;
     int w = wp->rcNormalPosition.right - wp->rcNormalPosition.left;
     int h = wp->rcNormalPosition.bottom - wp->rcNormalPosition.top;
     if (w > 0 && h > 0)
         MoveWindow(hwnd, wp->rcNormalPosition.left, wp->rcNormalPosition.top,
                    w, h, TRUE);
+    /* Show state is independent of a geometry change, including startup
+     * restore of an already correctly sized but initially hidden window. */
+    ShowWindow(hwnd, (int)wp->showCmd);
     return TRUE;
 }
 

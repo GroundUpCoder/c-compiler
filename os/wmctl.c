@@ -9,7 +9,7 @@
  *                                     drivers; MS (default 15000) is a FAILURE
  *                                     deadline (exit 1 on timeout), not a sync
  *                                     point. Conditions:
- *                                       win TITLE / nowin TITLE
+ *                                       win TITLE / visible TITLE / nowin TITLE
  *                                       count TITLE N / atleast TITLE N
  *                                       gone SID
  *                                       flag SID CH / noflag SID CH
@@ -161,7 +161,7 @@ static int failop(const char *op) {
 static int usage(void) {
     fprintf(stderr,
         "usage: wmctl list\n"
-        "       wmctl wait win|nowin TITLE [MS]\n"
+        "       wmctl wait win|visible|nowin TITLE [MS]\n"
         "       wmctl wait count|atleast TITLE N [MS]\n"
         "       wmctl wait gone SID [MS]\n"
         "       wmctl wait flag|noflag SID CHAR [MS]\n"
@@ -427,12 +427,12 @@ static float need_f(const char *op, const char *what, const char *s) {
     return v;
 }
 
-/* The 8-char FLAGS column (shared by `list` and `wait`): f m b r R A, a T/B
+/* The 9-char FLAGS column (shared by `list` and `wait`): f m b r R A, a T/B
  * slot for pinned z-layers (todos/0038), then U for a transient/owned modal
  * (todos/0281 — no taskbar button, skipped by cycling). Kept in one place so
- * the two readers never drift. */
-static void rec_flags(const wmp_rec *r, char flags[9]) {
-    memcpy(flags, "--------", 8);
+ * the two readers never drift. The final H marks an application-hidden surface. */
+static void rec_flags(const wmp_rec *r, char flags[10]) {
+    memcpy(flags, "---------", 9);
     if (r->flags & WMP_F_FOCUSED)    flags[0] = 'f';
     if (r->flags & WMP_F_MINIMIZED)  flags[1] = 'm';
     if (r->flags & WMP_F_BORDERLESS) flags[2] = 'b';
@@ -442,7 +442,8 @@ static void rec_flags(const wmp_rec *r, char flags[9]) {
     if (r->layer > 0) flags[6] = 'T';
     else if (r->layer < 0) flags[6] = 'B';
     if (r->flags & WMP_F_TRANSIENT)  flags[7] = 'U';
-    flags[8] = 0;
+    if (r->flags & WMP_F_HIDDEN) flags[8] = 'H';
+    flags[9] = 0;
 }
 
 /* ---- event-based waits (todos/0083) ----
@@ -489,6 +490,7 @@ static const wmp_rec *wm_by_sid(const wmp_rec *recs, int n, int32_t sid) {
 /* Evaluate one wait condition against a fetched list. Returns 1 (satisfied),
  * 0 (keep waiting). Conditions:
  *   win TITLE      a window titled TITLE exists
+ *   visible TITLE  a titled surface is mapped, not hidden or minimized
  *   nowin TITLE    no window titled TITLE
  *   count TITLE N  exactly N windows titled TITLE
  *   atleast T N    at least N windows titled T
@@ -502,6 +504,12 @@ static const wmp_rec *wm_by_sid(const wmp_rec *recs, int n, int32_t sid) {
  *                  scale-to-fit ack landed) */
 static int wm_cond_met(const char *cond, char **a, const wmp_rec *recs, int n) {
     if (!strcmp(cond, "win"))   return wm_count_title(recs, n, a[0]) > 0;
+    if (!strcmp(cond, "visible")) {
+        for (int i = 0; i < n; i++)
+            if (!strcmp(recs[i].title, a[0]) &&
+                (recs[i].flags & WMP_F_VIEWABLE)) return 1;
+        return 0;
+    }
     if (!strcmp(cond, "nowin")) return wm_count_title(recs, n, a[0]) == 0;
     if (!strcmp(cond, "count")) return wm_count_title(recs, n, a[0]) == atoi(a[1]);
     if (!strcmp(cond, "atleast")) return wm_count_title(recs, n, a[0]) >= atoi(a[1]);
@@ -509,7 +517,7 @@ static int wm_cond_met(const char *cond, char **a, const wmp_rec *recs, int n) {
     if (!strcmp(cond, "flag") || !strcmp(cond, "noflag")) {
         const wmp_rec *r = wm_by_sid(recs, n, (int32_t)atoi(a[0]));
         if (!r) return 0;
-        char flags[9]; rec_flags(r, flags);
+        char flags[10]; rec_flags(r, flags);
         int has = strchr(flags, a[1][0]) != NULL;
         return cond[0] == 'n' ? !has : has;
     }
@@ -529,13 +537,13 @@ static int wm_cond_met(const char *cond, char **a, const wmp_rec *recs, int n) {
 }
 
 /* wmctl wait COND ARGS... [MS]  — the trailing MS is optional (default
- * 15000). Base arg count per condition: win/nowin/gone take 1, everything
+ * 15000). Base arg count per condition: win/visible/nowin/gone take 1, everything
  * else takes 2. */
 static int do_wait(int fd, int argc, char **argv) {
     if (argc < 4) return usage();
     const char *cond = argv[2];
     int base = (!strcmp(cond, "win") || !strcmp(cond, "nowin") ||
-                !strcmp(cond, "gone")) ? 1 : 2;
+                !strcmp(cond, "gone") || !strcmp(cond, "visible")) ? 1 : 2;
     if (argc < 3 + base) return usage();
     char *a[2] = { argv[3], base > 1 ? argv[4] : NULL };
     long timeout = argc > 3 + base ? need_i32("wait", "MS", argv[3 + base]) : 15000;
@@ -620,7 +628,7 @@ static int do_list(int fd) {
     for (int32_t i = 0; i < count; i++) {
         wmp_rec r;
         if (wmp_read_all(fd, &r, (int)sizeof r) != 0) return fail("short record");
-        char flags[9];
+        char flags[10];
         rec_flags(&r, flags);          /* [6] layer (0038), [7] transient (0281) */
         r.title[31] = 0;
         char dst[32] = "-";            /* scaled viewport (todos/0024), or - */

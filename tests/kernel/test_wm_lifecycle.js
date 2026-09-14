@@ -133,7 +133,10 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('wrong-owner activation rejected', (await rpc(1,K.OP.SURFACE_ACTIVATE,{sid:visible})).errno==='EPERM');
   check('hidden activation rejected', (await rpc(app,K.OP.SURFACE_ACTIVATE,{sid:hidden})).errno==='EACCES');
   drain(ring);
+  const flagsOf = sid => new DataView(kernel._wmpRecord(kernel._surfaces.get(sid)).buffer).getInt32(28,true);
+  check('record exposes application-hidden state without viewable', (flagsOf(hidden)&256) && !(flagsOf(hidden)&512));
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:hidden,visible:true});
+  check('record exposes mapped visible state', !(flagsOf(hidden)&256) && (flagsOf(hidden)&512));
   check('show keeps sid and storage, without focus', surf.sab===sab && kernel._focusSid===visible);
   check('show emits one visibility event', drain(ring).filter(e=>e.type===0x202).length===1);
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:hidden,visible:true});
@@ -143,6 +146,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   const popup = await create(64|128, {parentSid:hidden,dx:2,dy:2});
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:hidden,visible:false});
   check('hide active window selects visible fallback', kernel._focusSid===visible);
+  check('record suppresses viewable for hidden ancestor', !(flagsOf(popup)&512));
   check('popup hidden with parent', !kernel.wmScene().surfaces.some(s=>s.sid===popup));
   check('hide revokes popup grab', !kernel._wmGrabs.includes(popup));
   check('popup cannot receive hidden input', kernel.wmInjectPointer(popup,'down',1,1)==='EACCES');
@@ -158,6 +162,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:popup,visible:false});
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:popup,visible:true});
   kernel.wmMinimize(hidden);
+  check('record suppresses viewable for minimized root and popup', !(flagsOf(hidden)&512) && !(flagsOf(popup)&512));
   kernel._wmGrabConsume(null,false);
   kernel.wmFocus(hidden);
   check('minimize and outside click then restore retains popup grab', kernel._wmGrabs.includes(popup));
@@ -175,6 +180,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('WM managed hidden creation waits for placement', ds.mapped===false && pending.length===1);
   const earlyPopup = await create(64|128,{parentSid:delayed,dx:2,dy:2});
   await rpc(app,K.OP.SURFACE_SET_VISIBLE,{sid:delayed,visible:true});
+  check('record suppresses viewable while placement pending', !(flagsOf(delayed)&512) && !(flagsOf(earlyPopup)&512));
   check('show before placement does not expose popup', !kernel.wmScene().surfaces.some(s=>s.sid===earlyPopup));
   kernel._wmGrabConsume(null,false); // outside press while parent is unmapped
   check('unmapped popup has no active dismissal grab', !kernel._wmGrabs.includes(earlyPopup));

@@ -112,6 +112,7 @@ const tests = [
   ['test_repl_pty_e2e.js'], // 0036: lua/micropython/sqlite3 interactive on a kernel pty — prompt, eval, LD erase, ^D exit
   ['test_micropython_script_e2e.js', BOOT], // 0117 R1: the micropython CLI as an OS process — argv/sys.argv, open() on BlockFS, FS import, sys.exit status, traceback on fd 2 not fd 1, -c
   ['test_micropython_stdlib_e2e.js', BOOT], // 0117 R2: sys.path policy (script dir / site dir / symlink-chased package lib), two-file import from another cwd, -m, os+os.path over the kernel fs, the curated stdlib
+  ['test_user32_lifecycle_policy.js', LIGHT], // #789 compiled nonboot User32 lifecycle regression
   ['test_wm_lifecycle_policy.js', LIGHT], // #789 compiled WM policy event regression
   ['test_wm_lifecycle.js', LIGHT], // #789 hidden/show/activation, ownership and WM timer races
   ['test_wm.js', LIGHT],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)

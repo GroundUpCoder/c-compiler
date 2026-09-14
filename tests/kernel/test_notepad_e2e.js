@@ -56,6 +56,7 @@ const out = boot([
   // Boot barrier: EDIT:0 resolving in the agent tree means notepad's window,
   // control and agent server are all up (the window is also listed by then).
   'wmctl wait label EDIT:0 12000',
+  'wmctl wait visible "Untitled - Notepad" 12000',
   'SID=$(wmctl list | grep "Notepad$" | sed "s/[^0-9].*//")',
   'echo ==list1',
   'wmctl list',
@@ -262,7 +263,7 @@ const out = boot([
   'wmctl wait text msctls_statusbar32:0 "Line 1," 4000',
   // New Window (ShellExecuteW spawns GetModuleFileName's answer)
   'wmctl click "New Window"',
-  'wmctl wait win "Untitled - Notepad" 8000',     // second notepad up
+  'wmctl wait visible "Untitled - Notepad" 8000',     // second notepad up
   'echo ==list3',
   'wmctl list',
   'echo ==cut',
