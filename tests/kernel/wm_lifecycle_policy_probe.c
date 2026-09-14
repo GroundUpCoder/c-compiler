@@ -34,9 +34,14 @@ int main(void) {
     for(int i=0;i<MAX_WIN;i++){wmp_rec other=record(i+200);event(WMP_EV_CREATED,&other,sizeof other);}
     r.flags&=~WMP_F_HIDDEN; event(WMP_EV_VISIBILITY,&r,sizeof r);
     check(!find(100),"capacity remains bounded");
+    check(hidden_wins&&hidden_find(100)&&hidden_find(100)->pending,"show at capacity is kept pending (#794)");
     int sid=200; event(WMP_EV_DESTROYED,&sid,4);
+    check(find(100)&&find(100)->maximized,"freed slot readmits the pending show automatically, history intact (#794)");
+    check(!hidden_find(100),"readmission consumes the stash entry");
+    check(nwins==MAX_WIN&&wins[0].sid==100,"readmitted window takes its launch-order slot (first created)");
     event(WMP_EV_VISIBILITY,&r,sizeof r);
     check(find(100)&&find(100)->maximized,"retry show preserves maximize history");
+    check(nwins==MAX_WIN&&wins[0].sid==100,"duplicate show keeps launch order");
     nsent=0;title_activate(100);
     check(command(WMP_MOVE,100,100,90)&&command(WMP_RESIZE,100,300,200),"restore after hide and capacity pressure uses floating rect");
     snap_to(find(100),1);
@@ -50,5 +55,19 @@ int main(void) {
     r.flags&=~WMP_F_HIDDEN;event(WMP_EV_VISIBILITY,&r,sizeof r);
     nsent=0;restore_floating(find(100));
     check(command(WMP_MOVE,100,100,90)&&command(WMP_RESIZE,100,300,200),"snap restore survives hidden resize");
+    /* Launch order across hide/show (#794, the #789 residual): with A/B/C
+     * live, hiding then showing B must leave the taskbar order A/B/C. */
+    for(int i=0;i<nwins;i++){int32_t d=wins[i].sid; if(d!=100){event(WMP_EV_DESTROYED,&d,4); i=-1;}}
+    check(nwins==1&&wins[0].sid==100,"single survivor before the order leg");
+    wmp_rec b=record(401),c=record(402);
+    event(WMP_EV_CREATED,&b,sizeof b); event(WMP_EV_CREATED,&c,sizeof c);
+    check(nwins==3&&wins[0].sid==100&&wins[1].sid==401&&wins[2].sid==402,"A/B/C launch order");
+    b.flags|=WMP_F_HIDDEN; event(WMP_EV_VISIBILITY,&b,sizeof b);
+    check(nwins==2&&wins[0].sid==100&&wins[1].sid==402,"hide B leaves A/C");
+    b.flags&=~WMP_F_HIDDEN; event(WMP_EV_VISIBILITY,&b,sizeof b);
+    check(nwins==3&&wins[0].sid==100&&wins[1].sid==401&&wins[2].sid==402,"show B restores A/B/C, not A/C/B (#794)");
+    int32_t da=100; event(WMP_EV_DESTROYED,&da,4);
+    wmp_rec d2=record(403); event(WMP_EV_CREATED,&d2,sizeof d2);
+    check(nwins==3&&wins[0].sid==401&&wins[1].sid==402&&wins[2].sid==403,"a new window still appends after a close");
     printf("WM-LIFECYCLE-POLICY failures=%d\n",failures);return failures?1:0;
 }

@@ -320,6 +320,14 @@ struct __HWND {
     int x, y, w, h;             /* children: parent-client coords */
     char *text;
     SDL_Window *win;            /* top-level only */
+    struct __HWND *owner;       /* top-level only: the OWNER top-level (#794 —
+                                   CreateWindowEx's hWndParent on a non-child
+                                   window, resolved to its top), or NULL. The
+                                   kernel link (SDL_SetWindowParent) makes it
+                                   stack above, hide/minimize with and die
+                                   with the owner; this field answers
+                                   GetParent/GetWindow(GW_OWNER) and drives
+                                   DestroyWindow's owned cascade. */
     struct __HWND *focus;       /* top-level only: the keyboard-focus HWND */
     HMENU menu;                 /* top-level only: the menu bar (0068) */
     SDL_Window *barWin;         /* top-level only: the persistent bar strip
@@ -2108,9 +2116,14 @@ void __u32_feed_sdl_event(SDL_Event e) {
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED: {
             /* An open chain level: the kernel grab's outside-press
              * dismissal (0257, menu arch A2) — the press was consumed;
-             * close the WHOLE chain, Win95-style. */
-            if (menu_level_by_wid(e.window.windowID) >= 0) {
-                mc_close();
+             * close the WHOLE chain, Win95-style. Since #794 the veneer
+             * also says WHY the close event was queued: a popup dismissal
+             * is UI housekeeping and is never a WM_CLOSE, whichever
+             * window it names. */
+            SDL_Window *cw = SDL_GetWindowFromID(e.window.windowID);
+            int dismissal = cw && guc_window_close_reason(cw) == GUC_CLOSE_REASON_POPUP_DISMISS;
+            if (menu_level_by_wid(e.window.windowID) >= 0 || dismissal) {
+                if (__mc.open) mc_close();
                 break;
             }
             /* Per-window close (todos/0089): with several top-levels live
@@ -2933,6 +2946,16 @@ static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowNam
                                    (transient ? SDL_WINDOW_UTILITY : 0) |
                                    ((style & WS_VISIBLE) ? 0 : SDL_WINDOW_HIDDEN));
         if (!hw->win) { free(hw->text); free(hw); return NULL; }
+        hw->owner = parent ? parent->top : NULL;
+        if (hw->owner && !SDL_SetWindowParent(hw->win, hw->owner->win)) {
+            /* #794: the owner link IS the contract (stacking above the
+             * owner, hiding/minimizing with it, dying with it). A runtime
+             * that refuses it must fail creation loud, not hand back an
+             * unowned window that will outlive and underlie its owner. */
+            fprintf(stderr, "user32: CreateWindow(\"%s\"): owner link refused: %s\n",
+                    windowName ? windowName : "", SDL_GetError());
+            SDL_DestroyWindow(hw->win); free(hw->text); free(hw); return NULL;
+        }
         int placed = 0;
         for (int i = 0; i < g_nTops; i++)
             if (!g_tops[i]) { g_tops[i] = hw; placed = 1; break; }
@@ -3001,6 +3024,14 @@ static void unlink_child(HWND h) {
 BOOL DestroyWindow(HWND h) {
     if (!h || h->inDestroy) return FALSE;
     h->inDestroy = 1;
+    /* Owned top-levels go FIRST (#794, the Windows order: "the function
+     * first destroys child or owned windows, and then it destroys the
+     * parent or owner window") — each takes its own WM_DESTROY, releases
+     * its HWND, and its SDL/kernel surface is gone before the owner's
+     * cascade could race it. */
+    if (is_top(h))
+        for (int i = 0; i < g_nTops; i++)
+            if (g_tops[i] && g_tops[i] != h && g_tops[i]->owner == h) DestroyWindow(g_tops[i]);
     /* WM_DESTROY parent-first, then children (Windows order). */
     CallWindowProc(h->proc, h, WM_DESTROY, 0, 0);
     while (h->child) {
@@ -3292,7 +3323,31 @@ HWND GetCapture(void) { return g_capture; }
 
 /* ============================================================ tree queries */
 
-HWND GetParent(HWND h) { return h ? h->parent : NULL; }
+/* GetParent: the parent of a child window; the OWNER of a top-level (every
+ * top-level here is WS_POPUP, for which Windows returns the owner) (#794). */
+HWND GetParent(HWND h) { return h ? (h->parent ? h->parent : h->owner) : NULL; }
+HWND GetWindow(HWND h, UINT cmd) {
+    if (!h) return NULL;
+    switch (cmd) {
+    case GW_OWNER: return h->parent ? NULL : h->owner;
+    case GW_CHILD: return h->child;
+    case GW_HWNDNEXT: return h->parent ? h->next : NULL;
+    case GW_HWNDFIRST: return h->parent ? h->parent->child : NULL;
+    case GW_HWNDLAST: {
+        if (!h->parent) return NULL;
+        HWND c = h->parent->child;
+        while (c && c->next) c = c->next;
+        return c;
+    }
+    case GW_HWNDPREV: {
+        if (!h->parent) return NULL;
+        for (HWND c = h->parent->child; c; c = c->next) if (c->next == h) return c;
+        return NULL;
+    }
+    }
+    WIN32_UNSUPPORTED("GetWindow(cmd=%u) — top-level z-order walks are the WM's", cmd);
+    return NULL;
+}
 
 HWND GetDlgItem(HWND parent, int id) {
     if (!parent) return NULL;

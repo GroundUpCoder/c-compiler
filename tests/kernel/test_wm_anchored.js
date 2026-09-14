@@ -17,7 +17,8 @@
 //     refusal (EPERM) on children,
 //     click/wmFocus redirect to the anchor root, destroy cascade (whole
 //     tree AND mid-tree), thumbnail child compositing (A10)
-//   - the grab (A2): press outside the holder's window tree -> QUIT to the
+//   - the grab (A2): press outside the holder's window tree -> a POPUP_DISMISSED
+//     record (#794; QUIT before it) to the
 //     holder + press AND release consumed + grab released; presses inside
 //     the tree route; pointer lock outranks the grab; per-window injection
 //     bypasses it (post-hit-test by design)
@@ -114,7 +115,7 @@ function drain(ring) {
   let rpos = Atomics.load(ring.i32, K.IR_RPOS);
   while (rpos !== Atomics.load(ring.i32, K.IR_WPOS)) {
     const base = (K.IR_HDR_BYTES >> 2) + (rpos % ring.cap) * K.IR_RECORD_WORDS;
-    out.push({ type: ring.i32[base], win: ring.i32[base + 1] });
+    out.push({ type: ring.i32[base], win: ring.i32[base + 1], reason: ring.i32[base + 2] });
     rpos = (rpos + 1) % cap2;
     Atomics.store(ring.i32, K.IR_RPOS, rpos);
   }
@@ -124,7 +125,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
 const byTitle = (t) => kernel.wmList().find((w) => w.title === t);
 const has = (evs, type, win) => evs.some((e) => e.type === type && (win === undefined || e.win === win));
 const FOCUS_GAINED = K.WMEV.FOCUS_GAINED, FOCUS_LOST = K.WMEV.FOCUS_LOST,
-      QUIT = K.WMEV.QUIT, BTN_DOWN = K.WMEV.MOUSEBUTTONDOWN;
+      QUIT = K.WMEV.QUIT, DISMISSED = K.WMEV.POPUP_DISMISSED, BTN_DOWN = K.WMEV.MOUSEBUTTONDOWN;
 
 (async () => {
   await kernel.boot({ path: '/bin/init' });
@@ -339,7 +340,14 @@ const FOCUS_GAINED = K.WMEV.FOCUS_GAINED, FOCUS_LOST = K.WMEV.FOCUS_LOST,
   // press OUTSIDE the tree (Q's client) -> dismiss + consume, press AND release
   check('outside press is consumed', kernel.wmPointer('down', 460, 310, {}) === 'grab-dismiss');
   check('matching release is consumed too', kernel.wmPointer('up', 460, 310, {}) === 'grab-swallow');
-  check('holder got the dismiss (QUIT)', has(drain(ringA), QUIT, cG.sid));
+  {
+    // #794: a grab dismissal is its own record — never QUIT, which is the
+    // close request that arms the hung-app watchdog (#486).
+    const evs = drain(ringA);
+    const d = evs.find((e) => e.type === DISMISSED && e.win === cG.sid);
+    check('holder got the dismiss (POPUP_DISMISSED, reason 1)', !!d && d.reason === 1);
+    check('a dismissal is never a QUIT record', !has(evs, QUIT, cG.sid));
+  }
   check('the press never reached Q', !has(drain(ringB), BTN_DOWN), 'Q saw the consumed click');
   check('focus unchanged by the consumed click', byTitle('pa').focused === true);
   // the grab released at the dismissing press: the next click routes
@@ -358,13 +366,13 @@ const FOCUS_GAINED = K.WMEV.FOCUS_GAINED, FOCUS_LOST = K.WMEV.FOCUS_LOST,
   // chrome is outside: a press on P's OWN title dismisses + consumes (Win95)
   check('own-title press dismisses + consumes', kernel.wmPointer('down', 250, 90, {}) === 'grab-dismiss');
   kernel.wmPointer('up', 250, 90, {});
-  check('holder got that dismiss too', has(drain(ringA), QUIT, cG.sid));
+  check('holder got that dismiss too', has(drain(ringA), DISMISSED, cG.sid));
   // desktop press dismisses too
   cG = await mkGrab();
   drain(ringA);
   check('desktop press dismisses + consumes', kernel.wmPointer('down', 600, 460, {}) === 'grab-dismiss');
   kernel.wmPointer('up', 600, 460, {});
-  check('holder got the desktop dismiss', has(drain(ringA), QUIT, cG.sid));
+  check('holder got the desktop dismiss', has(drain(ringA), DISMISSED, cG.sid));
   // destroy releases the grab
   cG = await mkGrab();
   await rpc(a, K.OP.SURFACE_DESTROY, { sid: cG.sid });

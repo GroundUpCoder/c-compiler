@@ -80,7 +80,7 @@ const GROUPS = [
     re: /Keyboard|Mouse|ModState/,
     note: 'Snapshots advance as events are pumped. SDL_GetGlobalMouseState ALWAYS fails by design (0 mask + SDL error): a process only sees pointer events routed to its own windows.' },
   { title: 'Window & window surface',
-    re: /Window|^SDL_DestroySurface$/,
+    re: /Window|^SDL_DestroySurface$|^guc_window_/,   // guc_window_* = gucOS window extensions (#794)
     note: 'SDL_SetWindowPosition and SDL_SetWindowIcon are honest accept-and-succeed no-ops — the WM owns placement; no taskbar-icon pipe yet.' },
   { title: 'Renderer & textures (2D accelerated)',
     re: /Render|Texture/,
@@ -133,6 +133,7 @@ const CLUSTERS = [
     note: 'vsync = N paces SDL_RenderPresent to every Nth compositor tick (#500); DISABLED (0) is the fresh-renderer default. ADAPTIVE (-1) is declared for source compatibility but always unsupported: SDL_SetRenderVSync returns false, sets SDL_GetError and leaves the mode unchanged. vsync >= 1 needs a display clock — the browser OS compositor, or boot.js --vsync[=hz]; a plain headless boot or a standalone page refuses (false + error, mode unchanged).' },
   { title: 'Debug text', prefixes: ['SDL_DEBUG_TEXT_'],
     note: 'SDL_RenderDebugText glyphs are 8x8 window pixels (no SDL_SetRenderScale in this runtime).' },
+  { title: 'GUC_CLOSE_REASON_* — gucOS close-event reasons (guc_window_close_reason, #794)', prefixes: ['GUC_CLOSE_REASON_'] },
   { title: 'Error helper', prefixes: ['SDL_InvalidParamError'] },
   { title: 'Veneer sentinel', prefixes: ['IMG_SURFACE_OWNED'],
     note: 'Set in SDL_Surface.flags on heap surfaces this runtime owns (IMG_Load results) — how SDL_DestroySurface knows to free.' },

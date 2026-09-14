@@ -301,6 +301,9 @@ typedef struct {
                                           across snap-to-snap moves */
     uint32_t stamp;                    /* focus recency (EV_FOCUS/CREATED) —
                                           the cycling order (todos/0032) */
+    uint32_t order;                    /* creation order (#794): the taskbar
+                                          slot key, kept across hide/show so
+                                          A/B/C never becomes B/C/A */
     char title[32];
 } win_t;
 
@@ -338,8 +341,21 @@ static win_t wins[MAX_WIN];
 static int nwins = 0;
 /* Hidden windows leave the taskbar/cycle set, but keep their policy history.
  * Kernel records carry current geometry, not saved maximize/snap restore data. */
-typedef struct hidden_win { win_t value; struct hidden_win *next; } hidden_win;
+typedef struct hidden_win {
+    win_t value;
+    int pending;                       /* #794: shown again while wins[] was
+                                          full — readmitted automatically when
+                                          a slot frees (EV_DESTROYED), from
+                                          the record saved in `rec` */
+    wmp_rec rec;
+    struct hidden_win *next;
+} hidden_win;
 static hidden_win *hidden_wins;
+static uint32_t octr = 0;              /* creation-order counter (#794) */
+static hidden_win *hidden_find(int32_t sid) {
+    for (hidden_win *n = hidden_wins; n; n = n->next) if (n->value.sid == sid) return n;
+    return NULL;
+}
 static int hidden_take(int32_t sid, win_t *out) {
     hidden_win **p = &hidden_wins;
     while (*p) {
@@ -356,7 +372,7 @@ static void hidden_save(const win_t *w) {
     hidden_take(w->sid, NULL);
     hidden_win *n = malloc(sizeof *n);
     if (!n) die("hidden window state allocation");
-    n->value = *w; n->next = hidden_wins; hidden_wins = n;
+    n->value = *w; n->pending = 0; n->next = hidden_wins; hidden_wins = n;
 }
 
 static int32_t bar_sid = 0;        /* our own taskbar surface */
@@ -913,6 +929,56 @@ static void fill(uint32_t *px, int x, int y, int w, int h, uint32_t col) {
 static win_t *find(int32_t sid) {
     for (int i = 0; i < nwins; i++) if (wins[i].sid == sid) return &wins[i];
     return NULL;
+}
+/* Admit a kernel record into wins[] at its LAUNCH-ORDER slot (#794). A
+ * re-shown window takes back its saved policy history (hidden_take) and its
+ * original creation order, so hide/show is order-neutral for the taskbar:
+ * A/B/C stays A/B/C, never B/C/A (the #789 residual). At capacity a re-show
+ * is kept PENDING on its stash entry with the record, and EV_DESTROYED
+ * readmits the earliest-launched pending one the moment a slot frees — no
+ * second visibility event needed (the other #789 residual). Returns 1 on
+ * admission, 0 when the set stays bounded. */
+static int wins_admit(const wmp_rec *r) {
+    if (nwins >= MAX_WIN) {
+        hidden_win *n = hidden_find(r->sid);
+        if (n) { n->pending = 1; n->rec = *r; }
+        return 0;
+    }
+    win_t restored;
+    int has_restored = hidden_take(r->sid, &restored);
+    uint32_t order = has_restored && restored.order ? restored.order : ++octr;
+    int at = nwins;
+    for (int i = 0; i < nwins; i++) if (wins[i].order > order) { at = i; break; }
+    memmove(&wins[at + 1], &wins[at], (size_t)(nwins - at) * sizeof wins[0]);
+    nwins++;
+    win_t *w = &wins[at];
+    if (has_restored) *w = restored; else memset(w, 0, sizeof *w);
+    w->order = order;
+    w->sid = r->sid; w->pid = r->pid;
+    w->x = r->x; w->y = r->y; w->w = r->w; w->h = r->h;
+    w->dst_w = r->dst_w; w->dst_h = r->dst_h;
+    w->minimized = (r->flags & WMP_F_MINIMIZED) ? 1 : 0;
+    w->focused = (r->flags & WMP_F_FOCUSED) ? 1 : 0;
+    w->resizable = (r->flags & WMP_F_RESIZABLE) ? 1 : 0;
+    if (!has_restored) {
+        w->maximized = 0;
+        w->snapped = 0;
+        w->stamp = ++zctr;
+    }
+    memcpy(w->title, r->title, 32);
+    w->title[31] = 0;
+    return 1;
+}
+static void wins_admit_pending(void) {
+    while (nwins < MAX_WIN) {
+        hidden_win *pick = NULL;
+        for (hidden_win *n = hidden_wins; n; n = n->next)
+            if (n->pending && (!pick || n->value.order < pick->value.order)) pick = n;
+        if (!pick) return;
+        wmp_rec rec = pick->rec;
+        pick->pending = 0;
+        wins_admit(&rec);
+    }
 }
 
 static void place(int32_t sid, int w, int h) {
@@ -3781,17 +3847,21 @@ static void handle_event(wmp_hdr *h) {
     if (h->type == WMP_EV_CREATED || h->type == WMP_EV_VISIBILITY) {
         wmp_rec r;
         if (h->plen != sizeof r || wmp_read_all(sock, &r, (int)sizeof r) != 0) die("EV_CREATED read");
-        win_t restored;
-        int has_restored = 0;
         if (h->type == WMP_EV_VISIBILITY) {
             /* Hidden surfaces retain their kernel placement/backing store, but
              * are absent from desktop policy (taskbar, cycle and overview). */
             for (int i = 0; i < nwins; i++) if (wins[i].sid == r.sid) {
-                if (r.flags & WMP_F_HIDDEN) hidden_save(&wins[i]);
+                /* Always stash (#794): a duplicate show re-admits from the
+                 * stash below, keeping history and launch order; a hide
+                 * keeps it until the show. */
+                hidden_save(&wins[i]);
                 memmove(&wins[i], &wins[i + 1], (size_t)(nwins - i - 1) * sizeof wins[0]);
                 nwins--; break;
             }
             if (r.flags & WMP_F_HIDDEN) {
+                hidden_win *hn = hidden_find(r.sid);   /* a pending re-show is
+                                                          withdrawn by a hide */
+                if (hn) hn->pending = 0;
                 if (peek_for == r.sid) peek_dismiss();
                 if (sys_mode && sys_target == r.sid) sys_end(0);
                 overview_relayout();
@@ -3960,24 +4030,7 @@ static void handle_event(wmp_hdr *h) {
             if (h->type == WMP_EV_CREATED) place(r.sid, r.w, r.h);
             return;
         }
-        if (nwins < MAX_WIN) {
-            has_restored = hidden_take(r.sid, &restored);
-            win_t *w = &wins[nwins++];
-            if (has_restored) *w = restored;
-            w->sid = r.sid; w->pid = r.pid;
-            w->x = r.x; w->y = r.y; w->w = r.w; w->h = r.h;
-            w->dst_w = r.dst_w; w->dst_h = r.dst_h;
-            w->minimized = (r.flags & WMP_F_MINIMIZED) ? 1 : 0;
-            w->focused = (r.flags & WMP_F_FOCUSED) ? 1 : 0;
-            w->resizable = (r.flags & WMP_F_RESIZABLE) ? 1 : 0;
-            if (!has_restored) {
-                w->maximized = 0;
-                w->snapped = 0;
-                w->stamp = ++zctr;
-            }
-            memcpy(w->title, r.title, 32);
-            w->title[31] = 0;
-        }
+        wins_admit(&r);                 /* launch-order slot; pending at capacity (#794) */
         if (h->type == WMP_EV_CREATED) place(r.sid, r.w, r.h);
         overview_relayout();            /* a new window joins the grid (EXPOSE) */
         return;
@@ -4013,6 +4066,7 @@ static void handle_event(wmp_hdr *h) {
                 nwins--;
                 break;
             }
+        wins_admit_pending();           /* a freed slot readmits a pending show (#794) */
         overview_relayout();            /* a vacated cell closes up (EXPOSE) */
         break;
     }

@@ -282,7 +282,15 @@ typedef struct {
                                 stacking/minimize ops refuse it (EPERM) —
                                 policy never manages popups. */
 #define WMP_F_HIDDEN 256  /* application-hidden, independent of minimized */
-#define WMP_F_VIEWABLE 512 /* mapped and neither self nor anchor ancestors hidden/minimized */
+#define WMP_F_VIEWABLE 512 /* mapped and neither self nor anchor/owner ancestors
+                              hidden/minimized (#794 added owners) */
+#define WMP_F_OWNED 1024   /* has an OWNER top-level (#794, SURFACE_SET_OWNER /
+                              SDL_SetWindowParent): a real framed top-level that
+                              stacks above its owner, is hidden/minimized with it
+                              (its own requested state preserved — VIEWABLE tells)
+                              and is destroyed with it. Distinct from ANCHORED
+                              (a popup pinned to a parent) and from TRANSIENT
+                              (the taskbar-membership hint). */
 #define WMP_F_TRANSIENT 128  /* transient/owned window (todos/0281): a framed,
                                 focusable secondary window that Win95 never lists
                                 in the taskbar. Unlike ANCHORED it keeps chrome +

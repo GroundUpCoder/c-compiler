@@ -24407,6 +24407,30 @@ SDL_WindowFlags SDL_GetWindowFlags(SDL_Window *window);
 bool SDL_ShowWindow(SDL_Window *window);
 bool SDL_HideWindow(SDL_Window *window);
 bool SDL_RaiseWindow(SDL_Window *window);
+/* Owner relation (#794; SDL3 "parent" of a non-popup window): the window
+   stacks above its parent, is hidden/minimized with it (its own hidden flag
+   is preserved), and SDL_DestroyWindow(parent) destroys it recursively.
+   Same-process only; a popup window (SDL_CreatePopupWindow) cannot change
+   its parent and cannot be a parent. NULL clears. Refused loud on runtimes
+   without the window-system lifecycle. */
+bool SDL_SetWindowParent(SDL_Window *window, SDL_Window *parent);
+SDL_Window *SDL_GetWindowParent(SDL_Window *window);
+SDL_Window *SDL_GetWindowFromID(SDL_WindowID id);
+/* gucOS extension (#794) — a custom name on purpose, not an SDL API: why the
+   LAST SDL_EVENT_WINDOW_CLOSE_REQUESTED for this window was queued. A popup
+   grab dismissal (press outside the popup's window tree) reaches the app as
+   the same close event it always did, but it is UI housekeeping — it never
+   arms the kernel's hung-app watchdog — and a toolkit that dismisses a menu
+   must not treat it as a user close request. 0 before any close event. */
+#define GUC_CLOSE_REASON_REQUEST 0
+#define GUC_CLOSE_REASON_POPUP_DISMISS 1
+int guc_window_close_reason(SDL_Window *window);
+/* gucOS extension (#794): EFFECTIVE visibility — 1 when the window system
+   composites and hit-tests the window (mapped, not minimized, no hidden or
+   minimized parent), 0 when not, -1 with SDL_GetError() where there is no
+   window system. SDL_WINDOW_HIDDEN is the window's OWN requested state; the
+   two differ exactly while a parent is hidden or minimized. */
+int guc_window_viewable(SDL_Window *window);
 /* Window placement is the WM's job in gucOS, so SDL_SetWindowPosition is an
    honest accept-and-succeed no-op (a self-placing app would only fight the
    compositor). SDL_SetWindowIcon likewise succeeds without a taskbar-icon
@@ -26119,6 +26143,9 @@ struct SDL_Window {
     SDL_Renderer *renderer; /* the window's one renderer, or NULL (#497 —
                                SDL3 allows one per window; SDL_CreateRenderer
                                sets, SDL_DestroyRenderer clears) */
+    int parent_handle;      /* owner window handle (#794 SDL_SetWindowParent),
+                               0 = unowned */
+    int close_reason;       /* GUC_CLOSE_REASON_* of the last close event */
 };
 
 #define __SDL_MAX_WINDOWS 32
@@ -29783,6 +29810,8 @@ __import void __sdl_quit(void);
 __import int __sdl_set_window_visible(int handle, int visible);
 __import int __sdl_raise_window(int handle);
 __import int __sdl_get_window_state(int handle);
+__import int __sdl_set_window_parent(int handle, int parent_handle);
+__import int __sdl_get_window_viewable(int handle);
 __import int __sdl_create_window(const char *title, int x, int y, int w, int h, int flags);
 __import void __sdl_destroy_window(int handle);
 __import void __sdl_set_window_title(int handle, const char *title);
@@ -29990,6 +30019,8 @@ SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags fl
     win->relative_mouse = 0;
     win->flags = flags;
     win->renderer = NULL;
+    win->parent_handle = 0;
+    win->close_reason = 0;
     __sdl_window_register(win);
     return win;
 }
@@ -30039,6 +30070,44 @@ bool SDL_RaiseWindow(SDL_Window *window) {
     if (__sdl_raise_window(window->handle) != 0)
         return SDL_SetError("SDL_RaiseWindow: window system refused activation");
     return 1;
+}
+
+/* Owner relation (#794). The kernel validates ownership (same process, no
+   cycles, no popups); the veneer only refuses what it can see locally so the
+   error names the real reason. */
+bool SDL_SetWindowParent(SDL_Window *window, SDL_Window *parent) {
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
+    if (parent && !__sdl_window_live(parent)) return SDL_InvalidParamError("parent");
+    if (window->flags & (SDL_WINDOW_POPUP_MENU | SDL_WINDOW_TOOLTIP))
+        return SDL_SetError("SDL_SetWindowParent: a popup window's parent is fixed at creation");
+    if (parent && (parent->flags & (SDL_WINDOW_POPUP_MENU | SDL_WINDOW_TOOLTIP)))
+        return SDL_SetError("SDL_SetWindowParent: a popup window cannot own windows");
+    if (parent == window) return SDL_SetError("SDL_SetWindowParent: a window cannot own itself");
+    for (SDL_Window *q = parent; q; q = __sdl_window_by_handle(q->parent_handle))
+        if (q == window) return SDL_SetError("SDL_SetWindowParent: ownership cycle");
+    if (__sdl_set_window_parent(window->handle, parent ? parent->handle : 0) != 0)
+        return SDL_SetError("SDL_SetWindowParent: window system refused the owner link");
+    window->parent_handle = parent ? parent->handle : 0;
+    return 1;
+}
+SDL_Window *SDL_GetWindowParent(SDL_Window *window) {
+    if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return NULL; }
+    return window->parent_handle ? __sdl_window_by_handle(window->parent_handle) : NULL;
+}
+SDL_Window *SDL_GetWindowFromID(SDL_WindowID id) {
+    SDL_Window *w = __sdl_window_by_handle((int)id);
+    if (!w) SDL_SetError("SDL_GetWindowFromID: no window with id %u", (unsigned)id);
+    return w;
+}
+int guc_window_close_reason(SDL_Window *window) {
+    if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return 0; }
+    return window->close_reason;
+}
+int guc_window_viewable(SDL_Window *window) {
+    if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return -1; }
+    int v = __sdl_get_window_viewable(window->handle);
+    if (v < 0) { SDL_SetError("guc_window_viewable: no window-system lifecycle"); return -1; }
+    return v;
 }
 
 /* Ask the window system for a new size (todos/0068). ASYNC like upstream
@@ -30169,7 +30238,9 @@ void __sdl_push_quit_event(int window_id) {
         if (__sdl_window_registry[i]) live++;
     __SDL_EventEntry *e = __sdl_eq_alloc();
     memset(&e->event, 0, sizeof(SDL_Event));
-    if (live > 1 && __sdl_window_by_handle(window_id)) {
+    SDL_Window *target = __sdl_window_by_handle(window_id);
+    if (target) target->close_reason = GUC_CLOSE_REASON_REQUEST;
+    if (live > 1 && target) {
         e->event.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
         e->event.window.timestamp = __sdl_now_ns();
         e->event.window.windowID = (SDL_WindowID)window_id;
@@ -30180,6 +30251,24 @@ void __sdl_push_quit_event(int window_id) {
     __sdl_eq_push(e);
 }
 __export __sdl_push_quit_event = __sdl_push_quit_event;
+
+/* A popup grab dismissal (#794, kernel POPUP_DISMISSED): the legacy mapping
+   is kept — the popup's window gets SDL_EVENT_WINDOW_CLOSE_REQUESTED exactly
+   as before — but the reason is recorded first, so guc_window_close_reason
+   can tell this housekeeping event from a user close request. Never a
+   process-wide SDL_EVENT_QUIT: a dismissed popup is not the last window. */
+void __sdl_push_popup_dismissed(int window_id, int reason) {
+    SDL_Window *target = __sdl_window_by_handle(window_id);
+    if (!target) return;
+    target->close_reason = reason ? reason : GUC_CLOSE_REASON_POPUP_DISMISS;
+    __SDL_EventEntry *e = __sdl_eq_alloc();
+    memset(&e->event, 0, sizeof(SDL_Event));
+    e->event.type = SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+    e->event.window.timestamp = __sdl_now_ns();
+    e->event.window.windowID = (SDL_WindowID)window_id;
+    __sdl_eq_push(e);
+}
+__export __sdl_push_popup_dismissed = __sdl_push_popup_dismissed;
 
 /* Kernel-WM window events (todos/0019). RESIZED re-derives the window
    surface IN PLACE before the event is queued: w/h/pitch update, but the
@@ -32287,6 +32376,15 @@ void SDL_DestroyWindow(SDL_Window *window) {
     /* A window not in the registry is already destroyed (#497): refuse the
        double-destroy rather than double-free. */
     if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return; }
+    /* SDL3 contract (#794): windows parented to this one are destroyed
+       first, recursively — the kernel cascades the surfaces regardless, so
+       the veneer must retire their records too or the app is left holding
+       live-looking pointers to dead surfaces. Popups (anchored children)
+       ride the same rule; they always did on the kernel side. */
+    for (int i = 0; i < __SDL_MAX_WINDOWS; i++) {
+        SDL_Window *c = __sdl_window_registry[i];
+        if (c && c != window && c->parent_handle == window->handle) SDL_DestroyWindow(c);
+    }
     __sdl_window_unregister(window);
     __sdl_destroy_window(window->handle);
     free(window->surface.pixels);
@@ -37107,6 +37205,8 @@ SDL_Window *SDL_CreatePopupWindow(SDL_Window *parent, int offset_x, int offset_y
        of its honest create-time flags (#601 SDL_GetWindowFlags). */
     win->flags = flags | SDL_WINDOW_BORDERLESS;
     win->renderer = NULL;
+    win->parent_handle = parent->handle;   /* the anchor, never re-parentable */
+    win->close_reason = 0;
     /* Slot into __SDL.c's registry directly (see __SDL_internal.h): RESIZED
        re-derivation and per-window close routing then cover popups exactly
        like top-levels. Past the cap the window still works, it just never

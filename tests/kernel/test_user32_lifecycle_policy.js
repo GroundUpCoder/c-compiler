@@ -10,11 +10,13 @@ const prefix=`#include <windows.h>
 static bool test_show(SDL_Window*);
 static bool test_hide(SDL_Window*);
 static bool test_raise(SDL_Window*);
+static bool test_parent(SDL_Window*, SDL_Window*);
 static bool test_size(SDL_Window*,int,int);
 #define SDL_ShowWindow test_show
 #define SDL_HideWindow test_hide
 #define SDL_RaiseWindow test_raise
 #define SDL_SetWindowSize test_size
+#define SDL_SetWindowParent test_parent
 `;
 const suffix=fs.readFileSync(path.join(__dirname,'user32_lifecycle_policy_probe.c'),'utf8');
 const bytes=common.buildProject(C,'tests/lifecycle-policy.json',p=>{

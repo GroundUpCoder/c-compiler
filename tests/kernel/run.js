@@ -115,6 +115,7 @@ const tests = [
   ['test_user32_lifecycle_policy.js', LIGHT], // #789 compiled nonboot User32 lifecycle regression
   ['test_wm_lifecycle_policy.js', LIGHT], // #789 compiled WM policy event regression
   ['test_wm_lifecycle.js', LIGHT], // #789 hidden/show/activation, ownership and WM timer races
+  ['test_wm_owned.js', LIGHT], // #794 owned top-levels (inherited visibility, stacking, cascade) + POPUP_DISMISSED
   ['test_wm.js', LIGHT],           // WM.md: surface registry, input routing, chrome, screenshots (no wasm)
   ['test_wm_anchored.js', LIGHT],  // 0256 Spike 1: anchored child surfaces (A1 tree, A11 materialized dst, A5 owner child resize, clamp, cascade, thumbnail compositing) + the grab (A2) + the focus-funnel owner pair (A9) — kernel seam, no wasm
   ['test_wm_aero.js', LIGHT],      // 0063: has-alpha src-over blend goldens, wmThumbnail box filter, glass headless invariance, minimize/restore anim records (no wasm)

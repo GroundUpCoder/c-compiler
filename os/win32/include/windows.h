@@ -1051,6 +1051,16 @@ BOOL ReleaseCapture(void);
 HWND GetCapture(void);
 
 HWND GetParent(HWND hwnd);
+/* GetWindow (#794): GW_OWNER is the owner top-level (CreateWindowEx's
+   hWndParent on a non-child window); the sibling walks cover CHILD windows
+   (creation order). Top-level z-order walks are the WM's, refused loud. */
+#define GW_HWNDFIRST 0
+#define GW_HWNDLAST  1
+#define GW_HWNDNEXT  2
+#define GW_HWNDPREV  3
+#define GW_OWNER     4
+#define GW_CHILD     5
+HWND GetWindow(HWND hwnd, UINT cmd);
 HWND GetDlgItem(HWND parent, int id);
 int  GetDlgCtrlID(HWND hwnd);
 HWND GetNextDlgTabItem(HWND dlg, HWND ctl, BOOL prev);

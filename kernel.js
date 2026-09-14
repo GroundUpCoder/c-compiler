@@ -317,6 +317,12 @@ var OP = {
   // pattern, but for the native CSS cursor.
   SURFACE_SET_CURSOR: 0x1008,
   SURFACE_SET_VISIBLE: 0x1009, SURFACE_ACTIVATE: 0x100a, SURFACE_GET_STATE: 0x100b,
+  // SURFACE_SET_OWNER (#794): link a top-level to a same-process OWNER
+  // top-level (SDL_SetWindowParent / Win32 hwndParent on a non-child
+  // window). Owned windows stack above their owner, lose effective
+  // visibility while the owner is hidden or minimized (their own requested
+  // state is preserved), and die with it. ownerSid 0 clears the link.
+  SURFACE_SET_OWNER: 0x100c,
   // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
   // Control plane only: PCM rides the per-process source ring SABs and the
   // one page-owned output ring — never RPCs. AUDIO_GAIN (todos/0048, the
@@ -670,7 +676,16 @@ var WMEV = { WINDOW_SHOWN: 0x202, WINDOW_HIDDEN: 0x203, QUIT: 0x100, WINDOW_RESI
              // Gamepad (#607) — SDL3 numbers verbatim, like everything above.
              GAMEPAD_AXIS: 0x650, GAMEPAD_BUTTON_DOWN: 0x651,
              GAMEPAD_BUTTON_UP: 0x652, GAMEPAD_ADDED: 0x653,
-             GAMEPAD_REMOVED: 0x654 };
+             GAMEPAD_REMOVED: 0x654,
+             // gucOS extension records (#794) live in 0x71xx — above every
+             // SDL3 event number the veneer interprets, below SDL_EVENT_USER
+             // (0x8000). POPUP_DISMISSED is a popup grab's outside-press
+             // dismissal: word[2] = reason (1 = press outside the popup's
+             // window tree). It is NOT a close request — it never arms the
+             // hung-app watchdog — and host.js maps it onto the legacy
+             // per-window SDL close event for SDL clients (the veneer keeps
+             // the reason behind guc_window_close_reason).
+             POPUP_DISMISSED: 0x7101 };
 
 /* ============================================================
  * Audio mixer (todos/0017; design: WM.md "Audio mixing — the kernel sound
@@ -1680,6 +1695,8 @@ KernelClient.prototype.spawnHooks = function () {
     surfaceSetVisible: function (sid, visible) { return self.call(OP.SURFACE_SET_VISIBLE, { sid: sid, visible: !!visible }); },
     surfaceActivate: function (sid) { return self.call(OP.SURFACE_ACTIVATE, { sid: sid }); },
     surfaceGetState: function (sid) { return self.call(OP.SURFACE_GET_STATE, { sid: sid }); },
+    // Owner link (#794, SDL_SetWindowParent): ownerSid 0 clears.
+    surfaceSetOwner: function (sid, ownerSid) { return self.call(OP.SURFACE_SET_OWNER, { sid: sid, ownerSid: ownerSid | 0 }); },
     surfaceDestroy: function (sid) { return self.call(OP.SURFACE_DESTROY, { sid: sid }); },
     surfaceSetTitle: function (sid, title) { return self.call(OP.SURFACE_SET_TITLE, { sid: sid, title: title || '' }); },
     // Flag-word update (todos/0018): bit0 borderless, bit1 relative-mouse.
@@ -2322,6 +2339,7 @@ function Kernel(opts) {
   this._wmAnchoredN = 0;      // live anchored-child count (todos/0256) — the
                               // zero-cost fast path for the _wmZNormalize
                               // subtree post-pass on anchor-free scenes
+  this._wmOwnedN = 0;         // live owner links (#794) — the same gate
   this._wmGrabs = [];         // active grab holders, oldest -> newest (todos/
                               // 0256, menu arch A2): while the newest holder
                               // lives, a press OUTSIDE its root's client tree
@@ -4775,6 +4793,13 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
                                   // _wmAnchorApply
         children: [],             // anchored children, creation-ordered sids
         grab: false,              // this child holds a grab (flag bit 7, A2)
+        ownerSid: 0,              // owner top-level (#794, SURFACE_SET_OWNER):
+                                  // 0 = unowned. Distinct from parentSid —
+                                  // an owned window is a real top-level with
+                                  // its own chrome/focus/placement that
+                                  // stacks above, hides/minimizes with and
+                                  // dies with its owner.
+        owned: [],                // owned top-levels, creation-ordered sids
       };
       if (parent) {
         surf.parentSid = parent.sid;
@@ -4823,7 +4848,11 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
                                   // (and re-slots anchored subtrees, A1)
       pcb.surfaces.add(sid);
       this._bumpWm();
-      this._respond(pcb, { sid: sid, x: surf.x, y: surf.y, lifecycle: 1 });
+      // lifecycle: the surface-lifecycle capability level (#789 = 1: hidden
+      // creation, SET_VISIBLE/ACTIVATE/GET_STATE; #794 = 2: SET_OWNER +
+      // POPUP_DISMISSED records). A host reads it once per surface and
+      // refuses what an older kernel cannot promise, never silently no-ops.
+      this._respond(pcb, { sid: sid, x: surf.x, y: surf.y, lifecycle: 2 });
       this._wmEmit(WMP.EV_CREATED, this._wmpRecord(surf));
       // New window takes focus (v1 policy) — EXCEPT anchored children, which
       // never steal focus (§3.1: a menu must not deactivate its own window
@@ -4839,13 +4868,22 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
     // below destroys backing storage or treats placement as application intent.
     case OP.SURFACE_SET_VISIBLE:
     case OP.SURFACE_ACTIVATE:
-    case OP.SURFACE_GET_STATE: {
+    case OP.SURFACE_GET_STATE:
+    case OP.SURFACE_SET_OWNER: {
       var sv = this._surfaces.get(req.sid | 0);
       if (!sv) { this._respond(pcb, { errno: 'EINVAL' }); break; }
       if (sv.pid !== pcb.pid) { this._respond(pcb, { errno: 'EPERM' }); break; }
       if (op === OP.SURFACE_GET_STATE) {
+        // `visible` is the surface's OWN requested state; `viewable` is the
+        // effective answer (mapped, not minimized, no hidden/minimized
+        // anchor or owner ancestor) — the two differ exactly while an
+        // owner is hidden or minimized (#794).
         this._respond(pcb, { visible: sv.requestedVisible, focused: this._focusSid === sv.sid,
-          minimized: sv.minimized, mapped: sv.mapped });
+          minimized: sv.minimized, mapped: sv.mapped, viewable: this._wmViewable(sv),
+          owner: sv.ownerSid | 0 });
+      } else if (op === OP.SURFACE_SET_OWNER) {
+        var so = this._wmSetOwner(sv, req.ownerSid | 0, pcb);
+        this._respond(pcb, so ? { errno: so } : {});
       } else if (op === OP.SURFACE_SET_VISIBLE) {
         if (typeof req.visible !== 'boolean') { this._respond(pcb, { errno: 'EINVAL' }); break; }
         this._wmSetVisible(sv, req.visible);
@@ -5016,24 +5054,48 @@ Kernel.prototype._wmRestoreGrabs = function (s) {
   if (s.grab && !s.grabDismissed && this._wmGrabs.indexOf(s.sid) < 0) this._wmGrabs.push(s.sid);
   var self = this;
   s.children.forEach(function (sid) { var c = self._surfaces.get(sid); if (c) self._wmRestoreGrabs(c); });
+  s.owned.forEach(function (sid) { var o = self._surfaces.get(sid); if (o) self._wmRestoreGrabs(o); });
+};
+
+/* ---- the ancestor walk (#794) ----
+ * A surface inherits effective visibility from TWO kinds of ancestor: its
+ * anchor parent (an anchored popup, todos/0256) and its owner (an owned
+ * top-level, SURFACE_SET_OWNER). _wmUp steps to whichever one a surface has
+ * (a surface never has both — SET_OWNER refuses anchored surfaces and
+ * anchored creation refuses owners); every predicate below walks it. */
+Kernel.prototype._wmUp = function (s) {
+  if (s.parentSid) return this._surfaces.get(s.parentSid) || null;
+  if (s.ownerSid) return this._surfaces.get(s.ownerSid) || null;
+  return null;
+};
+/* Does `s` sit anywhere in the anchor/owner subtree rooted at `root`? */
+Kernel.prototype._wmUnder = function (s, root) {
+  for (var p = s; p; p = this._wmUp(p)) if (p === root) return true;
+  return false;
+};
+/* The effective answer: mapped, not minimized, and no requested-hidden or
+ * minimized ancestor — what the compositor, hit test and WMP_F_VIEWABLE
+ * agree on. */
+Kernel.prototype._wmViewable = function (s) {
+  return !!(s.mapped && !s.minimized && !this._wmRequestedHidden(s) && !this._wmAnchorHidden(s));
 };
 
 /* Application visibility is independent of placement and minimization. */
 Kernel.prototype._wmRequestedHidden = function (s) {
-  for (var p = s; p; p = p.parentSid ? this._surfaces.get(p.parentSid) : null)
+  for (var p = s; p; p = this._wmUp(p))
     if (p.requestedVisible === false) return true;
   return false;
 };
 Kernel.prototype._wmSetVisible = function (s, visible) {
   if (s.requestedVisible === visible) return;
+  var snap = this._wmOwnedEffSnapshot(s);          // owned descendants (#794)
   s.requestedVisible = visible;
   s.visibilitySerial = (s.visibilitySerial + 1) >>> 0;
   if (!visible) {
     var self = this;
-    function inTree(sid) {
+    function inTree(sid) {                        // anchor AND owner subtree
       var t = self._surfaces.get(sid);
-      while (t) { if (t === s) return true; t = self._surfaces.get(t.parentSid); }
-      return false;
+      return !!(t && self._wmUnder(t, s));
     }
     if (this._wmOverview) {
       this._wmOverview.cells = this._wmOverview.cells.filter(function (c) { return !inTree(c.sid); });
@@ -5055,6 +5117,7 @@ Kernel.prototype._wmSetVisible = function (s, visible) {
     this._wmRestoreGrabs(s);
   }
   this._wmEventTo(s.sid, [visible ? WMEV.WINDOW_SHOWN : WMEV.WINDOW_HIDDEN, 0, 0, 0, 0, 0, 0, 0]);
+  this._wmOwnedEffNotify(snap);
   this._wmEmit(WMP.EV_VISIBILITY, this._wmpRecord(s));
   this._bumpWm();
   this._wmSyncPointerLock();
@@ -5091,7 +5154,15 @@ Kernel.prototype._wmDestroySurface = function (sid) {
   // Destroy-cascade (todos/0256, A1): anchored children die first,
   // recursively — a popup never outlives its anchor. Each child's own
   // destroy unlinks it from s.children, so the loop drains the list.
+  // Owned top-levels cascade the same way (#794): owner destruction
+  // destroys its owned descendants, deepest first.
+  while (s.owned.length) this._wmDestroySurface(s.owned[0]);
   while (s.children.length) this._wmDestroySurface(s.children[0]);
+  if (s.ownerSid) {
+    var down = this._surfaces.get(s.ownerSid);
+    if (down) { var doi = down.owned.indexOf(sid); if (doi >= 0) down.owned.splice(doi, 1); }
+    this._wmOwnedN--;
+  }
   if (s.parentSid) {
     var dpar = this._surfaces.get(s.parentSid);
     if (dpar) {
@@ -5227,11 +5298,86 @@ Kernel.prototype._wmMoveWithChildren = function (s, nx, ny) {
  * the headless composite, the cursor walk and the scene accessor (no state
  * fan-out; the walk only runs for surfaces that HAVE a parent). */
 Kernel.prototype._wmAnchorHidden = function (s) {
-  for (var p = this._surfaces.get(s.parentSid); p;
-       p = p.parentSid ? this._surfaces.get(p.parentSid) : null) {
-    if (p.minimized || !p.mapped || p.requestedVisible === false) return true;
+  // Since #794 the walk also climbs OWNER links: an owned top-level is
+  // hidden while its owner is minimized or hidden. An unmapped owner does
+  // not hide its owned windows (mapping is per-surface placement state —
+  // the owned window has its own placement); an unmapped anchor parent
+  // still does (todos/0256, the child's placement IS the parent's).
+  var viaAnchor = !!s.parentSid;
+  for (var p = this._wmUp(s); p; viaAnchor = !!p.parentSid, p = this._wmUp(p)) {
+    if (p.minimized || p.requestedVisible === false) return true;
+    if (viaAnchor && !p.mapped) return true;
   }
   return false;
+};
+
+/* ---- owned top-levels (#794) ----
+ * The owner relation is SDL_SetWindowParent / Win32's hwndParent on a
+ * non-child window: a separate top-level (own chrome, focus, placement)
+ * that stacks above its owner (_wmZNormalize), loses EFFECTIVE visibility
+ * while the owner is hidden or minimized — its own requestedVisible is
+ * preserved, so the owner's show restores it — and is destroyed with it
+ * (_wmDestroySurface). Same-process only: a foreign owner is EPERM, an
+ * anchored surface on either side, self or a cycle is EINVAL. */
+Kernel.prototype._wmSetOwner = function (s, ownerSid, pcb) {
+  if (s.parentSid) return 'EINVAL';                 // popups anchor, never own
+  var owner = null;
+  if (ownerSid) {
+    owner = this._surfaces.get(ownerSid);
+    if (!owner) return 'EINVAL';
+    if (owner.pid !== pcb.pid) return 'EPERM';      // cross-process refusal
+    if (owner === s || owner.parentSid) return 'EINVAL';
+    for (var q = owner; q; q = this._surfaces.get(q.ownerSid) || null)
+      if (q === s) return 'EINVAL';                 // cycle
+  }
+  if ((s.ownerSid | 0) === (ownerSid | 0)) return 0;
+  // The relink changes the effective visibility of `s` ITSELF (a hidden
+  // owner gained or lost) as well as its owned subtree: snapshot both.
+  var snap = this._wmOwnedEffSnapshot(s);
+  snap.push({ s: s, eff: !!(s.requestedVisible && !this._wmRequestedHidden(s) && !this._wmAnchorHidden(s)) });
+  if (s.ownerSid) {
+    var old = this._surfaces.get(s.ownerSid);
+    if (old) { var oi = old.owned.indexOf(s.sid); if (oi >= 0) old.owned.splice(oi, 1); }
+    this._wmOwnedN--;
+  }
+  s.ownerSid = ownerSid | 0;
+  if (owner) { owner.owned.push(s.sid); this._wmOwnedN++; }
+  this._wmZNormalize();                             // re-slot above the owner
+  this._wmOwnedEffNotify(snap);                     // a hidden owner hides it now
+  if (this._wmViewable(s)) this._wmRestoreGrabs(s);
+  else if (this._wmUnder(this._surfaces.get(this._focusSid), s)) this._wmFocusFall();
+  this._bumpWm();
+  return 0;
+};
+
+/* Effective-visibility bookkeeping for a subtree change (#794). Owned
+ * windows are real SDL windows, so when an OWNER is hidden/shown/minimized/
+ * restored each owned descendant whose effective visibility flipped gets
+ * its own WINDOW_HIDDEN/WINDOW_SHOWN ring record (the SDL3 contract:
+ * children hide with the parent). Anchored popups are exempt, as before —
+ * their visibility was always implicit. Snapshot before the state change,
+ * notify after; the closure is the owned subtree, bounded by construction. */
+Kernel.prototype._wmOwnedEffSnapshot = function (root) {
+  var self = this, out = [];
+  var walk = function (s) {
+    s.owned.forEach(function (sid) {
+      var o = self._surfaces.get(sid);
+      if (!o) return;
+      out.push({ s: o, eff: !!(o.requestedVisible && !self._wmRequestedHidden(o) && !self._wmAnchorHidden(o)) });
+      walk(o);
+    });
+  };
+  if (root) walk(root);
+  return out;
+};
+Kernel.prototype._wmOwnedEffNotify = function (snap) {
+  for (var i = 0; i < snap.length; i++) {
+    var o = snap[i].s;
+    if (!this._surfaces.has(o.sid)) continue;
+    var eff = !!(o.requestedVisible && !this._wmRequestedHidden(o) && !this._wmAnchorHidden(o));
+    if (eff === snap[i].eff) continue;
+    this._wmEventTo(o.sid, [eff ? WMEV.WINDOW_SHOWN : WMEV.WINDOW_HIDDEN, 0, 0, 0, 0, 0, 0, 0]);
+  }
 };
 
 /* The top-level ancestor of an anchored child (itself for a top-level). */
@@ -5278,8 +5424,11 @@ Kernel.prototype._wmGrabConsume = function (target, isClient) {
   this._wmGrabSwallowUp = true;
   // Deliberately NOT wmCloseRequest (#486): a grab dismissal is UI
   // housekeeping, not a user close request — a momentarily-busy owner must
-  // not be force-quit because a click landed outside its popup.
-  this._wmEventTo(hSid, [WMEV.QUIT, 0, 0, 0, 0, 0, 0, 0]);
+  // not be force-quit because a click landed outside its popup. Since #794
+  // the record is its own type, POPUP_DISMISSED (reason 1 = outside press),
+  // so a client can tell a dismissal from a close request on the wire;
+  // host.js maps it onto the legacy per-window SDL close event.
+  this._wmEventTo(hSid, [WMEV.POPUP_DISMISSED, 0, 1, 0, 0, 0, 0, 0]);
   return 'grab-dismiss';
 };
 
@@ -6082,7 +6231,7 @@ Kernel.prototype._wmCursorAt = function (x, y) {
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized || !s.mapped || this._wmRequestedHidden(s)) continue;
-    if (s.parentSid && this._wmAnchorHidden(s)) continue;   // (todos/0256)
+    if ((s.parentSid || s.ownerSid) && this._wmAnchorHidden(s)) continue;   // (todos/0256, #794)
     var dw = s.dstW, dh = s.dstH;
     var inTitle = !s.borderless &&
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
@@ -6281,8 +6430,8 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized || !s.mapped || this._wmRequestedHidden(s)) continue;
-    if (s.parentSid && this._wmAnchorHidden(s)) continue;   // hides with its
-                                                            // parent (0256)
+    if ((s.parentSid || s.ownerSid) && this._wmAnchorHidden(s)) continue;   // hides with its
+                                                            // parent/owner (0256, #794)
     var dw = s.dstW, dh = s.dstH;
     var inTitle = !s.borderless &&
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
@@ -6456,6 +6605,8 @@ Kernel.prototype.wmList = function () {
                requestedVisible: s.requestedVisible !== false,
                mapped: !!s.mapped,              // map-on-placement (todos/0069)
                parent: s.parentSid | 0,         // anchored child (todos/0256)
+               owner: s.ownerSid | 0,           // owner top-level (#794)
+               viewable: this._wmViewable(s),   // effective visibility (#794)
                configurePending: !!s.pendingConfigure,
                frameSeq: Atomics.load(s.i32, SH_SEQ) });
   }
@@ -6482,7 +6633,15 @@ Kernel.prototype._wmZNormalize = function () {
   // composite / hit test stay anchor-blind (zero lines there, §3.0).
   // Children ride their root's layer by construction; normalization runs
   // after every z mutation, which is the whole raise-as-subtree mechanism.
-  if (!this._wmAnchoredN) return;
+  // Owned top-levels (#794) get the same treatment one level up: each is
+  // emitted right after its owner's anchored subtree, creation-ordered, so
+  // an owned window always sits above its owner and the owner group moves
+  // as one (raise/lower the owner, the owned windows follow). Owned
+  // windows keep their OWN layer (they are independent top-levels), so a
+  // +1 owner does not drag a normal owned window into the furniture band;
+  // the sort above already grouped layers, and an owned window in a
+  // different layer than its owner is emitted where its own layer sits.
+  if (!this._wmAnchoredN && !this._wmOwnedN) return;
   var out = [], seen = new Set();
   var emit = function (sid) {
     if (seen.has(sid)) return;
@@ -6494,10 +6653,18 @@ Kernel.prototype._wmZNormalize = function () {
       var c = self._surfaces.get(s.children[i]);
       if (c) { c.layer = s.layer; emit(c.sid); }
     }
+    for (var k = 0; k < s.owned.length; k++) {
+      var o = self._surfaces.get(s.owned[k]);
+      if (o && o.layer === s.layer) emit(o.sid);
+    }
   };
   for (var i = 0; i < this._zOrder.length; i++) {
     var t = this._surfaces.get(this._zOrder[i]);
     if (t && t.parentSid) continue;      // children are emitted by their parent
+    if (t && t.ownerSid) {               // owned: emitted by a same-layer owner
+      var ow = this._surfaces.get(t.ownerSid);
+      if (ow && ow.layer === t.layer) continue;
+    }
     emit(this._zOrder[i]);
   }
   for (var j = 0; j < this._zOrder.length; j++) {  // defensive: never drop a sid
@@ -6540,17 +6707,28 @@ Kernel.prototype.wmFocus = function (sid, expectedVisibility) {
   // focuses (and raises, restores) its top-level root instead, the same
   // policy as a client click on the child.
   if (s.parentSid) s = this._wmAnchorRoot(s);
-  if (s.minimized) {                                            // focus restores
-    s.minimized = false;
-    this._wmRestoreGrabs(s);
-    this._wmAnimPush(s, 'restore');   // compositor animation (todos/0063)
+  // Focusing an owned window restores every minimized owner above it (the
+  // Win32 rule: activating an owned window brings its owner back) and
+  // raises the whole owner GROUP — the root owner goes to the top of its
+  // layer and _wmZNormalize re-slots the owned windows above it (#794).
+  var chain = [];
+  for (var oc = s; oc; oc = this._surfaces.get(oc.ownerSid) || null) chain.push(oc);
+  for (var ci = chain.length - 1; ci >= 0; ci--) {
+    var cs = chain[ci];
+    if (!cs.minimized) continue;                                // focus restores
+    var csnap = this._wmOwnedEffSnapshot(cs);
+    cs.minimized = false;
+    this._wmRestoreGrabs(cs);
+    this._wmAnimPush(cs, 'restore');   // compositor animation (todos/0063)
     this._bumpWm();
-    this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 0]);
+    this._wmEmit(WMP.EV_MINIMIZED, [cs.sid, 0]);
+    this._wmOwnedEffNotify(csnap);
   }
-  var zi = this._zOrder.indexOf(s.sid);
+  var zroot = chain[chain.length - 1];
+  var zi = this._zOrder.indexOf(zroot.sid);
   if (zi >= 0 && zi !== this._zOrder.length - 1) {
     this._zOrder.splice(zi, 1);
-    this._zOrder.push(s.sid);
+    this._zOrder.push(zroot.sid);
     this._wmZNormalize();                       // raise stays within the layer
                                                 // (subtree re-slots with it)
     this._bumpWm();      // z changed even if focus doesn't below (todos/0165)
@@ -6720,12 +6898,19 @@ Kernel.prototype.wmMinimize = function (sid) {
   if (!s) return 'EINVAL';
   if (s.parentSid) return 'EPERM';   // visibility derives from the parent (0256)
   if (s.minimized) return 0;
+  var msnap = this._wmOwnedEffSnapshot(s);          // owned hide with it (#794)
   s.minimized = true;
   this._wmAnimPush(s, 'min');   // transient compositor animation (todos/0063)
   this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 1]);
+  var mself = this;
+  this._wmGrabs = this._wmGrabs.filter(function (sid) {   // owned popups' grabs
+    var g = mself._surfaces.get(sid); return !(g && mself._wmUnder(g, s));
+  });
   if (this._wmDrag && this._wmDrag.sid === s.sid) this._wmDrag = null;
   if (this._wmResizeDrag && this._wmResizeDrag.sid === s.sid) this._wmResizeDrag = null;
-  if (this._focusSid === s.sid) this._wmFocusFall();
+  var mf = this._surfaces.get(this._focusSid);
+  if (mf && this._wmUnder(mf, s)) this._wmFocusFall();
+  this._wmOwnedEffNotify(msnap);
   this._bumpWm();
   this._wmSyncPointerLock();
   return 0;
@@ -6985,7 +7170,7 @@ Kernel.prototype.wmCapture = async function (type, sid, maxW, maxH) {
       if (s && !snap._wmRequestedHidden(s)) wanted.add(c.sid);
     });
     else snap._surfaces.forEach(function (s) {
-      if (s.mapped && !s.minimized && !snap._wmRequestedHidden(s) && !(s.parentSid && snap._wmAnchorHidden(s))) wanted.add(s.sid);
+      if (snap._wmViewable(s)) wanted.add(s.sid);
     });
   } else {
     var s = snap._surfaces.get(sid | 0);
@@ -7113,8 +7298,8 @@ Kernel.prototype.wmScreenshotScreen = function (pixels) {
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized || !s.mapped || this._wmRequestedHidden(s)) continue;   // unmapped: todos/0069
-    if (s.parentSid && this._wmAnchorHidden(s)) continue;   // hides with its
-                                                            // parent (0256)
+    if ((s.parentSid || s.ownerSid) && this._wmAnchorHidden(s)) continue;   // hides with its
+                                                            // parent/owner (0256, #794)
     var dw = s.dstW, dh = s.dstH;      // on-screen rect (todos/0024)
     // Chrome: resize frame under title bar + close box (borderless surfaces
     // draw bare). The frame is one outer fill; title + client cover its
@@ -7377,7 +7562,7 @@ Kernel.prototype.wmScene = function () {
         // clears before the restore push) and only need the linkage.
         if (!s) return false;
         if (self._wmRequestedHidden(s)) return false;
-        if (!s.parentSid) return true;
+        if (!s.parentSid) return !s.ownerSid || !self._wmAnchorHidden(s);   // owned (#794)
         var root = self._wmAnchorRoot(s);
         var anim = self._wmAnims.get(root.sid);   // post-prune: live or absent
         s.animRootSid = anim ? root.sid : 0;
@@ -7427,8 +7612,8 @@ Kernel.prototype._wmpRecord = function (s) {
               (s.resizable ? 16 : 0) | (s.hasAlpha ? 32 : 0) |
               (s.parentSid ? 64 : 0) |    // WMP_F_ANCHORED (todos/0256)
               (s.transient ? 128 : 0) | (s.requestedVisible === false ? 256 : 0) |
-              (!s.minimized && s.mapped && !this._wmRequestedHidden(s) &&
-               !this._wmAnchorHidden(s) ? 512 : 0); // WMP_F_VIEWABLE
+              (this._wmViewable(s) ? 512 : 0) |     // WMP_F_VIEWABLE
+              (s.ownerSid ? 1024 : 0);              // WMP_F_OWNED (#794)
   var fields = [s.sid, s.pid, s.x, s.y, s.w, s.h,
                 this._zOrder.indexOf(s.sid), flags, Atomics.load(s.i32, SH_SEQ),
                 s.dstW, s.dstH, s.layer | 0];

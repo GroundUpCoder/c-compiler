@@ -5,6 +5,8 @@ static bool test_show(SDL_Window *w) { (void)w; shown++; return 1; }
 static bool test_hide(SDL_Window *w) { (void)w; hidden++; return 1; }
 static bool test_raise(SDL_Window *w) { (void)w; raised++; return 1; }
 static bool test_size(SDL_Window *w, int x, int y) { (void)w; (void)x; (void)y; sized++; return 1; }
+static int parented;
+static bool test_parent(SDL_Window *w, SDL_Window *p) { (void)w; (void)p; parented++; return 1; }
 static LRESULT test_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     (void)h; (void)w; (void)l;
     if (m == WM_SHOWWINDOW) notices++;

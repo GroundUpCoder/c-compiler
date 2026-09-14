@@ -89,6 +89,11 @@ SDL_WindowFlags SDL_GetWindowFlags(SDL_Window *window);
 bool SDL_ShowWindow(SDL_Window *window);
 bool SDL_HideWindow(SDL_Window *window);
 bool SDL_RaiseWindow(SDL_Window *window);
+bool SDL_SetWindowParent(SDL_Window *window, SDL_Window *parent);
+SDL_Window *SDL_GetWindowParent(SDL_Window *window);
+SDL_Window *SDL_GetWindowFromID(SDL_WindowID id);
+int guc_window_close_reason(SDL_Window *window);
+int guc_window_viewable(SDL_Window *window);
 bool SDL_SetWindowPosition(SDL_Window *window, int x, int y);
 bool SDL_SetWindowIcon(SDL_Window *window, SDL_Surface *icon);
 void SDL_DestroySurface(SDL_Surface *surface);
@@ -625,6 +630,12 @@ SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE=8
 ```
 
 SDL_RenderDebugText glyphs are 8x8 window pixels (no SDL_SetRenderScale in this runtime).
+
+### GUC_CLOSE_REASON_* — gucOS close-event reasons (guc_window_close_reason, #794)
+
+```
+GUC_CLOSE_REASON_REQUEST=0  GUC_CLOSE_REASON_POPUP_DISMISS=1
+```
 
 ### Error helper
 

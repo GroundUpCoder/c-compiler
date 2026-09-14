@@ -7423,6 +7423,8 @@ function createNullSDL(ctx) {
       __sdl_set_window_visible: function () { return -1; },
       __sdl_raise_window: function () { return -1; },
       __sdl_get_window_state: function () { return -1; },
+      __sdl_set_window_parent: function () { return -1; },   // no window system (#794)
+      __sdl_get_window_viewable: function () { return -1; },
       __sdl_set_window_size: function () { return -1; },  // no window system to resize
       // Anchored popups + display bounds are OS-WM concepts (todos/0256):
       // no window system here -> clean failure, the C side sets SDL errors.
@@ -7592,7 +7594,10 @@ const WMEV_QUIT = 0x100, WMEV_WINDOW_RESIZED = 0x206,
       // Gamepad (#607) — SDL3 numbers verbatim, like everything above.
       WMEV_GAMEPAD_AXIS = 0x650, WMEV_GAMEPAD_BUTTON_DOWN = 0x651,
       WMEV_GAMEPAD_BUTTON_UP = 0x652, WMEV_GAMEPAD_ADDED = 0x653,
-      WMEV_GAMEPAD_REMOVED = 0x654;
+      WMEV_GAMEPAD_REMOVED = 0x654,
+      // gucOS extension record (#794): a popup grab's outside-press dismissal,
+      // distinct from QUIT (the close request). word[2] = reason.
+      WMEV_POPUP_DISMISSED = 0x7101;
 
 /* CD26 tripwire (mirrors todos/0235's payloadChunk rule): the constants
  * above re-declare kernel.js's SH_* / IR_* / WMEV / AU_* SAB layouts —
@@ -7627,6 +7632,7 @@ function assertWmSabLayout(hooks) {
       GAMEPAD_BUTTON_UP: WMEV_GAMEPAD_BUTTON_UP,
       GAMEPAD_ADDED: WMEV_GAMEPAD_ADDED,
       GAMEPAD_REMOVED: WMEV_GAMEPAD_REMOVED,
+      POPUP_DISMISSED: WMEV_POPUP_DISMISSED,
     },
   };
   const theirs = hooks && hooks.wmSabLayout;
@@ -7692,6 +7698,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   const { readString, getMemory, getExports } = ctx;
   const handleBySid = new Map();     // sid -> SDL window handle
   const kFlagsBySid = new Map();     // sid -> current kernel surface flags word
+  const lifecycleBySid = new Map();  // sid -> kernel lifecycle capability level (#794)
   let ring = null;                   // { sab, i32, f32, cap } — one per process
   let onConfigure = null;            // flavor hook: WINDOW_RESIZED ring record
 
@@ -7837,12 +7844,21 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     const r = hooks.surfaceCreate(w, h, title, fb.sab, ensureRing().sab, kFlags,
                                   parentSid, dx, dy);
     if (!r || r.errno || !(r.sid > 0)) return null;
-    if ((sdlFlags & 8) && r.lifecycle !== 1) {
+    if ((sdlFlags & 8) && !(r.lifecycle >= 1)) {
       hooks.surfaceDestroy(r.sid);
       return null; // older kernel cannot promise invisible construction
     }
     kFlagsBySid.set(r.sid, kFlags);
+    lifecycleBySid.set(r.sid, r.lifecycle | 0);   // capability level (#789/#794)
     return { sid: r.sid, fb };
+  }
+  /* Owner link (#794, SDL_SetWindowParent): refused (-1) unless the kernel
+   * advertised lifecycle level 2 at create — an older kernel has no
+   * SET_OWNER op, and "silently unowned" is exactly the no-op this must
+   * never become. ownerSid 0 clears. */
+  function setOwner(sid, ownerSid) {
+    if (!sid || !(lifecycleBySid.get(sid) >= 2)) return -1;
+    return lifecycle(sid, 'surfaceSetOwner', ownerSid | 0);
   }
   /* SDL_GetDisplayBounds (todos/0256): the kernel screen dims off the vDSO
    * page (zero RPCs). Packed (w << 16) | h — dims are capped at 8192 kernel-
@@ -7896,6 +7912,13 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     const r = hooks.surfaceGetState(sid);
     return r && !r.errno ? (r.visible ? 0 : 8) | (r.focused ? 0x200 : 0) |
       (r.minimized ? 0x40 : 0) : -1;
+  }
+  /* guc_window_viewable (#794): the kernel's effective-visibility answer;
+   * -1 where GET_STATE predates it (no `viewable` field) or no kernel. */
+  function windowViewable(sid) {
+    if (!sid || typeof hooks.surfaceGetState !== 'function') return -1;
+    const r = hooks.surfaceGetState(sid);
+    return r && !r.errno && typeof r.viewable === 'boolean' ? (r.viewable ? 1 : 0) : -1;
   }
   function requestResize(sid, w, h) {
     if (typeof hooks.surfaceResize !== 'function') return -1;
@@ -8012,6 +8035,15 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
           // The record names the closed surface (kernel _wmEventTo stamps
           // the sid); the SDL side decides per-window vs process-wide.
           if (ex.__sdl_push_quit_event) ex.__sdl_push_quit_event(handle);
+          break;
+        case WMEV_POPUP_DISMISSED:
+          // A popup grab dismissal (#794): the veneer records the reason
+          // (guc_window_close_reason) and keeps the legacy per-window
+          // SDL_EVENT_WINDOW_CLOSE_REQUESTED mapping. A binary compiled
+          // before #794 has no dismissal export and keeps seeing the QUIT
+          // it always saw — same event, one push either way.
+          if (ex.__sdl_push_popup_dismissed) ex.__sdl_push_popup_dismissed(handle, ring.i32[base + 2]);
+          else if (ex.__sdl_push_quit_event) ex.__sdl_push_quit_event(handle);
           break;
         case WMEV_WINDOW_RESIZED:
           // Renegotiate BEFORE the wasm sees the event: the app handles it
@@ -9005,6 +9037,17 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       const win = fbByHandle.get(handle);
       return windowState(win && win.sid);
     };
+    // SDL_SetWindowParent (#794): 0 = clear the owner link.
+    env.__sdl_set_window_parent = function (handle, parentHandle) {
+      const win = fbByHandle.get(handle);
+      const owner = parentHandle ? fbByHandle.get(parentHandle) : null;
+      if (parentHandle && !owner) return -1;
+      return setOwner(win && win.sid, owner ? owner.sid : 0);
+    };
+    env.__sdl_get_window_viewable = function (handle) {
+      const win = fbByHandle.get(handle);
+      return windowViewable(win && win.sid);
+    };
     env.__sdl_get_display_bounds = displayBounds;   // (todos/0256)
     // CPU software-present path: shm transport, no GPU dependency (see
     // shmPresent). The WebGPU renderer keeps the bitmap path via onPresent.
@@ -9255,6 +9298,17 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       __sdl_get_window_state: function (handle) {
         const win = windows[handle - 1];
         return windowState(win && win.sid);
+      },
+      // SDL_SetWindowParent (#794): 0 = clear the owner link.
+      __sdl_set_window_parent: function (handle, parentHandle) {
+        const win = windows[handle - 1];
+        const owner = parentHandle ? windows[parentHandle - 1] : null;
+        if (parentHandle && !owner) return -1;
+        return setOwner(win && win.sid, owner ? owner.sid : 0);
+      },
+      __sdl_get_window_viewable: function (handle) {
+        const win = windows[handle - 1];
+        return windowViewable(win && win.sid);
       },
       __sdl_get_display_bounds: displayBounds,   // (todos/0256)
       __sdl_destroy_window: function (handle) {
@@ -9891,6 +9945,8 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_set_window_visible: function () { return -1; },
       __sdl_raise_window: function () { return -1; },
       __sdl_get_window_state: function () { return -1; },
+      __sdl_set_window_parent: function () { return -1; },   // no window system (#794)
+      __sdl_get_window_viewable: function () { return -1; },
       __sdl_set_window_size: function () { return -1; },
       // Anchored popups + display bounds are OS-WM concepts (todos/0256):
       // the standalone page has ONE canvas -> clean failure, C sets errors.
