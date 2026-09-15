@@ -73,6 +73,84 @@ const SHADOW_EXT: f32 = 14.0;        // shadow reach in px — MUST MATCH the
 }
 `;
 
+/* ---- shm upload cache (#790) — factored out of startCompositor so a Node
+ * test (tests/host/test_compositor_shm.js) can drive it with a fake device.
+ * Per-surface GPUTexture, upload gated on the frame identity (gen, seq): the
+ * buffer GENERATION distinguishes a fresh SAB of the SAME size (an equal-size
+ * reconfigure restarts seq, so seq alone collided with the old pixels), the
+ * size check covers the rest. The copy runs under SH_LOCK (the frame-
+ * ownership word): a producer never flips while we read, and we NEVER wait
+ * on the producer's cadence — the try-lock spins a few thousand CAS (the
+ * producer's section is two atomics, so that resolves a mid-flip collision)
+ * and then gives up: the PREVIOUS valid frame stays on screen, whatever its
+ * generation or size (it is drawn into the current rect — temporary scaling
+ * is presentation policy, per the UI contract), and takeRetry() tells the
+ * frame loop to re-submit next rAF. A new-generation entry replaces the old
+ * one only AFTER its first successful upload, so a contended first frame of
+ * a new buffer can never show a never-uploaded (blank) texture. Only a
+ * surface that has NEVER uploaded anything gets a fresh empty texture on
+ * contention — there is no previous frame to keep. */
+var SHM_TRY_SPIN = 4096;
+function makeShmUploader(getDevice, bindFor, stats, K) {
+  var cache = new Map();   // sid -> { gen, seq, w, h, tex, bind, scratch }
+  var retry = false;
+  function tryLock(i32) {
+    for (var i = 0; i < SHM_TRY_SPIN; i++)
+      if (Atomics.compareExchange(i32, K.SH_LOCK, 0, 1) === 0) return true;
+    return false;
+  }
+  function fresh(surf, seq, gen) {
+    var tex = getDevice().createTexture({
+      size: { width: surf.w, height: surf.h }, format: 'rgba8unorm',
+      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    return { gen: gen, seq: seq - 1, w: surf.w, h: surf.h, tex: tex, bind: bindFor(tex),
+             scratch: new Uint8Array(surf.w * surf.h * 4) };
+  }
+  // The locked copy + upload. The caller holds SH_LOCK; released here as
+  // soon as the bytes are out of the SAB (writeTexture wants non-racing
+  // bytes; the copy IS the critical section, the upload is not).
+  function upload(c, surf) {
+    var bytes = surf.w * surf.h * 4;
+    var front = Atomics.load(surf.i32, K.SH_FLIP) & 1;
+    var seq = Atomics.load(surf.i32, K.SH_SEQ);      // re-read under the lock
+    c.scratch.set(new Uint8Array(surf.sab, K.SH_HDR_BYTES + front * bytes, bytes));
+    Atomics.store(surf.i32, K.SH_LOCK, 0);
+    Atomics.notify(surf.i32, K.SH_LOCK);
+    getDevice().queue.writeTexture({ texture: c.tex }, c.scratch,
+      { bytesPerRow: surf.w * 4 }, { width: surf.w, height: surf.h });
+    c.seq = seq;
+  }
+  return {
+    cache: cache,
+    bindFor: function (surf) {
+      var seq = Atomics.load(surf.i32, K.SH_SEQ);
+      var gen = Atomics.load(surf.i32, K.SH_GEN);
+      var c = cache.get(surf.sid);
+      var stale = !c || c.w !== surf.w || c.h !== surf.h || c.gen !== gen;
+      if (!stale && c.seq === seq) return c.bind;
+      if (!tryLock(surf.i32)) {
+        stats.shmContended++;
+        retry = true;
+        if (c) return c.bind;              // the previous valid frame stays
+        c = fresh(surf, seq, gen);         // nothing was ever shown: empty is honest
+        cache.set(surf.sid, c);
+        return c.bind;
+      }
+      if (stale) {
+        var n = fresh(surf, seq, gen);
+        upload(n, surf);
+        if (c) c.tex.destroy();            // the old frame dies only now
+        cache.set(surf.sid, n);
+        return n.bind;
+      }
+      upload(c, surf);
+      return c.bind;
+    },
+    takeRetry: function () { var r = retry; retry = false; return r; },
+  };
+}
+
 function startCompositor(kernel, canvas, device) {
   var K = KERNEL;
   // Label text renders via the kernel's ksvc text service (todos/0275) —
@@ -345,50 +423,10 @@ function startCompositor(kernel, canvas, device) {
     p.end();
   }
 
-  // ---- shm surfaces: per-surface GPUTexture, upload gated on the frame
-  // identity (gen, seq) (#790) — the buffer GENERATION distinguishes a
-  // fresh SAB of the SAME size (an equal-size reconfigure restarts seq, so
-  // seq alone collided with the old pixels), the size check covers the
-  // rest. The copy runs under SH_LOCK (the frame-ownership word): a
-  // producer never flips while we read, and we NEVER wait — on contention
-  // (a flip in flight) the previous valid frame stays on screen and the
-  // next rAF retries (uploadRetry keeps the frame dirty).
-  var shmCache = new Map();   // sid -> { gen, seq, w, h, tex, bind, scratch }
-  var uploadRetry = false;    // an upload was skipped on SH_LOCK contention
-  function shmBindFor(surf) {
-    var seq = Atomics.load(surf.i32, K.SH_SEQ);
-    var gen = Atomics.load(surf.i32, K.SH_GEN);
-    var c = shmCache.get(surf.sid);
-    if (!c || c.w !== surf.w || c.h !== surf.h || c.gen !== gen) {
-      if (c) c.tex.destroy();
-      var tex = device.createTexture({
-        size: { width: surf.w, height: surf.h }, format: 'rgba8unorm',
-        usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
-      });
-      c = { gen: gen, seq: seq - 1, w: surf.w, h: surf.h, tex: tex, bind: bindFor(tex),
-            scratch: new Uint8Array(surf.w * surf.h * 4) };
-      shmCache.set(surf.sid, c);
-    }
-    if (c.seq !== seq) {
-      if (Atomics.compareExchange(surf.i32, K.SH_LOCK, 0, 1) !== 0) {
-        stats.shmContended++;
-        uploadRetry = true;             // keep the last good frame; retry next rAF
-        return c.bind;
-      }
-      var bytes = surf.w * surf.h * 4;
-      var front = Atomics.load(surf.i32, K.SH_FLIP) & 1;
-      seq = Atomics.load(surf.i32, K.SH_SEQ);   // re-read under the lock
-      // Copy out of the SAB (writeTexture wants non-racing bytes; same copy
-      // the putImageData path made).
-      c.scratch.set(new Uint8Array(surf.sab, K.SH_HDR_BYTES + front * bytes, bytes));
-      Atomics.store(surf.i32, K.SH_LOCK, 0);
-      Atomics.notify(surf.i32, K.SH_LOCK);
-      device.queue.writeTexture({ texture: c.tex }, c.scratch,
-        { bytesPerRow: surf.w * 4 }, { width: surf.w, height: surf.h });
-      c.seq = seq;
-    }
-    return c.bind;
-  }
+  // ---- shm surfaces: the (gen, seq)-gated, SH_LOCK-disciplined upload cache
+  // (#790) lives in makeShmUploader above; wired up after `stats` exists.
+  var shmUploader = null, shmCache = null;
+  function shmBindFor(surf) { return shmUploader.bindFor(surf); }
 
   // ---- gpu surfaces: import the arriving ImageBitmap, once per bitmap
   // (identity-gated — the kernel swaps surf.bitmap at present and closes
@@ -604,6 +642,8 @@ function startCompositor(kernel, canvas, device) {
                 deviceLosses: 0, recoveries: 0,     // #551 recovery accounting
                 shmContended: 0 };                  // #790 SH_LOCK contention retries
   self.__compositorStats = stats;   // test probe (tests/browser/os-compositor.mjs)
+  shmUploader = makeShmUploader(function () { return device; }, bindFor, stats, K);
+  shmCache = shmUploader.cache;     // the clear/prune sites reach the same Map
   initGpuState();                   // first build of the device-derived state
   var lastSig = null;
   var armed = true;                 // the boot rAF at the bottom
@@ -938,7 +978,7 @@ function startCompositor(kernel, canvas, device) {
     stats.submits++;
     // A skipped shm upload (SH_LOCK contention, #790) leaves a surface one
     // frame behind: forget the signature so the next rAF re-submits.
-    if (uploadRetry) { uploadRetry = false; lastSig = null; }
+    if (shmUploader.takeRetry()) lastSig = null;
     requestAnimationFrame(draw);   // a dirty frame always re-arms (GRACE fresh)
   }
   // Every kernel-side scene change (all _bumpWm sites, gpu presents,
@@ -1003,4 +1043,8 @@ function routeInput(kernel, sdlWeb, ev) {
 
 if (typeof self !== 'undefined') {
   self.OS_COMPOSITOR = { startCompositor: startCompositor, routeInput: routeInput };
+}
+if (typeof module !== 'undefined' && module.exports) {
+  // Node test export (#790): the shm upload cache, driven with a fake device.
+  module.exports = { makeShmUploader: makeShmUploader, SHM_TRY_SPIN: SHM_TRY_SPIN };
 }

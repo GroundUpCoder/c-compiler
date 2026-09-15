@@ -476,8 +476,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     String(px(shot, 1, 1)) === '0,128,255,255', px(shot, 1, 1));
   workers.get(appPid).msg({ type: 'wm-sabs', fb: makeFb(96, 80, ser).sab, ring: null });
   const spont = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80, serial: ser });
-  check('CONFIGURE with nothing pending -> EINVAL (kernel-initiated only)',
-    spont.errno === 'EINVAL');
+  check('CONFIGURE with nothing pending -> ESTALE (the serial is not a still-valid issued one; #790)',
+    spont.errno === 'ESTALE');
 
   // ---- superseded resize: latest wins, stale ack accepted + re-asked ----
   kernel.wmResize(1, 120, 90);

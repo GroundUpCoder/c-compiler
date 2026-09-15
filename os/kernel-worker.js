@@ -338,7 +338,8 @@ self.onmessage = function (e) {
                                // #790 frame-identity probes
                                configureStale: kernel.configureStaleCount(),
                                framesRejected: kernel.wmFrameRejectedCount(),
-                               shmLockMisses: kernel.shmLockMisses() },
+                               shmLockMisses: kernel.shmLockMisses(),
+                               shmFlipMisses: kernel.shmFlipMisses() },
                              compositor.stats)
              : null });
   } else if (m.type === 'compositor-kill') {

@@ -256,6 +256,11 @@ try {
   await page.keyboard.type("echo GPU-SHELL-O''K\r");
   await page.waitForFunction(() => window.__osOut.includes('GPU-SHELL-OK'), { timeout: 20000, polling: 'raf' });
   check('shell alive after the GPU app exits', true);
+  // #790: a raw webgpu.h producer ships frames for the committed serial; the
+  // kernel must not have rejected any (a retired-serial frame is the only
+  // thing it drops — size is not an identity).
+  const cs = await page.evaluate(() => window.__osCompositorStats());
+  check('no gpu frames rejected by frame identity (#790)', cs && cs.framesRejected === 0, JSON.stringify(cs));
 } catch (e) {
   console.error('FAIL: ' + (e && e.message));
   state.failures++;

@@ -205,8 +205,12 @@ async function ack(pid, sid, w, h, serial, opts) {
   check('committed 2, nothing pending, gen 2', s.committedSerial === 2 && s.pendingSerial === 0 && s.gen === 2 && s.w === 100 && s.h === 80, JSON.stringify(s));
   const ev = lastEmit(K.WMP.EV_CONFIGURED);
   check('EV_CONFIGURED { sid, w, h, serial }', ev && ev.payload[0] === sid && ev.payload[1] === 100 && ev.payload[2] === 80 && ev.payload[3] === 2, JSON.stringify(ev));
-  a = await ack(app, sid, 100, 80, 2);
-  check('a second ack with nothing pending -> EINVAL', a.r.errno === 'EINVAL', JSON.stringify(a.r));
+  {
+    const st0 = kernel.configureStaleCount();
+    a = await ack(app, sid, 100, 80, 2);
+    check('a second ack with nothing pending -> ESTALE (one identity shape), counted',
+      a.r.errno === 'ESTALE' && kernel.configureStaleCount() === st0 + 1, JSON.stringify(a.r));
+  }
 
   // ---- C. superseded / backward ----
   kernel.wmResize(sid, 110, 81); kernel.wmResize(sid, 120, 82); kernel.wmResize(sid, 130, 83);
@@ -223,7 +227,7 @@ async function ack(pid, sid, w, h, serial, opts) {
   a = await ack(app, sid, 130, 83, 5, { rgba: [5, 5, 5, 255] });
   check('acking the pending target settles', !a.r.errno && row(sid).pendingSerial === 0 && row(sid).committedSerial === 5);
   a = await ack(app, sid, 130, 83, 5);
-  check('re-acking the committed serial -> EINVAL (nothing pending)', a.r.errno === 'EINVAL');
+  check('re-acking the committed serial -> ESTALE (never backward, even with nothing pending)', a.r.errno === 'ESTALE');
   {
     // an ack whose dims contradict the issued serial's dims: ESTALE (identity
     // is serial + dims; the SAB header matched its own claim so it is not EINVAL)
@@ -271,8 +275,9 @@ async function ack(pid, sid, w, h, serial, opts) {
     const before = row(sid);
     kernel.wmResize(sid, 300, 200);
     const sd = resized(drain(ring))[0].w[4];
+    const stD = kernel.configureStaleCount();
     let d = await rpc(app, K.OP.SURFACE_CONFIGURE, { sid, w: 300, h: 200, serial: 77, decline: true });
-    check('declining an unknown serial -> ESTALE', d.errno === 'ESTALE');
+    check('declining an unknown serial -> ESTALE, counted', d.errno === 'ESTALE' && kernel.configureStaleCount() === stD + 1);
     d = await rpc(app, K.OP.SURFACE_CONFIGURE, { sid, w: 300, h: 200, serial: sd, decline: true });
     check('declining the pending serial -> ok', !d.errno, JSON.stringify(d));
     s = row(sid);
@@ -289,7 +294,22 @@ async function ack(pid, sid, w, h, serial, opts) {
     a = await ack(app, sid, 320, 220, ob, { rgba: [1, 1, 1, 255] });
     check('...which then settles', !a.r.errno && row(sid).committedSerial === ob && row(sid).pendingSerial === 0);
     d = await rpc(app, K.OP.SURFACE_CONFIGURE, { sid, w: 320, h: 220, serial: ob, decline: true });
-    check('declining with nothing pending -> EINVAL', d.errno === 'EINVAL');
+    check('declining with nothing pending -> ESTALE (the committed serial is not issued)', d.errno === 'ESTALE');
+    // ---- the re-issue that cannot be delivered (full ring) retires the
+    // outstanding set and tells policy (EV_CONFIGURE_DECLINED) — no leak ----
+    kernel.wmResize(sid, 330, 230); kernel.wmResize(sid, 340, 240);
+    const [ra, rb] = resized(drain(ring)).map((e) => e.w[4]);
+    for (let i = 0; i < ring.cap + 4; i++) kernel.wmInjectKey(sid, true, 4, 97, 0);   // fill the ring
+    const emitN = emitted.length;
+    a = await ack(app, sid, 330, 230, ra, { rgba: [3, 3, 3, 255] });
+    check('superseded ack accepted while the ring is full', !a.r.errno && row(sid).committedSerial === ra, JSON.stringify(a.r));
+    const lost = emitted.slice(emitN).find((e) => e.type === K.WMP.EV_CONFIGURE_DECLINED);
+    check('undeliverable re-issue: pending cleared, outstanding 0, EV_CONFIGURE_DECLINED names the lost target',
+      row(sid).pendingSerial === 0 && (await rpc(app, K.OP.SURFACE_GET_STATE, { sid })).configure.outstanding === 0 &&
+      lost && lost.payload[1] === rb && lost.payload[2] === 340 && lost.payload[3] === 240, JSON.stringify([row(sid).pendingSerial, lost]));
+    drain(ring);
+    a = await ack(app, sid, 340, 240, rb);
+    check('...and the lost serial is ESTALE afterwards', a.r.errno === 'ESTALE');
   }
 
   // ---- G. destroy with a configure in flight ----
@@ -319,18 +339,19 @@ async function ack(pid, sid, w, h, serial, opts) {
     check('a frame for the committed serial (1) is accepted', row(sid3).frameSeq === 1 && closedA === 0 && kernel.wmFrameRejectedCount() === rej0);
     let closedB = 0;
     workers.get(app).msg({ type: 'wm-frame', sid: sid3, bmp: { width: 51, height: 40, close() { closedB++; } }, serial: 1 });
-    check('a frame whose size is not the committed buffer is rejected (closed, counted)', closedB === 1 && kernel.wmFrameRejectedCount() === rej0 + 1 && row(sid3).frameSeq === 1);
+    check('a frame of another SIZE for the committed serial is accepted (scaled presentation, as before #790)',
+      closedB === 0 && closedA === 1 && kernel.wmFrameRejectedCount() === rej0 && row(sid3).frameSeq === 2);
     kernel.wmResize(sid3, 70, 50);
     const sg = resized(drain(ring))[0].w[4];
     // pre-ack: a frame at the OLD size for the OLD serial is still current
     let closedC = 0;
     workers.get(app).msg({ type: 'wm-frame', sid: sid3, bmp: { width: 50, height: 40, close() { closedC++; } }, serial: 1 });
-    check('pre-ack old-size frame for the committed serial still accepted', closedC === 0 && closedA === 1 && row(sid3).frameSeq === 2);
+    check('pre-ack old-size frame for the committed serial still accepted', closedC === 0 && closedB === 1 && row(sid3).frameSeq === 3);
     a = await ack(app, sid3, 70, 50, sg, { rgba: [3, 3, 3, 255] });
     check('gpu-style ack accepted', !a.r.errno);
     let closedD = 0;
     workers.get(app).msg({ type: 'wm-frame', sid: sid3, bmp: { width: 50, height: 40, close() { closedD++; } }, serial: 1 });
-    check('post-ack frame of the RETIRED serial is rejected', closedD === 1 && kernel.wmFrameRejectedCount() === rej0 + 2);
+    check('post-ack frame of the RETIRED serial is rejected', closedD === 1 && kernel.wmFrameRejectedCount() === rej0 + 1);
     let closedE = 0;
     workers.get(app).msg({ type: 'wm-frame', sid: sid3, bmp: { width: 70, height: 50, close() { closedE++; } }, serial: sg });
     check('post-ack frame of the committed serial + size is accepted', closedE === 0);
@@ -443,6 +464,12 @@ async function ack(pid, sid, w, h, serial, opts) {
     const t0 = Date.now();
     const shot = kernel.wmScreenshot(sid);
     check('a wedged lock never blocks the kernel read past its bound', !!shot && Date.now() - t0 < 5000 && kernel.shmLockMisses() === miss0 + 1);
+    // the producer's own miss counter rides the header (SH_PMISS) and is
+    // visible through wmList / GET_STATE / the summed probe
+    Atomics.add(surf.i32, K.SH_PMISS, 2);
+    check('producer flip misses (SH_PMISS) surface in wmList, GET_STATE and shmFlipMisses()',
+      row(sid).flipMisses === 2 && (await rpc(app, K.OP.SURFACE_GET_STATE, { sid })).buffer.flipMisses === 2 && kernel.shmFlipMisses() >= 2);
+    Atomics.store(surf.i32, K.SH_PMISS, 0);
     check('...and the read did not steal the lock', Atomics.load(surf.i32, K.SH_LOCK) === 1);
     Atomics.store(surf.i32, K.SH_LOCK, 0);
     kernel.wmScreenshotScreen();

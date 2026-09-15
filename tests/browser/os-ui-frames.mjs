@@ -23,7 +23,9 @@ const dir=path.join(root,'build/test-browser/ui-frames-'+Date.now());fs.mkdirSyn
 const port=3351,url=osUrl(port),server=startServer(port),browser=await launchBrowser();
 const source=fs.readFileSync(path.join(import.meta.dirname,'ui-frames.c'),'utf8');
 let page;
-const evidence={commit:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),kind:'automated Playwright wmctl/mouse resize storms + WebGPU canvas screenshots; no manual interaction',url,files:{},runs:[]};
+const evidence={commit:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),kind:'automated Playwright wmctl/mouse resize storms + WebGPU canvas screenshots; no manual interaction',url,files:{},runs:[],
+  // the load this run executed under (suite-runner --under-load[=N] exports it; absent = none)
+  underLoad:Number(process.env.CC_UNDER_LOAD||0)};
 const color=(w,h)=>[w&255,h&255,0x5A];
 try {
 for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/compositor.js','os/kernel-worker.js','os/process-worker.js','tests/browser/os-ui-frames.mjs','tests/browser/ui-frames.c']) evidence.files[name]=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
@@ -151,9 +153,11 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/compo
    const geom=/PIXEL-GEOMETRY 240 160 240 160 density 1\.000 scale 1\.000/.test(out);
    if(!geom)throw Error(driver+': pixel geometry line missing or wrong');
    const after=await stats();
-   const delta={wmFrames:after.wmFrames-before.wmFrames,configureStale:after.configureStale-before.configureStale,framesRejected:after.framesRejected-before.framesRejected,shmLockMisses:after.shmLockMisses-before.shmLockMisses,shmContended:after.shmContended-before.shmContended};
+   const delta={wmFrames:after.wmFrames-before.wmFrames,configureStale:after.configureStale-before.configureStale,framesRejected:after.framesRejected-before.framesRejected,shmLockMisses:after.shmLockMisses-before.shmLockMisses,shmFlipMisses:after.shmFlipMisses-before.shmFlipMisses,shmContended:after.shmContended-before.shmContended};
    if(driver==='gpu'?delta.wmFrames<=0:delta.wmFrames!==0)throw Error(driver+' transport mismatch: '+delta.wmFrames+' bitmap ships');
    if(delta.shmLockMisses!==0)throw Error(driver+': kernel-side SH_LOCK misses: '+delta.shmLockMisses);
+   if(delta.shmFlipMisses!==0)throw Error(driver+': producer-side flip-lock misses: '+delta.shmFlipMisses);
+   if(delta.framesRejected!==0)throw Error(driver+': gpu frames rejected: '+delta.framesRejected);
    await shell('S='+g.sid+"; wmctl close $S; echo CLOSE-S''ENT",'CLOSE-SENT');
    await page.waitForFunction(()=>window.__osOut.includes('UI-FRAMES-EXIT'),null,{timeout:60000});
    run.resizedEvents=resized;run.probes=delta;run.transcript=await page.evaluate(()=>window.__osOut);

@@ -365,6 +365,11 @@ const RULES = [
   // cannot observe an edit here at all.
   [OS_BROWSER_ONLY_RE, ['sweep'],
     'browser-only page glue — the headless host loads none of it and it is not a bake input'],
+  // The compositor's shm upload cache / SH_LOCK discipline (#790) is a pure
+  // function of a fake device: tests/host/test_compositor_shm.js drives it
+  // in Node, so a compositor edit also owes the host suite (rules union).
+  [/^os\/compositor\.js$/, ['host'],
+    'the (gen, seq)-gated, lock-disciplined shm upload cache has a Node unit test'],
   // os.html is the same class, plus ONE cheap real observation: serve.js
   // advertises and serves /os/os.html, which tests/serve/test_first_run.js
   // (host suite) asserts returns 200 — so a rename/delete fails in seconds

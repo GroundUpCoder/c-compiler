@@ -153,6 +153,7 @@ const ctx = {
   const dt = Date.now() - t0;
   check('present under a wedged lock completes (bounded wait, ' + dt + 'ms) and flips', dt < 2000 && seq(fb10) === 3 && frontByte(fb10, 140, 92) === 21);
   check('...and is counted as a flip miss', sdl.frameStats().flipMisses >= 1 && Atomics.load(i32, L.shLock) === 1);
+  check('...and the miss is visible in the SAB header (SH_PMISS) for the kernel side', Atomics.load(i32, L.shPmiss) === 1);
   Atomics.store(i32, L.shLock, 0);
 }
 

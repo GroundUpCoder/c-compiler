@@ -544,7 +544,12 @@ async function runSuite(entries, opts) {
         ['-r', PARENT_WATCH, entry.src || path.join(opts.dir, entry.file), ...(entry.args || [])], {
         cwd: opts.dir, detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: Object.assign({}, process.env, { CC_HARNESS_GROUP_LEADER: '1' }, opts.env || {}),
+        env: Object.assign({}, process.env, { CC_HARNESS_GROUP_LEADER: '1' },
+                           // #790: let a member RECORD the load it ran under
+                           // (evidence that says "under load" must be able
+                           // to show it) — 0 / absent = no generators.
+                           opts.underLoad > 0 ? { CC_UNDER_LOAD: String(opts.underLoad) } : {},
+                           opts.env || {}),
       });
       inflight.add(child);
       child.stdout.pipe(out, { end: false });

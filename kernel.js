@@ -638,7 +638,12 @@ var S_IFSOCK_MODE = 0o140000;
  *                  cannot overwrite storage the compositor is reading" TRUE:
  *                  before #790 a fast producer's next present wrote the old
  *                  front buffer while the compositor was still copying it.
- *     [8..15] reserved (damage rect, v2)
+ *     [8] SH_PMISS producer-side SH_LOCK misses (#790): the producer
+ *                  Atomics.adds it each time its bounded flip wait ran out
+ *                  and it flipped unlocked — the one deliberate relaxation of
+ *                  the ownership guarantee, kept visible: wmList/GET_STATE
+ *                  report it per surface, kernel.shmFlipMisses() sums it.
+ *     [9..15] reserved (damage rect, v2)
  *   then fb[0], fb[1]: w*h*4 bytes each (double buffer, MAILBOX semantics:
  *   the producer writes the back buffer, flips SH_FLIP under SH_LOCK, never
  *   blocks on the compositor's cadence; the compositor samples the front
@@ -686,7 +691,8 @@ var S_IFSOCK_MODE = 0o140000;
  *   without polling.
  * ============================================================ */
 var SH_MAGIC = 0, SH_W = 1, SH_H = 2, SH_FORMAT = 3, SH_FLIP = 4, SH_SEQ = 5,
-    SH_GEN = 6, SH_LOCK = 7;                 // #790: generation + ownership
+    SH_GEN = 6, SH_LOCK = 7, SH_PMISS = 8;   // #790: generation, ownership,
+                                             // producer flip-lock misses
 /* Bound on still-valid issued configures per surface (#790): the newest is
  * always the pending target; older ones stay ackable (an intermediate resize
  * may still display) until they fall off this window, when they retire and
@@ -771,7 +777,7 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * table together. */
 var WM_SAB_LAYOUT = {
   shMagic: SH_MAGIC, shW: SH_W, shH: SH_H, shFormat: SH_FORMAT,
-  shFlip: SH_FLIP, shSeq: SH_SEQ, shGen: SH_GEN, shLock: SH_LOCK,
+  shFlip: SH_FLIP, shSeq: SH_SEQ, shGen: SH_GEN, shLock: SH_LOCK, shPmiss: SH_PMISS,
   shMagicValue: SH_MAGIC_VALUE, shHdrBytes: SH_HDR_BYTES,
   irWpos: IR_WPOS, irRpos: IR_RPOS, irCap: IR_CAP, irDropped: IR_DROPPED,
   irHdrBytes: IR_HDR_BYTES, irRecordWords: IR_RECORD_WORDS,
@@ -4956,7 +4962,8 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
           minimized: sv.minimized, mapped: sv.mapped, viewable: this._wmViewable(sv),
           owner: sv.ownerSid | 0,
           buffer: { w: sv.w, h: sv.h, gen: Atomics.load(sv.i32, SH_GEN),
-                    frameSeq: Atomics.load(sv.i32, SH_SEQ) },
+                    frameSeq: Atomics.load(sv.i32, SH_SEQ),
+                    flipMisses: Atomics.load(sv.i32, SH_PMISS) },
           dst: { w: sv.dstW, h: sv.dstH },
           configure: { committed: sv.committedSerial,
                        pending: sv.pendingConfigure ? sv.pendingConfigure.serial : 0,
@@ -5074,19 +5081,27 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       var fb2 = pcb._wmPendingFb;
       pcb._wmPendingFb = null;
       var cw = req.w | 0, ch = req.h | 0, cser = req.serial | 0;
-      if (!sc || sc.pid !== pcb.pid || !sc.pendingConfigure || !(cser > 0)) {
+      if (!sc || sc.pid !== pcb.pid || !(cser > 0)) {
         this._respond(pcb, { errno: 'EINVAL' }); break;
       }
+      // ONE error shape for identity (the review-1 finding): a serial that
+      // is not a still-valid issued configure — unknown, retired, already
+      // committed, or nothing pending at all — is ESTALE, whatever else the
+      // request carries; EINVAL is reserved for a malformed request/SAB.
+      // Every ESTALE is counted (configureStaleCount).
       var cidx = -1;
       for (var ci = 0; ci < sc.issued.length; ci++) if (sc.issued[ci].serial === cser) cidx = ci;
+      if (cidx < 0 || cser <= sc.committedSerial) {
+        this._wmCfgStaleN = (this._wmCfgStaleN | 0) + 1;
+        this._respond(pcb, { errno: 'ESTALE' }); break;
+      }
       if (req.decline === true) {
-        if (cidx < 0) { this._respond(pcb, { errno: 'ESTALE' }); break; }
         var declined = sc.issued[cidx];
         sc.issued = sc.issued.filter(function (c) { return c.serial > cser; });
         // The newest issued IS the pending target; declining it (or anything
-        // older while it is the only one left) leaves nothing pending.
+        // older while it is the only one left) leaves nothing pending. No
+        // scene change: nothing visual moved, so no damage bump.
         sc.pendingConfigure = sc.issued.length ? sc.issued[sc.issued.length - 1] : null;
-        this._bumpWm();
         this._respond(pcb, {});
         this._wmEmit(WMP.EV_CONFIGURE_DECLINED, [sc.sid, cser, declined.w, declined.h]);
         break;
@@ -5101,8 +5116,8 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
           Atomics.load(ci32, SH_GEN) !== cser) {
         this._respond(pcb, { errno: 'EINVAL' }); break;
       }
-      if (cidx < 0 || cser <= sc.committedSerial ||
-          sc.issued[cidx].w !== cw || sc.issued[cidx].h !== ch) {
+      if (sc.issued[cidx].w !== cw || sc.issued[cidx].h !== ch) {
+        // the serial's dims are its identity too
         this._wmCfgStaleN = (this._wmCfgStaleN | 0) + 1;
         this._respond(pcb, { errno: 'ESTALE' }); break;
       }
@@ -5127,8 +5142,18 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         // Superseded while the client was renegotiating: latest wins — keep
         // the (valid, newer-than-old) buffer and re-issue the still-pending
         // target under ITS serial (it stays valid; nothing new is minted).
+        // If the re-issue cannot be delivered (full ring), nothing would
+        // ever ack it: retire the whole outstanding set so no pending state
+        // leaks, and tell policy through EV_CONFIGURE_DECLINED — from the
+        // WM's side an undeliverable ask and a declined one are the same
+        // fact (that size is not coming; ask again if still wanted).
         var pc = sc.pendingConfigure;
-        this._wmEventTo(sc.sid, [WMEV.WINDOW_RESIZED, 0, pc.w, pc.h, pc.serial, 0, 0, 0]);
+        var reErr = this._wmEventTo(sc.sid, [WMEV.WINDOW_RESIZED, 0, pc.w, pc.h, pc.serial, 0, 0, 0]);
+        if (reErr) {
+          sc.issued = [];
+          sc.pendingConfigure = null;
+          this._wmEmit(WMP.EV_CONFIGURE_DECLINED, [sc.sid, pc.serial, pc.w, pc.h]);
+        }
       } else {
         sc.pendingConfigure = null;
       }
@@ -5905,12 +5930,14 @@ Kernel.prototype._wmFrame = function (pcb, sid, bmp, serial) {
   }
   // Frame identity (#790): a bitmap rendered for a configure older than the
   // committed one (the ack that swapped geometry raced ahead of a frame
-  // already in the message queue), or one whose size is not the committed
-  // buffer's, is a frame of a retired geometry — closed unseen, never
-  // scaled onto the new rect. An absent serial (a pre-#790 shipper) keeps
-  // the size check only.
-  if ((serial | 0) > 0 && (serial | 0) < s.committedSerial ||
-      bmp.width !== s.w || bmp.height !== s.h) {
+  // already in the message queue) is a frame of a retired geometry — closed
+  // unseen, never scaled onto the new rect. The SIZE is deliberately not an
+  // identity: a gpu producer may ship a canvas of any size for the committed
+  // geometry (raw webgpu.h apps size their own surface) and the compositor
+  // draws it into the surface rect as it always did — kernel capture alone
+  // requires size equality (captureSurface). An absent serial (a pre-#790
+  // shipper) is accepted as before.
+  if ((serial | 0) > 0 && (serial | 0) < s.committedSerial) {
     this._wmFrameRejectedN = (this._wmFrameRejectedN | 0) + 1;
     if (bmp.close) { try { bmp.close(); } catch (e) {} }
     return;
@@ -6740,6 +6767,7 @@ Kernel.prototype.wmList = function () {
                committedSerial: s.committedSerial,           // (#790)
                pendingSerial: s.pendingConfigure ? s.pendingConfigure.serial : 0,
                gen: Atomics.load(s.i32, SH_GEN),             // buffer generation
+               flipMisses: Atomics.load(s.i32, SH_PMISS),    // producer lock misses
                frameSeq: Atomics.load(s.i32, SH_SEQ) });
   }
   return out;
@@ -6940,6 +6968,12 @@ Kernel.prototype._wmIssueConfigure = function (s, w, h) {
 Kernel.prototype.configureStaleCount = function () { return this._wmCfgStaleN | 0; };
 Kernel.prototype.wmFrameRejectedCount = function () { return this._wmFrameRejectedN | 0; };
 Kernel.prototype.shmLockMisses = function () { return this._wmShmLockMissN | 0; };
+/* Sum of every live surface's producer-side flip-lock misses (SH_PMISS). */
+Kernel.prototype.shmFlipMisses = function () {
+  var n = 0;
+  this._surfaces.forEach(function (s) { n += Atomics.load(s.i32, SH_PMISS); });
+  return n;
+};
 
 /* Consumer-side frame ownership (#790): acquire SH_LOCK for a front-buffer
  * copy. Bounded spin (the producer's section is a flip); returns true when
@@ -10352,7 +10386,7 @@ var KERNEL_EXPORTS = {
   W_STOPCODE: W_STOPCODE,
   // WM surfaces (todos/WM.md) — layout constants MUST MATCH host.js.
   SH_MAGIC: SH_MAGIC, SH_W: SH_W, SH_H: SH_H, SH_FORMAT: SH_FORMAT,
-  SH_FLIP: SH_FLIP, SH_SEQ: SH_SEQ, SH_GEN: SH_GEN, SH_LOCK: SH_LOCK,
+  SH_FLIP: SH_FLIP, SH_SEQ: SH_SEQ, SH_GEN: SH_GEN, SH_LOCK: SH_LOCK, SH_PMISS: SH_PMISS,
   WM_CFG_OUTSTANDING: WM_CFG_OUTSTANDING,
   SH_MAGIC_VALUE: SH_MAGIC_VALUE, SH_HDR_BYTES: SH_HDR_BYTES,
   IR_WPOS: IR_WPOS, IR_RPOS: IR_RPOS, IR_CAP: IR_CAP, IR_DROPPED: IR_DROPPED,

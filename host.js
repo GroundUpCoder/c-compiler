@@ -7580,7 +7580,7 @@ function audioRingPush(control, ringData, cap, memory, dataPtr, len, alignBytes)
 }
 
 const WMSH_MAGIC = 0, WMSH_W = 1, WMSH_H = 2, WMSH_FORMAT = 3, WMSH_FLIP = 4,
-      WMSH_SEQ = 5, WMSH_GEN = 6, WMSH_LOCK = 7;   // #790: generation + ownership
+      WMSH_SEQ = 5, WMSH_GEN = 6, WMSH_LOCK = 7, WMSH_PMISS = 8;   // #790: generation, ownership, producer misses
 const WMSH_MAGIC_VALUE = 0x574d5346;
 /* Producer-side frame ownership (#790): the mailbox flip happens under
  * SH_LOCK. The consumer (kernel compositor upload / screenshot) holds the
@@ -7602,7 +7602,7 @@ function wmShmFlip(fb, back) {
     if (Atomics.compareExchange(i32, WMSH_LOCK, 0, 1) === 0) { held = true; break; }
     try { Atomics.wait(i32, WMSH_LOCK, 1, 1); } catch (e) { /* main thread: spin */ }
   }
-  if (!held) wmShmFlipMisses++;
+  if (!held) { wmShmFlipMisses++; Atomics.add(i32, WMSH_PMISS, 1); }   // visible kernel-side (SH_PMISS)
   Atomics.store(i32, WMSH_FLIP, back);
   Atomics.add(i32, WMSH_SEQ, 1);
   if (held) { Atomics.store(i32, WMSH_LOCK, 0); Atomics.notify(i32, WMSH_LOCK); }
@@ -7638,7 +7638,7 @@ const WMEV_QUIT = 0x100, WMEV_WINDOW_RESIZED = 0x206,
 function assertWmSabLayout(hooks) {
   const mine = {
     shMagic: WMSH_MAGIC, shW: WMSH_W, shH: WMSH_H, shFormat: WMSH_FORMAT,
-    shFlip: WMSH_FLIP, shSeq: WMSH_SEQ, shGen: WMSH_GEN, shLock: WMSH_LOCK,
+    shFlip: WMSH_FLIP, shSeq: WMSH_SEQ, shGen: WMSH_GEN, shLock: WMSH_LOCK, shPmiss: WMSH_PMISS,
     shMagicValue: WMSH_MAGIC_VALUE, shHdrBytes: WMSH_HDR_BYTES,
     irWpos: WMIR_WPOS, irRpos: WMIR_RPOS, irCap: WMIR_CAP,
     irDropped: WMIR_DROPPED,
@@ -7969,7 +7969,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   // once so no pending state leaks on either side; the app keeps its old
   // geometry and the WM learns why (EV_CONFIGURE_DECLINED).
   function beginConfigure(win, w, h, serial) {
-    if (typeof hooks.surfaceConfigure !== 'function') return;  // pre-0019 embedder
+    if (typeof hooks.surfaceConfigure !== 'function') return true;  // pre-0019 embedder: nothing to decline
     let fb;
     try { fb = allocFb(w, h, serial); }
     catch (e) {

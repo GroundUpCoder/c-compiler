@@ -166,8 +166,12 @@ the producer takes it only across the flip (its memcpy targets the back
 buffer, which no consumer reads), so a copy in progress is never overwritten
 by the producer's next present — the pre-#790 two-buffer flip had exactly
 that race (`tests/kernel/test_shm_ownership.js` reproduces it as a red
-control). The compositor never waits (contention = keep the last good frame,
-retry next rAF); the producer's wait is bounded by one synchronous copy. A
+control). The compositor never waits (a short bounded try-lock; contention =
+keep the last good frame — a new-generation texture replaces the old one
+only after its first successful upload, so a contended first frame of a new
+buffer never shows a blank texture; `tests/host/test_compositor_shm.js`
+pins it with a fake device, red control included — and retry next rAF); the
+producer's wait is bounded by one synchronous copy. A
 frame's identity is `(gen, seq)` — seq restarts per SAB, so the compositor's
 upload cache keys on the generation too (an equal-size reconfigure is a new
 buffer). No backpressure coupling between app frame rate and compositor.
@@ -1308,14 +1312,27 @@ RESIZE/EV_CONFIGURED, `test_wm_e2e.js` real-C resize leg,
   serial; the ack must NAME its serial and its SAB's `SH_GEN` must equal
   it. Accept = still-valid issued AND newer than committed (an intermediate
   resize may still display; the newest target is re-issued under ITS
-  serial); unknown/retired/backward serials or dims that are not the
-  serial's are `ESTALE` and move nothing (the host releases the buffer,
-  counted host- and kernel-side). A client that cannot allocate the buffer
+  serial); a serial that is not a still-valid issued one — unknown,
+  retired, already committed, nothing pending at all — or dims that are not
+  the serial's is `ESTALE` and moves nothing (ONE identity error shape;
+  `EINVAL` is reserved for a malformed request/SAB; every `ESTALE`,
+  declines included, is counted kernel-side by `configureStaleCount()` and
+  host-side by `frameStats().staleAcks`). A client that cannot allocate the buffer
   DECLINES the serial (`decline: true`, no SAB): the serial and everything
   older retire, nothing stays pending, `EV_CONFIGURE_DECLINED {sid, serial,
-  w, h}` tells policy. gpu-transport frames ship with the committed serial
-  and the kernel closes a frame of a retired serial or a non-committed
-  size unseen (`wmFrameRejectedCount()`). Pointer records carry the
+  w, h}` tells policy — the same event fires when the kernel cannot
+  re-deliver a superseded target (full ring at the re-issue): the
+  outstanding set retires so nothing stays pending forever, and from
+  policy's side "that size is not coming, ask again" is the one fact either
+  way. gpu-transport frames ship with the committed serial and the kernel
+  closes a frame of a RETIRED serial unseen (`wmFrameRejectedCount()`);
+  size is deliberately not an identity — a gpu producer may ship a canvas
+  of any size for the committed geometry (raw webgpu.h apps size their own
+  surface) and the compositor draws it into the surface rect as it always
+  did (kernel capture alone requires size equality). The producer's own
+  flip-lock misses ride the header (`SH_PMISS`, per-surface `flipMisses` in
+  wmList/GET_STATE, `shmFlipMisses()` summed) so the one deliberate
+  relaxation of ownership stays visible. Pointer records carry the
   committed serial as their geometry epoch (ring word [6]). GET_STATE /
   wmList expose buffer (w, h, gen, frameSeq), dst and configure (committed,
   pending, outstanding) identities. SDL3's `SDL_GetWindowSizeInPixels` /
