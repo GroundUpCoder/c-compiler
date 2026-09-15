@@ -95,10 +95,15 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/compo
    }
    throw Error(tag+': screen never settled on a whole '+w+'x'+h+' frame (got '+got+' px, stale '+stale+')');
  }
+ let geomN=0;
  async function geometry() {
-   await shell("wmctl list | grep 'UI frames target' | tr '\\t' ' '; echo GEOM-D''ONE",'GEOM-DONE');
+   // A unique marker per call: the transcript accumulates, so a reused
+   // marker would satisfy the wait before the new output arrived.
+   const mark='GEOM'+(++geomN)+'-DONE';
+   await shell("wmctl list | grep 'UI frames target' | tr '\\t' ' '; echo "+mark.replace('-DONE',"-D''ONE"),mark);
    const out=await page.evaluate(()=>window.__osOut);
-   const m=/(\d+) (\d+) (\d+)x(\d+)\+(-?\d+)\+(-?\d+) [^ ]+ (\d+) [^ ]+ UI frames target/.exec(out.split('GEOM-DONE')[0].split('\n').slice(-6).join('\n'));
+   const segs=out.split(mark);
+   const m=/(\d+) (\d+) (\d+)x(\d+)\+(-?\d+)\+(-?\d+) [^ ]+ (\d+) [^ ]+ UI frames target/.exec(segs[segs.length-2].split('\n').slice(-6).join('\n'));
    if(!m)throw Error('wmctl list line not found: '+out.slice(-300));
    return {sid:Number(m[1]),w:Number(m[3]),h:Number(m[4]),x:Number(m[5]),y:Number(m[6])};
  }
@@ -114,17 +119,17 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/compo
    if(g.w!==240||g.h!==160)throw Error(driver+': kernel geometry '+g.w+'x'+g.h+' != 240x160');
    // ---- storm 1: rapid wmctl resizes, latest wins, final 400x300 ----
    const storm1=[[300,200],[260,180],[300,200],[320,240],[200,150],[400,300]];
-   await shell('S='+g.sid+'; '+storm1.map(([w,h])=>'wmctl resize $S '+w+' '+h).join('; ')+'; wmctl wait dim $S 400x300; echo STORM1-D''ONE','STORM1-DONE');
+   await shell('S='+g.sid+'; '+storm1.map(([w,h])=>'wmctl resize $S '+w+' '+h).join('; ')+"; wmctl wait dim $S 400x300; echo STORM1-D''ONE",'STORM1-DONE');
    const s1=await settle(driver+'-02-storm1',400,300,[[240,160],...storm1.slice(0,-1)]);
    run.phases.push({phase:'storm1 -> 400x300',...s1});
    // ---- storm 2: end where it started (an equal-size regeneration is a NEW buffer) ----
    const storm2=[[300,200],[400,300],[300,200]];
-   await shell('S='+g.sid+'; wmctl resize $S 300 200; wmctl wait dim $S 300x200; wmctl resize $S 400 300; wmctl resize $S 300 200; wmctl wait dim $S 300x200; echo STORM2-D''ONE','STORM2-DONE');
+   await shell('S='+g.sid+"; wmctl resize $S 300 200; wmctl wait dim $S 300x200; wmctl resize $S 400 300; wmctl resize $S 300 200; wmctl wait dim $S 300x200; echo STORM2-D''ONE",'STORM2-DONE');
    const s2=await settle(driver+'-03-storm2',300,200,[[400,300],[240,160]]);
    run.phases.push({phase:'storm2 -> 300x200 (equal-size regeneration)',...s2});
    // ---- storm 3: twenty alternating sizes as fast as the shell issues them ----
    const alt=[];for(let i=0;i<20;i++)alt.push(i%2?[360,240]:[280,220]);
-   await shell('S='+g.sid+'; '+alt.map(([w,h])=>'wmctl resize $S '+w+' '+h).join('; ')+'; wmctl wait dim $S 360x240; echo STORM3-D''ONE','STORM3-DONE');
+   await shell('S='+g.sid+'; '+alt.map(([w,h])=>'wmctl resize $S '+w+' '+h).join('; ')+"; wmctl wait dim $S 360x240; echo STORM3-D''ONE",'STORM3-DONE');
    const s3=await settle(driver+'-04-storm3',360,240,[[280,220],[300,200]]);
    run.phases.push({phase:'storm3 alternating x20 -> 360x240',...s3});
    // ---- a real frame drag: SE corner, +40/+30 (Win95 outline, one configure at release) ----
@@ -141,7 +146,7 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/compo
    run.phases.push({phase:'frame drag -> '+(g.w+40)+'x'+(g.h+30),...s4});
    const out=await page.evaluate(()=>window.__osOut);
    if(out.includes('INCONSISTENT'))throw Error(driver+': RESIZED event and size queries disagreed');
-   const resized=(out.match(/RESIZED \d+ \d+ consistent/g)||[]).length;
+   const resized=(out.match(/RESIZED \d+ \d+ now \d+ \d+ consistent/g)||[]).length;
    if(resized<5)throw Error(driver+': too few RESIZED events seen: '+resized);
    const geom=/PIXEL-GEOMETRY 240 160 240 160 density 1\.000 scale 1\.000/.test(out);
    if(!geom)throw Error(driver+': pixel geometry line missing or wrong');
@@ -149,7 +154,7 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/compo
    const delta={wmFrames:after.wmFrames-before.wmFrames,configureStale:after.configureStale-before.configureStale,framesRejected:after.framesRejected-before.framesRejected,shmLockMisses:after.shmLockMisses-before.shmLockMisses,shmContended:after.shmContended-before.shmContended};
    if(driver==='gpu'?delta.wmFrames<=0:delta.wmFrames!==0)throw Error(driver+' transport mismatch: '+delta.wmFrames+' bitmap ships');
    if(delta.shmLockMisses!==0)throw Error(driver+': kernel-side SH_LOCK misses: '+delta.shmLockMisses);
-   await shell('S='+g.sid+'; wmctl close $S; echo CLOSE-S''ENT','CLOSE-SENT');
+   await shell('S='+g.sid+"; wmctl close $S; echo CLOSE-S''ENT",'CLOSE-SENT');
    await page.waitForFunction(()=>window.__osOut.includes('UI-FRAMES-EXIT'),null,{timeout:60000});
    run.resizedEvents=resized;run.probes=delta;run.transcript=await page.evaluate(()=>window.__osOut);
    evidence.runs.push(run);

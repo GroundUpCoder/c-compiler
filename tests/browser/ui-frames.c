@@ -36,9 +36,11 @@ SDL_AppResult SDL_AppEvent(void *state, SDL_Event *e) {
         int w, h, pw, ph;
         SDL_GetWindowSize(win, &w, &h);
         SDL_GetWindowSizeInPixels(win, &pw, &ph);
-        /* the event and the queries must agree: one geometry, one identity */
-        printf("RESIZED %d %d %s\n", e->window.data1, e->window.data2,
-               (w == e->window.data1 && h == e->window.data2 && pw == w && ph == h) ? "consistent" : "INCONSISTENT");
+        /* SDL3 contract: the event is HISTORICAL (a later resize may already
+           have been applied while this one waited in the queue), the size
+           queries are CURRENT and must agree with each other. */
+        printf("RESIZED %d %d now %d %d %s\n", e->window.data1, e->window.data2, w, h,
+               (pw == w && ph == h) ? "consistent" : "INCONSISTENT");
         fflush(stdout);
     }
     if (e->type == SDL_EVENT_KEY_DOWN && e->key.key == 'q') return SDL_APP_SUCCESS;
