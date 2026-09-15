@@ -24410,6 +24410,12 @@ bool SDL_RaiseWindow(SDL_Window *window);
 /* Owner relation (#794; SDL3 "parent" of a non-popup window): the window
    stacks above its parent, is hidden/minimized with it (its own hidden flag
    is preserved), and SDL_DestroyWindow(parent) destroys it recursively.
+   KNOWN DEVIATION from upstream SDL3: upstream's SDL_HideWindow recursively
+   hides parented children and SETS their SDL_WINDOW_HIDDEN (restoring on
+   show); here SDL_WINDOW_HIDDEN stays the window's OWN requested state per
+   the gucOS UI contract, and guc_window_viewable answers the effective
+   question. A client that reads SDL_WINDOW_HIDDEN to mean "off screen"
+   must query guc_window_viewable instead.
    Same-process only; a popup window (SDL_CreatePopupWindow) cannot change
    its parent and cannot be a parent. NULL clears. Refused loud on runtimes
    without the window-system lifecycle. */

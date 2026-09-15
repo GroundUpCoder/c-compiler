@@ -9060,7 +9060,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       fbByHandle.delete(handle);
       for (const [sid, h] of handleBySid) {
         if (h === handle) {
-          hooks.surfaceDestroy(sid); handleBySid.delete(sid); kFlagsBySid.delete(sid);
+          hooks.surfaceDestroy(sid); handleBySid.delete(sid); kFlagsBySid.delete(sid); lifecycleBySid.delete(sid);
           canvasBySid.delete(sid);             // tear down only this sid's canvas
           presentGate.delete(sid);             // #484 clamp state dies with the sid
           presentHeld.delete(sid);
@@ -9317,6 +9317,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         hooks.surfaceDestroy(win.sid);
         handleBySid.delete(win.sid);
         kFlagsBySid.delete(win.sid);
+        lifecycleBySid.delete(win.sid);
         windows[handle - 1] = null;
       },
       __sdl_set_window_title: function (handle, titlePtr) {

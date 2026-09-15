@@ -128,3 +128,46 @@ Semantic inspection/theme, capture/IME (#790-adjacent phases), SDL modal
 windows, wmctl `list` columns for the new flag (the 9-char FLAGS width is
 kept; `viewable`/`owner` ride `wmList()` and GET_STATE). Independent review,
 the mapped gate on the exact tip and integration follow below.
+
+## Independent review round 1 → counter-pass
+
+Reviewer thread 01a0a256-3dbd-7211-b78c-21c7f5a587b5 (claude-code /
+claude-fable-5-1 — disclosed switch, Codex capped until 2026-09-19) REJECTED
+31b9e96f with two blocking findings and four minor ones. Author response:
+
+1. **Focus fall onto a non-viewable owned window (BLOCK) — fixed.**
+   `_wmFocusFall` skipped minimized/requested-hidden/anchored surfaces but
+   not an owned window under a MINIMIZED owner, which normalize slots as the
+   topmost layer-0 surface; the reviewer's probe showed `_focusSid` staying
+   on it (`focused:true, viewable:false`). Fix: the fall skips
+   `t.ownerSid && _wmAnchorHidden(t)`. The test's minimize leg was vacuous
+   (focus had already fallen to `foreign`): it now focuses the owned window
+   first, asserts the fall lands on a VIEWABLE surface, adds a later fall
+   (destroy a focused bait window) that must skip the owned window, and
+   pins "GET_STATE never reports focused + not viewable" (67 checks now).
+2. **GetParent returning the owner broke fileman's picker key routing
+   (BLOCK) — fixed at the caller, semantics kept.** `GetParent` returning
+   the owner for a WS_POPUP top-level IS the Win32 contract (and what the
+   ReactOS calc stats dialog relies on: its `PostMessage(GetParent(hWnd),
+   WM_LOAD_STAT…)` went to NULL before #794 and now reaches the main window —
+   `test_calc_e2e.js` green). fileman's `while (GetParent(top))` climb was
+   an idiom that only worked because the veneer used to answer NULL for
+   every top-level. Added the real `GetAncestor` (GA_PARENT / GA_ROOT /
+   GA_ROOTOWNER; GA_ROOT climbs WS_CHILD parents only, never an owner link)
+   and fileman uses `GetAncestor(m.hwnd, GA_ROOT)`. Audit of every other
+   `GetParent(` outside user32 (comctl32.c:85, listview.c:173/637/655,
+   ctldemo.c:713): all on child controls, unaffected.
+   `test_fileman_ops_e2e.js` (incl. "Enter commits (loop path)") and
+   `test_calc_e2e.js` pass against a freshly baked image
+   (`build/794-counterpass-e2e.log`).
+3. Owned windows keep taskbar/cycle membership under a hidden owner
+   (non-blocking) — filed as **#795** (P2, light, quality-gap) with the
+   concrete plan (EV_VISIBILITY for owned flips + wm.c treating
+   OWNED∧¬VIEWABLE∧¬MINIMIZED like HIDDEN).
+4. SDL_WINDOW_HIDDEN deviation from upstream — recorded explicitly in the
+   `SDL_SetWindowParent` header comment (regenerated into the API index).
+5. `lifecycleBySid` now deleted on destroy in both host flavours.
+6. Owned windows not riding the owner's minimize fly animation — accepted
+   as cosmetic, not changed (rebuttal: the anchored-child `animRootSid`
+   mechanism is scene-side and would need its own review; no correctness
+   effect).

@@ -1061,6 +1061,15 @@ HWND GetParent(HWND hwnd);
 #define GW_OWNER     4
 #define GW_CHILD     5
 HWND GetWindow(HWND hwnd, UINT cmd);
+/* GetAncestor (#794): GA_PARENT = the parent (a top-level's desktop parent is
+   NULL here, there is no desktop HWND); GA_ROOT = climb WS_CHILD parents to
+   the top-level — never across an OWNER link (GetParent does cross it for a
+   top-level, as on Windows); GA_ROOTOWNER = then climb owners to the root
+   owner. */
+#define GA_PARENT    1
+#define GA_ROOT      2
+#define GA_ROOTOWNER 3
+HWND GetAncestor(HWND hwnd, UINT flags);
 HWND GetDlgItem(HWND parent, int id);
 int  GetDlgCtrlID(HWND hwnd);
 HWND GetNextDlgTabItem(HWND dlg, HWND ctl, BOOL prev);

@@ -211,7 +211,9 @@ const flags = (sid) => new DataView(kernel._wmpRecord(kernel._surfaces.get(sid))
   await rpc(app, OP.SURFACE_SET_VISIBLE, { sid: owned, visible: true });
   check('its own show brings it back', visibleColor(GRN) && has(drain(ring), EV.WINDOW_SHOWN, owned));
 
-  /* ---- minimize the owner ---- */
+  /* ---- minimize the owner (with focus ON the owned window, so the fall runs) ---- */
+  kernel.wmFocus(owned);
+  check('precondition: the owned window holds focus', kernel._focusSid === owned);
   drain(ring);
   check('minimize owner accepted', kernel.wmMinimize(owner) === 0);
   evs = drain(ring);
@@ -219,6 +221,15 @@ const flags = (sid) => new DataView(kernel._wmpRecord(kernel._surfaces.get(sid))
   check('owned pixels gone while the owner is minimized', !visibleColor(GRN));
   check('WMP: owned VIEWABLE clear, not MINIMIZED itself', !(flags(owned) & 512) && !(flags(owned) & 2));
   check('focus fell off the minimized group', kernel._focusSid !== owned && kernel._focusSid !== owner);
+  check('focus fell onto a VIEWABLE window', kernel._focusSid && kernel._wmViewable(kernel._surfaces.get(kernel._focusSid)), kernel._focusSid);
+  // A later fall must not pick the owned window either (it is the topmost
+  // layer-0 surface in z, right above its minimized owner).
+  const bait = (await create(app, 'bait', MAG)).sid;
+  kernel.wmFocus(bait);
+  await rpc(app, OP.SURFACE_DESTROY, { sid: bait });
+  check('a fall while the owner is minimized skips the owned window', kernel._focusSid !== owned && kernel._focusSid !== owner && kernel._wmViewable(kernel._surfaces.get(kernel._focusSid)), kernel._focusSid);
+  r = await rpc(app, OP.SURFACE_GET_STATE, { sid: owned });
+  check('GET_STATE never reports focused + not viewable', !(r.focused && !r.viewable), JSON.stringify(r));
   check('focusing the owned window restores its minimized owner', kernel.wmFocus(owned) === 0 && !rec(owner).minimized);
   evs = drain(ring);
   check('...and the owned window gets WINDOW_SHOWN', has(evs, EV.WINDOW_SHOWN, owned) && visibleColor(GRN));
@@ -271,8 +282,10 @@ const flags = (sid) => new DataView(kernel._wmpRecord(kernel._surfaces.get(sid))
   const pop = (await create(app, '', BLU, 64 | 128, { parentSid: host, dx: 2, dy: 2 })).sid;
   kernel.wmFocus(host);
   drain(ring);
-  const out = kernel.wmPointer('down', rec(foreign).x + 3, rec(foreign).y + 3, {});
-  kernel.wmPointer('up', rec(foreign).x + 3, rec(foreign).y + 3, {});
+  // A desktop press (bottom-right, clear of every cascade-placed window) is
+  // outside the popup's window tree: it dismisses (test_wm_anchored's leg).
+  const out = kernel.wmPointer('down', 600, 460, {});
+  kernel.wmPointer('up', 600, 460, {});
   evs = drain(ring);
   const dis = evs.find((e) => e.type === EV.POPUP_DISMISSED && e.win === pop);
   check('outside press dismisses the popup', out === 'grab-dismiss', out);

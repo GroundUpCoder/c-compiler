@@ -3326,6 +3326,20 @@ HWND GetCapture(void) { return g_capture; }
 /* GetParent: the parent of a child window; the OWNER of a top-level (every
  * top-level here is WS_POPUP, for which Windows returns the owner) (#794). */
 HWND GetParent(HWND h) { return h ? (h->parent ? h->parent : h->owner) : NULL; }
+HWND GetAncestor(HWND h, UINT flags) {
+    if (!h) return NULL;
+    switch (flags) {
+    case GA_PARENT: return h->parent;
+    case GA_ROOT: return h->top;
+    case GA_ROOTOWNER: {
+        HWND t = h->top;
+        while (t && t->owner) t = t->owner;
+        return t;
+    }
+    }
+    WIN32_UNSUPPORTED("GetAncestor(flags=%u)", flags);
+    return NULL;
+}
 HWND GetWindow(HWND h, UINT cmd) {
     if (!h) return NULL;
     switch (cmd) {

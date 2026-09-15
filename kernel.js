@@ -5201,6 +5201,8 @@ Kernel.prototype._wmFocusFall = function () {
     var t = this._surfaces.get(this._zOrder[i]);
     if (!t || t.minimized || this._wmRequestedHidden(t)) continue;
     if (t.parentSid) continue;            // anchored children never take focus
+    if (t.ownerSid && this._wmAnchorHidden(t)) continue;   // owned under a minimized
+                                                          // owner: not viewable (#794)
     if (t.layer === 0) { fall = t.sid; break; }
     if (!fall) fall = t.sid;              // remember the topmost furniture
   }

@@ -1081,8 +1081,11 @@ int main(int argc, char **argv) {
     while (GetMessage(&m, NULL, 0, 0)) {
         /* Enter/Esc drive the pickers (the single-line EDIT swallows
          * both; no IsDialogMessage in this veneer). */
-        HWND top = m.hwnd;
-        while (top && GetParent(top)) top = GetParent(top);
+        /* The message's top-level, climbing WS_CHILD parents only: since
+         * #794 GetParent returns the OWNER for an owned top-level (as on
+         * Windows), so a GetParent climb from a picker's control would run
+         * on to the main window and miss the picker. */
+        HWND top = GetAncestor(m.hwnd, GA_ROOT);
         if (m.message == WM_KEYDOWN && top && (top == g_rn_win || top == g_ow_win)) {
             if (m.wParam == VK_RETURN) {
                 SendMessage(top, WM_COMMAND,
