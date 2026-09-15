@@ -7580,8 +7580,33 @@ function audioRingPush(control, ringData, cap, memory, dataPtr, len, alignBytes)
 }
 
 const WMSH_MAGIC = 0, WMSH_W = 1, WMSH_H = 2, WMSH_FORMAT = 3, WMSH_FLIP = 4,
-      WMSH_SEQ = 5;
+      WMSH_SEQ = 5, WMSH_GEN = 6, WMSH_LOCK = 7;   // #790: generation + ownership
 const WMSH_MAGIC_VALUE = 0x574d5346;
+/* Producer-side frame ownership (#790): the mailbox flip happens under
+ * SH_LOCK. The consumer (kernel compositor upload / screenshot) holds the
+ * word across its front-buffer copy; the producer holds it ONLY across the
+ * flip — its memcpy targets the back buffer, which no consumer reads — so a
+ * consumer mid-copy of the old front is never overwritten by the producer's
+ * NEXT present (the pre-#790 race: flip, then write the old front while the
+ * compositor was still copying it). The wait is bounded and short (the
+ * consumer's section is one synchronous copy, never across an await);
+ * Atomics.wait is unavailable on a browser main thread — there the spin
+ * alone serves (standalone pages have no kernel consumer anyway). A miss
+ * past the bound proceeds unlocked (the consumer is not making progress —
+ * a descheduled thread), counted for the probes. */
+let wmShmFlipMisses = 0;
+function wmShmFlip(fb, back) {
+  const i32 = fb.i32;
+  let held = false;
+  for (let spin = 0; spin < 64 && !held; spin++) {
+    if (Atomics.compareExchange(i32, WMSH_LOCK, 0, 1) === 0) { held = true; break; }
+    try { Atomics.wait(i32, WMSH_LOCK, 1, 1); } catch (e) { /* main thread: spin */ }
+  }
+  if (!held) wmShmFlipMisses++;
+  Atomics.store(i32, WMSH_FLIP, back);
+  Atomics.add(i32, WMSH_SEQ, 1);
+  if (held) { Atomics.store(i32, WMSH_LOCK, 0); Atomics.notify(i32, WMSH_LOCK); }
+}
 const WMSH_HDR_BYTES = 64;
 const WMIR_WPOS = 0, WMIR_RPOS = 1, WMIR_CAP = 2, WMIR_DROPPED = 3;
 const WMIR_HDR_BYTES = 32, WMIR_RECORD_WORDS = 8, WMIR_DEFAULT_CAP = 256;
@@ -7613,7 +7638,7 @@ const WMEV_QUIT = 0x100, WMEV_WINDOW_RESIZED = 0x206,
 function assertWmSabLayout(hooks) {
   const mine = {
     shMagic: WMSH_MAGIC, shW: WMSH_W, shH: WMSH_H, shFormat: WMSH_FORMAT,
-    shFlip: WMSH_FLIP, shSeq: WMSH_SEQ,
+    shFlip: WMSH_FLIP, shSeq: WMSH_SEQ, shGen: WMSH_GEN, shLock: WMSH_LOCK,
     shMagicValue: WMSH_MAGIC_VALUE, shHdrBytes: WMSH_HDR_BYTES,
     irWpos: WMIR_WPOS, irRpos: WMIR_RPOS, irCap: WMIR_CAP,
     irDropped: WMIR_DROPPED,
@@ -7800,12 +7825,16 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   }
   const audioEnv = buildAudioEnv();
 
-  function allocFb(w, h) {
+  // gen = the configure serial this buffer answers (#790): 1 at create,
+  // the WINDOW_RESIZED record's serial for a renegotiation. The kernel
+  // validates the header word at SURFACE_CONFIGURE beside W/H.
+  function allocFb(w, h, gen) {
     const sab = new SharedArrayBuffer(WMSH_HDR_BYTES + 2 * w * h * 4);
     const i32 = new Int32Array(sab);
     i32[WMSH_MAGIC] = WMSH_MAGIC_VALUE;
     i32[WMSH_W] = w; i32[WMSH_H] = h;
-    return { sab, i32, u8: new Uint8Array(sab), w, h };
+    i32[WMSH_GEN] = gen | 0;
+    return { sab, i32, u8: new Uint8Array(sab), w, h, gen: gen | 0 };
   }
   function ensureRing() {
     if (ring) return ring;
@@ -7817,7 +7846,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   }
   function surfaceCreate(titlePtr, w, h, sdlFlags, popup) {
     const title = titlePtr ? readString(titlePtr) : '';
-    const fb = allocFb(w, h);
+    const fb = allocFb(w, h, 1);
     // SDL_WINDOW_BORDERLESS (0x10) -> kernel surface flags bit0 (no chrome);
     // SDL_WINDOW_RESIZABLE (0x20) -> bit2 (todos/0021: the kernel offers
     // resize — drag zones, wmResize — only to surfaces that carry it);
@@ -7933,18 +7962,37 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
    * Old-size in-flight frames keep landing in the OLD SAB (still the one
    * on screen), so the app stays live while it adopts the new size; a
    * binary that never handles the event just keeps its old geometry. */
-  function beginConfigure(win, w, h) {
+  // #790: ONE outstanding configure host-side — the newest serial. A newer
+  // WINDOW_RESIZED replaces it, releasing the superseded SAB (its serial
+  // may still be valid kernel-side, but this client moved on). If the new
+  // buffer cannot be allocated, the serial is DECLINED to the kernel at
+  // once so no pending state leaks on either side; the app keeps its old
+  // geometry and the WM learns why (EV_CONFIGURE_DECLINED).
+  function beginConfigure(win, w, h, serial) {
     if (typeof hooks.surfaceConfigure !== 'function') return;  // pre-0019 embedder
-    win.pendingCfg = { w: w, h: h, fb: allocFb(w, h) };
+    let fb;
+    try { fb = allocFb(w, h, serial); }
+    catch (e) {
+      win.pendingCfg = null;
+      hooks.surfaceConfigure(win.sid, w, h, null, serial);   // decline
+      return false;
+    }
+    win.pendingCfg = { w: w, h: h, serial: serial | 0, fb: fb };
+    return true;
   }
   function ackConfigure(win) {
     const cfg = win.pendingCfg;
     win.pendingCfg = null;
-    const r = hooks.surfaceConfigure(win.sid, cfg.w, cfg.h, cfg.fb.sab);
-    // EINVAL (surface gone / no configure pending kernel-side): keep the
-    // old buffer; a fresh WINDOW_RESIZED event re-negotiates if wanted.
-    if (r && !r.errno) { win.fb = cfg.fb; win.w = cfg.w; win.h = cfg.h; }
+    const r = hooks.surfaceConfigure(win.sid, cfg.w, cfg.h, cfg.fb.sab, cfg.serial);
+    // EINVAL (surface gone / no configure pending kernel-side) or ESTALE
+    // (this serial was retired — a newer configure superseded it and this
+    // ack lost the race): keep the old buffer, release the new one; the
+    // kernel re-issues the still-pending target if it wants it.
+    if (r && !r.errno) { win.fb = cfg.fb; win.w = cfg.w; win.h = cfg.h; win.serial = cfg.serial; }
+    else if (r && r.errno === 'ESTALE') staleAcks++;
   }
+  let staleAcks = 0;   // #790 probe: acks the kernel refused as retired
+  function frameStats() { return { staleAcks: staleAcks, flipMisses: wmShmFlipMisses }; }
   /* Doorbell-on-present (todos/0169): an shm present is SAB-only, so a
    * parked compositor cannot see it — after every WMSH_SEQ bump, re-read
    * the kernel-page parked flag and post want-frame if set. Cost while
@@ -7982,8 +8030,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
           base + row * fb.w * 4);
       }
     }
-    Atomics.store(fb.i32, WMSH_FLIP, back);
-    Atomics.add(fb.i32, WMSH_SEQ, 1);
+    wmShmFlip(fb, back);                    // flip under SH_LOCK (#790)
     ringIfParked();                         // doorbell-on-present (todos/0169)
     if (fb !== win.fb) ackConfigure(win);   // first new-size frame: ack + swap
     return 0;
@@ -8049,7 +8096,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
           // Renegotiate BEFORE the wasm sees the event: the app handles it
           // in this same frame tick, and its next present at the new size
           // must find the new SAB waiting (see beginConfigure above).
-          if (onConfigure) onConfigure(ring.i32[base + 1], ring.i32[base + 2], ring.i32[base + 3]);
+          if (onConfigure) onConfigure(ring.i32[base + 1], ring.i32[base + 2], ring.i32[base + 3], ring.i32[base + 4]);
           if (ex.__sdl_push_window_event) {
             ex.__sdl_push_window_event(handle, type, ring.i32[base + 2], ring.i32[base + 3]);
           }
@@ -8333,8 +8380,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         for (let row = 0; row < ch; row++)
           fb.u8.set(rd.fb.subarray(row * rd.fbw * 4, row * rd.fbw * 4 + cw * 4), base + row * fb.w * 4);
       }
-      Atomics.store(fb.i32, WMSH_FLIP, back);
-      Atomics.add(fb.i32, WMSH_SEQ, 1);
+      wmShmFlip(fb, back);                  // flip under SH_LOCK (#790)
       ringIfParked();
       if (fb !== win.fb && win.pendingCfg) ackConfigure(win);
     };
@@ -8864,7 +8910,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
             bmp.width === win.pendingCfg.w && bmp.height === win.pendingCfg.h) {
           ackConfigure(win);
         }
-        hooks.surfaceFrame(sid, bmp);
+        hooks.surfaceFrame(sid, bmp, win ? win.serial | 0 : 0);   // frame identity (#790)
       } catch (e) { /* canvas may be zero-sized pre-configure */ }
     };
     const presentTo = function (sid, cnv, via) {
@@ -9006,7 +9052,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       const handle = innerCreate(titlePtr, x, y, w, h, flags & ~8);
       legacySid = s.sid;                       // legacy handle-less tail only
       handleBySid.set(s.sid, handle);
-      fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h });
+      fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h, serial: 1 });
       return handle;
     };
     // SDL_CreatePopupWindow (todos/0256): an anchored child of an existing
@@ -9022,7 +9068,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       if (!s) return 0;
       const handle = innerCreate(0, 0, 0, w, h, flags & ~8);
       handleBySid.set(s.sid, handle);
-      fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h });
+      fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h, serial: 1 });
       return handle;
     };
     env.__sdl_set_window_visible = function (handle, visible) {
@@ -9103,16 +9149,17 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     // wgpuSurfaceConfigure re-sizes it again (idempotent). Unbound sids keep
     // resizing the shared inner canvas (renderer + legacy tails). The ack
     // rides the next matching-size present (shmPresent or presentTo above).
-    onConfigure = function (sid, w, h) {
+    onConfigure = function (sid, w, h, serial) {
       const win = fbByHandle.get(handleBySid.get(sid));
       if (!win) return;
-      beginConfigure(win, w, h);
+      if (!beginConfigure(win, w, h, serial)) return;   // declined: keep the canvas
       const c = canvasBySid.get(sid) || canvas;
       c.width = w;
       c.height = h;
     };
     const out = Object.assign({}, inner);
     out[ENV_KEY] = env;
+    out.frameStats = frameStats;   // #790 probes (stale acks, flip misses)
     out.drainInput = drainInput;
     // #551 blocking-loop refusal arming (see the refusal block above):
     // runModule flips this true right before the wasm entry and false when
@@ -9175,9 +9222,9 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   let sdlTicksBase = null;
   const windows = [];                // handle-1 -> { sid, w, h, fb, pendingCfg? } | null
 
-  onConfigure = function (sid, w, h) {
+  onConfigure = function (sid, w, h, serial) {
     const win = windows[(handleBySid.get(sid) || 0) - 1];
-    if (win) beginConfigure(win, w, h);
+    if (win) beginConfigure(win, w, h, serial);
   };
   /* #712: the headless half of the #551 refusal (shared block above the
    * flavor split). Headless, the software rasterizer serves EVERY
@@ -9217,6 +9264,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         ? function (cb) { hooks.vsyncWait().then(cb); }
         : null,             // frame loop falls back to the deadline pacer
     drainInput: drainInput,
+    frameStats: frameStats,   // #790 probes (stale acks, flip misses)
     /* Raw webgpu.h apps: real WebGPU headless via the lazy Dawn probe (tier 1);
      * the binding's shm present tail lands frames in the SDL window's SAB —
      * kernel screenshots can't tell Dawn output from a CPU app. Without the
@@ -9257,8 +9305,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
             fb.u8.set(src.subarray(row * srcPitch, row * srcPitch + cw * 4),
               base + row * fb.w * 4);
           }
-          Atomics.store(fb.i32, WMSH_FLIP, back);
-          Atomics.add(fb.i32, WMSH_SEQ, 1);
+          wmShmFlip(fb, back);              // flip under SH_LOCK (#790)
           ringIfParked();                   // doorbell-on-present (todos/0169)
           if (fb !== win.fb) ackConfigure(win);
         },
@@ -9270,7 +9317,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       __sdl_create_window: function (titlePtr, x, y, w, h, flags) {
         const s = surfaceCreate(titlePtr, w, h, flags);
         if (!s) return 0;
-        windows.push({ sid: s.sid, w: w, h: h, fb: s.fb });
+        windows.push({ sid: s.sid, w: w, h: h, fb: s.fb, serial: 1 });
         handleBySid.set(s.sid, windows.length);
         return windows.length;
       },
@@ -9283,7 +9330,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         const s = surfaceCreate(0, w, h, flags,
                                 { parentSid: pwin.sid, dx: dx, dy: dy });
         if (!s) return 0;
-        windows.push({ sid: s.sid, w: w, h: h, fb: s.fb });
+        windows.push({ sid: s.sid, w: w, h: h, fb: s.fb, serial: 1 });
         handleBySid.set(s.sid, windows.length);
         return windows.length;
       },
@@ -14677,6 +14724,9 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   module.exports.createFontBridge = createFontBridge;
   // Test export: the OS kernel-surface SDL flavor (per-window GPU present, A4)
   module.exports.createSurfaceSDL = createSurfaceSDL;
+  // Test exports (#790): the producer-side locked mailbox flip + its miss probe
+  module.exports.wmShmFlip = wmShmFlip;
+  module.exports.wmShmFlipMisses = function () { return wmShmFlipMisses; };
 }
 
 // Browser global exports

@@ -77,11 +77,14 @@ function submit(pid, op, req) {
 const rpc = (pid, op, req) => submit(pid, op, req).finish();
 
 // ---- surface-side helpers (what host.js's surface SDL backend does) ----
-function makeFb(w, h) {
+// gen = the configure serial the buffer answers (#790); 0 at create lets the
+// kernel stamp generation 1 itself.
+function makeFb(w, h, gen) {
   const sab = new SharedArrayBuffer(K.SH_HDR_BYTES + 2 * w * h * 4);
   const i32 = new Int32Array(sab);
   i32[K.SH_MAGIC] = K.SH_MAGIC_VALUE;
   i32[K.SH_W] = w; i32[K.SH_H] = h; i32[K.SH_FORMAT] = 0;
+  i32[K.SH_GEN] = gen | 0;
   return { sab, i32, u8: new Uint8Array(sab), w, h };
 }
 function makeRing(cap) {
@@ -440,24 +443,27 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('WINDOW_RESIZED event in the ring', revs.length === 1 &&
     revs[0].type === K.WMEV.WINDOW_RESIZED && revs[0].win === 1 &&
     revs[0].w[0] === 96 && revs[0].w[1] === 80, JSON.stringify(revs));
+  // #790: the request carries a configure serial (word [4]) the ack names.
+  let ser = revs[0].w[2];
+  check('WINDOW_RESIZED carries a configure serial > 1', ser > 1, ser);
   // In-flight old-size frame: legal — lands in the OLD sab, still displayed.
   present(fb1, [255, 255, 0, 255]);
   shot = kernel.wmScreenshot(1);
   check('old-size in-flight frame still shows (old buffer live)',
     shot.w === 80 && String(px(shot, 1, 1)) === '255,255,0,255', px(shot, 1, 1));
   // Bad acks: no SAB handshake; SAB header dims that contradict the RPC.
-  const noSab = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80 });
+  const noSab = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80, serial: ser });
   check('CONFIGURE without a new SAB -> EINVAL', noSab.errno === 'EINVAL');
   workers.get(appPid).msg({ type: 'wm-sabs', fb: makeFb(32, 32).sab, ring: null });
-  const badAck = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80 });
+  const badAck = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80, serial: ser });
   check('CONFIGURE with mismatched SAB dims -> EINVAL', badAck.errno === 'EINVAL');
   // The real ack: first frame at the new size already presented into it.
-  const fb1b = makeFb(96, 80);
+  const fb1b = makeFb(96, 80, ser);
   present(fb1b, [0, 128, 255, 255]);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fb1b.sab, ring: null });
-  const ackR = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80 });
-  check('CONFIGURE ack accepted', !ackR.errno && ackR.w === 96 && ackR.h === 80,
-    JSON.stringify(ackR));
+  const ackR = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80, serial: ser });
+  check('CONFIGURE ack accepted', !ackR.errno && ackR.w === 96 && ackR.h === 80 &&
+    ackR.serial === ser, JSON.stringify(ackR));
   s1r = kernel.wmList().find(s => s.sid === 1);
   check('geometry + pending updated at ack', s1r.w === 96 && s1r.h === 80 &&
     s1r.configurePending === false, JSON.stringify(s1r));
@@ -468,8 +474,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   shot = kernel.wmScreenshot(1);
   check('old-buffer flips are ignored after the swap',
     String(px(shot, 1, 1)) === '0,128,255,255', px(shot, 1, 1));
-  workers.get(appPid).msg({ type: 'wm-sabs', fb: makeFb(96, 80).sab, ring: null });
-  const spont = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80 });
+  workers.get(appPid).msg({ type: 'wm-sabs', fb: makeFb(96, 80, ser).sab, ring: null });
+  const spont = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 96, h: 80, serial: ser });
   check('CONFIGURE with nothing pending -> EINVAL (kernel-initiated only)',
     spont.errno === 'EINVAL');
 
@@ -479,21 +485,23 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   revs = drain(ring1);
   check('both configure events pushed (latest wins)', revs.length === 2 &&
     revs[0].w[0] === 120 && revs[1].w[0] === 150, JSON.stringify(revs));
-  const fbStale = makeFb(120, 90);
+  const serA = revs[0].w[2], serB = revs[1].w[2];
+  check('serials are monotonic per issue (#790)', serA > ser && serB > serA, [ser, serA, serB]);
+  const fbStale = makeFb(120, 90, serA);
   present(fbStale, [9, 9, 9, 255]);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fbStale.sab, ring: null });
-  const staleAck = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 120, h: 90 });
+  const staleAck = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 120, h: 90, serial: serA });
   s1r = kernel.wmList().find(s => s.sid === 1);
   check('stale ack accepted (newer than the old buffer)', !staleAck.errno &&
     s1r.w === 120 && s1r.configurePending === true, JSON.stringify(s1r));
   revs = drain(ring1);
-  check('kernel re-asks for the still-pending size', revs.length === 1 &&
+  check('kernel re-asks for the still-pending size UNDER ITS serial', revs.length === 1 &&
     revs[0].type === K.WMEV.WINDOW_RESIZED && revs[0].w[0] === 150 &&
-    revs[0].w[1] === 100, JSON.stringify(revs));
-  const fbFinal = makeFb(150, 100);
+    revs[0].w[1] === 100 && revs[0].w[2] === serB, JSON.stringify(revs));
+  const fbFinal = makeFb(150, 100, serB);
   present(fbFinal, [7, 7, 7, 255]);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fbFinal.sab, ring: null });
-  await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 150, h: 100 });
+  await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 150, h: 100, serial: serB });
   s1r = kernel.wmList().find(s => s.sid === 1);
   check('final ack settles', s1r.w === 150 && s1r.h === 100 &&
     s1r.configurePending === false, JSON.stringify(s1r));
@@ -513,10 +521,10 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('release sends ONE configure at the dragged size', ract === 'resize-end' &&
     revs.length === 1 && revs[0].type === K.WMEV.WINDOW_RESIZED &&
     revs[0].w[0] === 190 && revs[0].w[1] === 120, JSON.stringify([ract, revs]));
-  const fbDrag = makeFb(190, 120);
+  const fbDrag = makeFb(190, 120, revs[0].w[2]);
   present(fbDrag, [4, 4, 4, 255]);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fbDrag.sab, ring: null });
-  await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 190, h: 120 });
+  await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: 190, h: 120, serial: revs[0].w[2] });
 
   // ---- #388 fat hit zones: the band accepts presses out to WM_BORDER_HIT
   // (invisible slop past the 4px drawn frame), the SE corner widens within
@@ -589,10 +597,10 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   revs = drain(ring1);
   check('clamped configure at release', revs.length === 1 &&
     revs[0].w[0] === K.WM_MIN_SIZE && revs[0].w[1] === 120, JSON.stringify(revs));
-  const fbE = makeFb(K.WM_MIN_SIZE, 120);
+  const fbE = makeFb(K.WM_MIN_SIZE, 120, revs[0].w[2]);
   present(fbE, [11, 12, 13, 255]);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fbE.sab, ring: null });
-  await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: K.WM_MIN_SIZE, h: 120 });
+  await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: 1, w: K.WM_MIN_SIZE, h: 120, serial: revs[0].w[2] });
 
   // Left border: focus affordance only (no W/N resize in this version).
   ract = kernel.wmPointer('down', 200 - 2, 200 + 30, {});

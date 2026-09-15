@@ -927,6 +927,17 @@ kernel-owned `/run/wm.sock` endpoint (see "Kernel-owned endpoints" above);
 apps size to content), reusing the 0019 WINDOW_RESIZED → SURFACE_CONFIGURE
 renegotiation and deliberately not gated on the resizable bit (that bit
 protects fixed-size apps from the WM, not from themselves).
+#790 gave that renegotiation IDENTITIES: every issued configure carries a
+per-surface serial (WINDOW_RESIZED ring word [4]), the ack names it and its
+SAB's `SH_GEN` header word equals it (`ESTALE` otherwise, no change; a
+`decline` retires it and emits `EV_CONFIGURE_DECLINED`), the kernel keeps a
+bounded issued set (`WM_CFG_OUTSTANDING`), pointer ring records carry the
+committed serial as their geometry epoch (word [6]), gpu frames of a retired
+serial are closed unseen, and the shm mailbox's `SH_LOCK` word makes frame
+ownership real between the producer's flip and the kernel-side front-buffer
+readers (compositor upload, `wmScreenshot`). Layout + rules: kernel.js's
+"WM surfaces" header comment and WM.md "Surface protocol"; tests
+`test_wm_frames.js`, `test_shm_ownership.js`, host `test_surface_configure.js`.
 
 ## The ksvc service seam — the kernel's C half (2026-07-22, todos/0275)
 

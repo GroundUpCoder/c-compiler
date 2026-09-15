@@ -334,7 +334,11 @@ self.onmessage = function (e) {
     post({ type: 'compositor-stats',
            stats: compositor
              ? Object.assign({ vsyncNotifies: kernel.vsyncNotifyCount(),
-                               wmFrames: kernel.wmFrameCount() },
+                               wmFrames: kernel.wmFrameCount(),
+                               // #790 frame-identity probes
+                               configureStale: kernel.configureStaleCount(),
+                               framesRejected: kernel.wmFrameRejectedCount(),
+                               shmLockMisses: kernel.shmLockMisses() },
                              compositor.stats)
              : null });
   } else if (m.type === 'compositor-kill') {

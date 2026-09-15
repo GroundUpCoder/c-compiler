@@ -24397,6 +24397,16 @@ SDL_WindowID SDL_GetWindowID(SDL_Window *window);
 SDL_Surface *SDL_GetWindowSurface(SDL_Window *window);
 bool SDL_UpdateWindowSurface(SDL_Window *window);
 bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h);
+/* Geometry transforms (#790, SDL3 contracts kept exactly): gucOS windows
+   are 1 buffer pixel = 1 screen pixel (no HiDPI virtualization — the screen
+   tracks the viewport at 1 CSS px per screen px), so the size in pixels IS
+   the window size, the pixel density is 1.0 and the display scale is 1.0.
+   A WM-scaled fixed-size window (todos/0024, SET_DST) is a presentation
+   policy the app never sees: its buffer, and therefore every value here,
+   stays the buffer geometry — input arrives inverse-mapped into it. */
+bool SDL_GetWindowSizeInPixels(SDL_Window *window, int *w, int *h);
+float SDL_GetWindowPixelDensity(SDL_Window *window);
+float SDL_GetWindowDisplayScale(SDL_Window *window);
 bool SDL_SetWindowSize(SDL_Window *window, int w, int h);
 /* gucOS queries current HIDDEN, INPUT_FOCUS and MINIMIZED state from the
    owning kernel. Other bits retain the declared creation flags. Standalone
@@ -30047,6 +30057,24 @@ bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h) {
     if (w) *w = window->surface.w;
     if (h) *h = window->surface.h;
     return 1;
+}
+
+/* 1 buffer px = 1 screen px on gucOS (#790; see SDL.h): pixels == size. */
+bool SDL_GetWindowSizeInPixels(SDL_Window *window, int *w, int *h) {
+    if (!__sdl_window_live(window)) return SDL_InvalidParamError("window");
+    if (w) *w = window->surface.w;
+    if (h) *h = window->surface.h;
+    return 1;
+}
+
+float SDL_GetWindowPixelDensity(SDL_Window *window) {
+    if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return 0.0f; }
+    return 1.0f;
+}
+
+float SDL_GetWindowDisplayScale(SDL_Window *window) {
+    if (!__sdl_window_live(window)) { SDL_InvalidParamError("window"); return 0.0f; }
+    return 1.0f;
 }
 
 /* Query authoritative lifecycle state; never infer focus from a request. */

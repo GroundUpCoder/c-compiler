@@ -89,11 +89,12 @@ function submit(pid, op, req) {
 }
 const rpc = (pid, op, req) => submit(pid, op, req).finish();
 
-function makeFb(w, h) {
+function makeFb(w, h, gen) {     // gen: the configure serial answered (#790)
   const sab = new SharedArrayBuffer(K.SH_HDR_BYTES + 2 * w * h * 4);
   const i32 = new Int32Array(sab);
   i32[K.SH_MAGIC] = K.SH_MAGIC_VALUE;
   i32[K.SH_W] = w; i32[K.SH_H] = h; i32[K.SH_FORMAT] = 0;
+  i32[K.SH_GEN] = gen | 0;
   return { sab, i32, u8: new Uint8Array(sab), w, h };
 }
 function makeRing(cap) {
@@ -115,7 +116,8 @@ function drain(ring) {
   let rpos = Atomics.load(ring.i32, K.IR_RPOS);
   while (rpos !== Atomics.load(ring.i32, K.IR_WPOS)) {
     const base = (K.IR_HDR_BYTES >> 2) + (rpos % ring.cap) * K.IR_RECORD_WORDS;
-    out.push({ type: ring.i32[base], win: ring.i32[base + 1], reason: ring.i32[base + 2] });
+    out.push({ type: ring.i32[base], win: ring.i32[base + 1], reason: ring.i32[base + 2],
+               serial: ring.i32[base + 4] });   // WINDOW_RESIZED's configure serial (#790)
     rpos = (rpos + 1) % cap2;
     Atomics.store(ring.i32, K.IR_RPOS, rpos);
   }
@@ -314,10 +316,13 @@ const FOCUS_GAINED = K.WMEV.FOCUS_GAINED, FOCUS_LOST = K.WMEV.FOCUS_LOST,
   drain(ringA);
   const rr = await rpc(a, K.OP.SURFACE_RESIZE, { sid: cC1.sid, w: 50, h: 20 });
   check('SURFACE_RESIZE on a child accepted (owner-side resize)', !rr.errno, JSON.stringify(rr));
-  check('child got WINDOW_RESIZED', has(drain(ringA), K.WMEV.WINDOW_RESIZED, cC1.sid));
-  const fbC1b = makeFb(50, 20);
+  const rrEvs = drain(ringA);
+  check('child got WINDOW_RESIZED', has(rrEvs, K.WMEV.WINDOW_RESIZED, cC1.sid));
+  const rrSer = rrEvs.filter((e) => e.type === K.WMEV.WINDOW_RESIZED)[0].serial;   // configure serial (#790)
+  check('SURFACE_RESIZE reply names the issued serial (#790)', rr.serial === rrSer, JSON.stringify([rr, rrSer]));
+  const fbC1b = makeFb(50, 20, rrSer);
   workers.get(a).msg({ type: 'wm-sabs', fb: fbC1b.sab, ring: null });
-  const ack = await rpc(a, K.OP.SURFACE_CONFIGURE, { sid: cC1.sid, w: 50, h: 20 });
+  const ack = await rpc(a, K.OP.SURFACE_CONFIGURE, { sid: cC1.sid, w: 50, h: 20, serial: rrSer });
   check('configure ack accepted', !ack.errno && ack.w === 50, JSON.stringify(ack));
   check('resized child keeps anchor + inherited dst',
     byTitle('c1').w === 50 && byTitle('c1').dstW === 50 && byTitle('c1').x === 210 && byTitle('c1').y === 120,

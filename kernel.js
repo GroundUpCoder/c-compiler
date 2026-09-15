@@ -290,6 +290,14 @@ var OP = {
   // NEW fb SAB (riding {type:'wm-sabs'}, the create handshake verbatim)
   // whose front buffer already holds the first frame at the new size — the
   // kernel swaps buffers atomically here, so the compositor never tears.
+  // Since #790 every issued configure carries a SERIAL (ring word [4]) and
+  // the ack must name it: the kernel keeps a bounded set of still-valid
+  // issued configures per surface; an ack for one of those that is newer
+  // than the committed geometry is accepted (the newest outstanding target
+  // is re-issued if the ack was a superseded one), anything retired,
+  // unknown or backward is ESTALE with no geometry change; a client that
+  // cannot allocate the new buffer DECLINES the serial (no SAB) so no
+  // pending state leaks. The buffer's header SH_GEN must equal the serial.
   // SURFACE_SET_FLAGS (todos/0018) updates the surface flag word (bit0
   // borderless, bit1 relative-mouse, bit2 resizable, bit3 has-alpha —
   // todos/0063: per-pixel alpha, composited src-over in both composites; bit4
@@ -614,10 +622,27 @@ var S_IFSOCK_MODE = 0o140000;
  *     [0] SH_MAGIC 0x574d5346   [1] SH_W   [2] SH_H
  *     [3] SH_FORMAT (0 = RGBA8) [4] SH_FLIP  front buffer index (Atomics)
  *     [5] SH_SEQ   frame counter (Atomics.add at present)
- *     [6..15] reserved (damage rect, v2)
+ *     [6] SH_GEN   buffer GENERATION (#790): the configure serial this
+ *                  buffer was allocated for (1 = the create geometry). The
+ *                  kernel validates it at SURFACE_CONFIGURE beside W/H, and
+ *                  (gen, seq) is a frame's identity — seq restarts per SAB,
+ *                  so seq alone cannot tell an equal-size regeneration apart.
+ *     [7] SH_LOCK  frame-ownership word (#790): 0 free, 1 held. The CONSUMER
+ *                  (compositor upload, kernel screenshot) holds it across its
+ *                  front-buffer copy; the PRODUCER holds it only across the
+ *                  flip (never across its memcpy — it writes the back buffer,
+ *                  which no consumer reads). A consumer that cannot acquire
+ *                  keeps its previous frame (never waits); a producer that
+ *                  cannot acquire waits, bounded — the consumer's section is
+ *                  one synchronous copy. This is what makes "the producer
+ *                  cannot overwrite storage the compositor is reading" TRUE:
+ *                  before #790 a fast producer's next present wrote the old
+ *                  front buffer while the compositor was still copying it.
+ *     [8..15] reserved (damage rect, v2)
  *   then fb[0], fb[1]: w*h*4 bytes each (double buffer, MAILBOX semantics:
- *   the producer writes the back buffer, flips SH_FLIP, never blocks; the
- *   compositor samples the front buffer at its own cadence).
+ *   the producer writes the back buffer, flips SH_FLIP under SH_LOCK, never
+ *   blocks on the compositor's cadence; the compositor samples the front
+ *   buffer at its own cadence under SH_LOCK).
  *
  * Present is pure SAB (flip + seq) — NO RPC on the frame path (WM.md's
  * data-plane rule; the ~10us RPC toll never lands per-frame).
@@ -642,6 +667,13 @@ var S_IFSOCK_MODE = 0o140000;
  *             (pointer-lock motion / injected rel), not positions
  *     button: [2] x(f32 bits) [3] y(f32 bits) [4] button index
  *     wheel:  [2] x(f32 bits) [3] y(f32 bits) [4] direction
+ *     motion/button/wheel: [6] GEOMETRY EPOCH (#790) — the surface's
+ *             COMMITTED configure serial when the record was written, i.e.
+ *             the buffer geometry its coordinates were inverse-mapped into.
+ *             A consumer draining after a later ack can tell an old queued
+ *             pointer record from one in the new geometry. Stamped in
+ *             _wmEventTo for every pointer type (the one choke).
+ *     resized: [2] w [3] h [4] configure SERIAL (#790; see SURFACE_CONFIGURE)
  *     gamepad (#607): [1] is 0 — SDL gamepad events carry no windowID;
  *     routing is per-PROCESS (focus-follows, the keyboard rule).
  *       added/removed: [2] instance id
@@ -653,7 +685,18 @@ var S_IFSOCK_MODE = 0o140000;
  *   __sdl_pump_wait — user32's blocking GetMessage, todos/0058) wakes
  *   without polling.
  * ============================================================ */
-var SH_MAGIC = 0, SH_W = 1, SH_H = 2, SH_FORMAT = 3, SH_FLIP = 4, SH_SEQ = 5;
+var SH_MAGIC = 0, SH_W = 1, SH_H = 2, SH_FORMAT = 3, SH_FLIP = 4, SH_SEQ = 5,
+    SH_GEN = 6, SH_LOCK = 7;                 // #790: generation + ownership
+/* Bound on still-valid issued configures per surface (#790): the newest is
+ * always the pending target; older ones stay ackable (an intermediate resize
+ * may still display) until they fall off this window, when they retire and
+ * an ack naming them is ESTALE. */
+var WM_CFG_OUTSTANDING = 4;
+/* Consumer-side bounded spin on SH_LOCK (#790): the producer holds it only
+ * across a flip (a few atomics), so a miss is a descheduled producer, not a
+ * long section. A kernel-thread reader never sleeps; past the bound it reads
+ * unlocked and counts the miss (kernel.shmLockMisses()). */
+var WM_SHM_LOCK_SPIN = 200000;
 var SH_MAGIC_VALUE = 0x574d5346;             // 'WMSF'
 var SH_HDR_BYTES = 64;
 var IR_WPOS = 0, IR_RPOS = 1, IR_CAP = 2, IR_DROPPED = 3;
@@ -662,8 +705,9 @@ var IR_RECORD_WORDS = 8;                     // 32 bytes per event record
 
 /* SDL event type numbers (MUST MATCH <SDL3/SDL_events.h> / host.js
  * sdlEvents): the ring carries them verbatim. WINDOW_RESIZED is the resize
- * request (todos/0019): record words [2]=w [3]=h; the client acks with the
- * SURFACE_CONFIGURE RPC once it has a frame at the new size.
+ * request (todos/0019): record words [2]=w [3]=h [4]=configure serial (#790);
+ * the client acks with the SURFACE_CONFIGURE RPC naming that serial once it
+ * has a frame at the new size, or declines it.
  * FOCUS_GAINED/FOCUS_LOST are the owner focus pair (todos/0256, menu arch
  * A9): every kernel focus TRANSITION emits LOST to the old owner and GAINED
  * to the new one — by construction, since all _focusSid writes flow through
@@ -727,7 +771,7 @@ var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
  * table together. */
 var WM_SAB_LAYOUT = {
   shMagic: SH_MAGIC, shW: SH_W, shH: SH_H, shFormat: SH_FORMAT,
-  shFlip: SH_FLIP, shSeq: SH_SEQ,
+  shFlip: SH_FLIP, shSeq: SH_SEQ, shGen: SH_GEN, shLock: SH_LOCK,
   shMagicValue: SH_MAGIC_VALUE, shHdrBytes: SH_HDR_BYTES,
   irWpos: IR_WPOS, irRpos: IR_RPOS, irCap: IR_CAP, irDropped: IR_DROPPED,
   irHdrBytes: IR_HDR_BYTES, irRecordWords: IR_RECORD_WORDS,
@@ -867,8 +911,11 @@ var WM_SAB_LAYOUT = {
  * Events: EV_CREATED record | EV_DESTROYED { sid } | EV_TITLE { sid,
  * title32 } | EV_FOCUS { sid (0 = none) } | EV_MOVED { sid, x, y } |
  * EV_MINIMIZED { sid, minimized 0|1 } (restore also implies focus) |
- * EV_CONFIGURED { sid, w, h } (the client's resize ack landed; geometry
- * is now the new size) | EV_SCREEN { w, h } (the screen changed resolution,
+ * EV_CONFIGURED { sid, w, h, serial } (the client's resize ack landed;
+ * geometry is now the new size; serial = the acked configure, #790) |
+ * EV_CONFIGURE_DECLINED { sid, serial, w, h } (the client could not
+ * produce a buffer for that configure — allocation failure — and no pending
+ * state remains; policy may re-ask, #790) | EV_SCREEN { w, h } (the screen changed resolution,
  * todos/0023 — RandR/wl_output shape: the display owner set a new mode via
  * wmSetScreen; the kernel one-shot-clamps window positions itself so the
  * no-WM fallback stays usable, and a subscribed WM re-lays its furniture) |
@@ -1094,6 +1141,9 @@ var WMP = {
                                         Only emitted with a subscriber */
   EV_VISIBILITY: 0x95,              // full record, requested visibility changed
   EV_ACTIVATION_REQUEST: 0x96,      // { sid }; WM may grant via FOCUS
+  EV_CONFIGURE_DECLINED: 0x97,      // { sid, serial, w, h } (#790): the client
+                                    // declined an issued configure (could not
+                                    // allocate); pending state cleared
   EV_OVERVIEW_PICK: 0x94,             /* { sid }: overview pick — a pointer-down
                                         landed in cell `sid`, or dismissed
                                         (sid = 0: background click or Esc).
@@ -1709,14 +1759,20 @@ KernelClient.prototype.spawnHooks = function () {
     surfaceResize: function (sid, w, h) { return self.call(OP.SURFACE_RESIZE, { sid: sid, w: w | 0, h: h | 0 }); },
     // Resize ack (todos/0019): the NEW fb SAB (first new-size frame already
     // presented into it) rides the FIFO channel like at create.
-    surfaceConfigure: function (sid, w, h, fbSab) {
-      self._post({ type: 'wm-sabs', fb: fbSab, ring: null });
-      return self.call(OP.SURFACE_CONFIGURE, { sid: sid, w: w, h: h });
+    // #790: the ack names the configure SERIAL it answers; a null fbSab
+    // DECLINES that serial (the client could not allocate the buffer) so the
+    // kernel drops its pending state instead of waiting forever.
+    surfaceConfigure: function (sid, w, h, fbSab, serial) {
+      if (fbSab) self._post({ type: 'wm-sabs', fb: fbSab, ring: null });
+      return self.call(OP.SURFACE_CONFIGURE, { sid: sid, w: w, h: h,
+        serial: serial | 0, decline: !fbSab });
     },
     // gpu transport (browser): per-present frame handoff; transfer the
-    // bitmap so it never copies. Fire-and-forget by design (mailbox).
-    surfaceFrame: function (sid, bmp) {
-      self._post({ type: 'wm-frame', sid: sid, bmp: bmp }, [bmp]);
+    // bitmap so it never copies. Fire-and-forget by design (mailbox). The
+    // serial names the committed configure the frame was rendered for
+    // (#790): the kernel closes a frame of a retired geometry unseen.
+    surfaceFrame: function (sid, bmp, serial) {
+      self._post({ type: 'wm-frame', sid: sid, bmp: bmp, serial: serial | 0 }, [bmp]);
     },
     // Audio mixer (todos/0017): the process-allocated source ring rides the
     // FIFO channel immediately before the RPC that names it (wm-sabs shape).
@@ -3073,7 +3129,7 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
     case 'pipe-sab':
       if (msg.sab) pcb._pipePendingSab = msg.sab;
       break;
-    case 'wm-frame': this._wmFrame(pcb, msg.sid | 0, msg.bmp); break;
+    case 'wm-frame': this._wmFrame(pcb, msg.sid | 0, msg.bmp, msg.serial); break;
     // On-demand compositor doorbells (todos/0169): want-frame = this pcb
     // presented / armed a vsync wait while the compositor was parked —
     // pin it awake (hard state, never heuristic) and wake it; frame-idle =
@@ -4728,6 +4784,13 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
           Atomics.load(i32, SH_W) !== w || Atomics.load(i32, SH_H) !== h) {
         this._respond(pcb, { errno: 'EINVAL' }); break;
       }
+      // Generation 1 = the create geometry (#790). The kernel owns
+      // generation identity: an allocator that left the word 0 gets it
+      // stamped; a header claiming any other generation is not this
+      // surface's first buffer.
+      var cgen = Atomics.load(i32, SH_GEN);
+      if (cgen === 0) Atomics.store(i32, SH_GEN, 1);
+      else if (cgen !== 1) { this._respond(pcb, { errno: 'EINVAL' }); break; }
       // Anchored child surface (todos/0256, menu arch §3.1): creation-flag
       // bit 6 pins the new surface to a same-process parent at a fixed
       // (dx, dy) offset from the parent's client origin. parentSid forms an
@@ -4778,7 +4841,13 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
                                   // overlay in _wmCursorAt.
         layer: 0,                 // z layer (todos/0038): -1 bottom / 0 / +1 top;
                                   // set post-create via SET_LAYER / wmSetLayer
-        pendingConfigure: null,   // { w, h } resize asked, ack not yet in (0019)
+        pendingConfigure: null,   // { w, h, serial } resize asked, ack not yet
+                                  // in (0019) — always the NEWEST issued
+        cfgSerial: 1,             // last configure serial issued (#790);
+                                  // 1 = the create geometry, never reused
+        committedSerial: 1,       // serial of the geometry on screen (#790)
+        issued: [],               // still-valid issued configures, oldest
+                                  // first, <= WM_CFG_OUTSTANDING (#790)
         mapped: true,             // in the composite + hit test (todos/0069);
                                   // see the map-on-placement decision below
         mapTimer: null,           // the unmapped-surface backstop timeout
@@ -4878,9 +4947,22 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         // effective answer (mapped, not minimized, no hidden/minimized
         // anchor or owner ancestor) — the two differ exactly while an
         // owner is hidden or minimized (#794).
+        // Geometry identities (#790): the committed buffer (backing) and the
+        // WM's on-screen destination are DIFFERENT sizes on a scaled fixed-
+        // size surface; logical client coordinates are buffer coordinates
+        // (1 buffer px = 1 screen px when unscaled). configure names the
+        // serials so a client can tell which configuration is renderable.
         this._respond(pcb, { visible: sv.requestedVisible, focused: this._focusSid === sv.sid,
           minimized: sv.minimized, mapped: sv.mapped, viewable: this._wmViewable(sv),
-          owner: sv.ownerSid | 0 });
+          owner: sv.ownerSid | 0,
+          buffer: { w: sv.w, h: sv.h, gen: Atomics.load(sv.i32, SH_GEN),
+                    frameSeq: Atomics.load(sv.i32, SH_SEQ) },
+          dst: { w: sv.dstW, h: sv.dstH },
+          configure: { committed: sv.committedSerial,
+                       pending: sv.pendingConfigure ? sv.pendingConfigure.serial : 0,
+                       pendingW: sv.pendingConfigure ? sv.pendingConfigure.w : 0,
+                       pendingH: sv.pendingConfigure ? sv.pendingConfigure.h : 0,
+                       outstanding: sv.issued.length } });
       } else if (op === OP.SURFACE_SET_OWNER) {
         var so = this._wmSetOwner(sv, req.ownerSid | 0, pcb);
         this._respond(pcb, so ? { errno: so } : {});
@@ -4953,14 +5035,11 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       if (rw === sr.w && rh === sr.h && !sr.pendingConfigure) {
         this._respond(pcb, {}); break;            // no-op
       }
-      var srPrev = sr.pendingConfigure;
-      sr.pendingConfigure = { w: rw, h: rh };
-      var srErr = this._wmEventTo(sr.sid, [WMEV.WINDOW_RESIZED, 0, rw, rh, 0, 0, 0, 0]);
+      var srErr = this._wmIssueConfigure(sr, rw, rh);
       if (srErr) {         // EAGAIN in practice: the caller owns the surface
-        sr.pendingConfigure = srPrev;
         this._respond(pcb, { errno: srErr }); break;
       }
-      this._respond(pcb, {});
+      this._respond(pcb, { serial: sr.pendingConfigure.serial });
       break;
     }
     case OP.SURFACE_DESTROY: {
@@ -4979,28 +5058,58 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       this._wmEmit(WMP.EV_TITLE, [st.sid], st.title);
       break;
     }
-    // The resize ack (todos/0019). Only valid while a configure is pending
-    // (resize is kernel-initiated; there is no client-initiated resize).
-    // The new SAB's front buffer already holds a frame at the new size, so
-    // the swap is the whole no-tearing story. In-flight frames on the OLD
-    // SAB are simply never looked at again — legal and ignored (mailbox).
+    // The resize ack (todos/0019; identities #790). Only valid while a
+    // configure is pending (resize is kernel-initiated; there is no
+    // client-initiated resize). The ack NAMES the serial it answers; the
+    // new SAB's front buffer already holds a frame at that size and its
+    // SH_GEN carries the same serial, so the swap is the whole no-tearing
+    // story. In-flight frames on the OLD SAB are simply never looked at
+    // again — legal and ignored (mailbox). A retired/unknown/backward
+    // serial is ESTALE and moves nothing (the host releases its buffer). A
+    // DECLINE (no SAB) retires the serial and everything older: the client
+    // abandoned that negotiation, and a WM that still wants the size asks
+    // again (EV_CONFIGURE_DECLINED tells it so).
     case OP.SURFACE_CONFIGURE: {
       var sc = this._surfaces.get(req.sid | 0);
       var fb2 = pcb._wmPendingFb;
       pcb._wmPendingFb = null;
-      var cw = req.w | 0, ch = req.h | 0;
-      if (!sc || sc.pid !== pcb.pid || !sc.pendingConfigure ||
-          !(cw > 0) || !(ch > 0) || cw > 8192 || ch > 8192 ||
+      var cw = req.w | 0, ch = req.h | 0, cser = req.serial | 0;
+      if (!sc || sc.pid !== pcb.pid || !sc.pendingConfigure || !(cser > 0)) {
+        this._respond(pcb, { errno: 'EINVAL' }); break;
+      }
+      var cidx = -1;
+      for (var ci = 0; ci < sc.issued.length; ci++) if (sc.issued[ci].serial === cser) cidx = ci;
+      if (req.decline === true) {
+        if (cidx < 0) { this._respond(pcb, { errno: 'ESTALE' }); break; }
+        var declined = sc.issued[cidx];
+        sc.issued = sc.issued.filter(function (c) { return c.serial > cser; });
+        // The newest issued IS the pending target; declining it (or anything
+        // older while it is the only one left) leaves nothing pending.
+        sc.pendingConfigure = sc.issued.length ? sc.issued[sc.issued.length - 1] : null;
+        this._bumpWm();
+        this._respond(pcb, {});
+        this._wmEmit(WMP.EV_CONFIGURE_DECLINED, [sc.sid, cser, declined.w, declined.h]);
+        break;
+      }
+      if (!(cw > 0) || !(ch > 0) || cw > 8192 || ch > 8192 ||
           !fb2 || fb2.byteLength < SH_HDR_BYTES + 2 * cw * ch * 4) {
         this._respond(pcb, { errno: 'EINVAL' }); break;
       }
       var ci32 = new Int32Array(fb2);
       if (Atomics.load(ci32, SH_MAGIC) !== SH_MAGIC_VALUE ||
-          Atomics.load(ci32, SH_W) !== cw || Atomics.load(ci32, SH_H) !== ch) {
+          Atomics.load(ci32, SH_W) !== cw || Atomics.load(ci32, SH_H) !== ch ||
+          Atomics.load(ci32, SH_GEN) !== cser) {
         this._respond(pcb, { errno: 'EINVAL' }); break;
+      }
+      if (cidx < 0 || cser <= sc.committedSerial ||
+          sc.issued[cidx].w !== cw || sc.issued[cidx].h !== ch) {
+        this._wmCfgStaleN = (this._wmCfgStaleN | 0) + 1;
+        this._respond(pcb, { errno: 'ESTALE' }); break;
       }
       sc.sab = fb2; sc.i32 = ci32; sc.u8 = new Uint8Array(fb2);
       sc.w = cw; sc.h = ch;
+      sc.committedSerial = cser;
+      sc.issued = sc.issued.filter(function (c) { return c.serial > cser; });
       if (sc.parentSid) {
         // Anchored child (todos/0256, A5/A11): dst is INHERITED — re-derive
         // position + scale from the parent instead of resetting dst to the
@@ -5014,17 +5123,18 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       }
       if (sc.children.length) this._wmAnchorLayout(sc);  // subtree follows the
                                                          // new geometry (A1)
-      if (sc.pendingConfigure.w !== cw || sc.pendingConfigure.h !== ch) {
+      if (sc.pendingConfigure.serial !== cser) {
         // Superseded while the client was renegotiating: latest wins — keep
-        // the (valid, newer-than-old) buffer and re-issue the configure.
-        this._wmEventTo(sc.sid, [WMEV.WINDOW_RESIZED, 0,
-          sc.pendingConfigure.w, sc.pendingConfigure.h, 0, 0, 0, 0]);
+        // the (valid, newer-than-old) buffer and re-issue the still-pending
+        // target under ITS serial (it stays valid; nothing new is minted).
+        var pc = sc.pendingConfigure;
+        this._wmEventTo(sc.sid, [WMEV.WINDOW_RESIZED, 0, pc.w, pc.h, pc.serial, 0, 0, 0]);
       } else {
         sc.pendingConfigure = null;
       }
       this._bumpWm();
-      this._respond(pcb, { sid: sc.sid, w: cw, h: ch });
-      this._wmEmit(WMP.EV_CONFIGURED, [sc.sid, cw, ch]);
+      this._respond(pcb, { sid: sc.sid, w: cw, h: ch, serial: cser, gen: cser });
+      this._wmEmit(WMP.EV_CONFIGURED, [sc.sid, cw, ch, cser]);
       break;
     }
     default: this._respond(pcb, { errno: 'ENOSYS' });
@@ -5787,10 +5897,22 @@ Kernel.prototype.audioPump = function (maxFrames) {
 /* gpu transport (browser): latest-frame-wins; superseded bitmaps are closed
  * immediately so GPU memory can't balloon behind a slow compositor (WM.md
  * "lifetime discipline"). */
-Kernel.prototype._wmFrame = function (pcb, sid, bmp) {
+Kernel.prototype._wmFrame = function (pcb, sid, bmp, serial) {
   var s = this._surfaces.get(sid);
   if (!s || s.pid !== pcb.pid || !bmp) {
     if (bmp && bmp.close) { try { bmp.close(); } catch (e) {} }
+    return;
+  }
+  // Frame identity (#790): a bitmap rendered for a configure older than the
+  // committed one (the ack that swapped geometry raced ahead of a frame
+  // already in the message queue), or one whose size is not the committed
+  // buffer's, is a frame of a retired geometry — closed unseen, never
+  // scaled onto the new rect. An absent serial (a pre-#790 shipper) keeps
+  // the size check only.
+  if ((serial | 0) > 0 && (serial | 0) < s.committedSerial ||
+      bmp.width !== s.w || bmp.height !== s.h) {
+    this._wmFrameRejectedN = (this._wmFrameRejectedN | 0) + 1;
+    if (bmp.close) { try { bmp.close(); } catch (e) {} }
     return;
   }
   if (s.bitmap && s.bitmap.close) { try { s.bitmap.close(); } catch (e) {} }
@@ -5885,6 +6007,11 @@ Kernel.prototype._wmEventTo = function (sid, words) {
   var pcb = this._procs.get(s.pid);
   if (!pcb || pcb.state !== STATE_RUNNING) return 'ESRCH';
   words[1] = sid;
+  // Geometry epoch (#790): pointer records carry the committed configure
+  // serial their coordinates were mapped into (ring layout word [6]).
+  var t = words[0];
+  if (t === WMEV.MOUSEMOTION || t === WMEV.MOUSEBUTTONDOWN ||
+      t === WMEV.MOUSEBUTTONUP || t === WMEV.MOUSEWHEEL) words[6] = s.committedSerial;
   return this._wmPushEvent(pcb, words) ? 0 : 'EAGAIN';
 };
 
@@ -6610,6 +6737,9 @@ Kernel.prototype.wmList = function () {
                owner: s.ownerSid | 0,           // owner top-level (#794)
                viewable: this._wmViewable(s),   // effective visibility (#794)
                configurePending: !!s.pendingConfigure,
+               committedSerial: s.committedSerial,           // (#790)
+               pendingSerial: s.pendingConfigure ? s.pendingConfigure.serial : 0,
+               gen: Atomics.load(s.i32, SH_GEN),             // buffer generation
                frameSeq: Atomics.load(s.i32, SH_SEQ) });
   }
   return out;
@@ -6776,15 +6906,55 @@ Kernel.prototype.wmResize = function (sid, w, h) {
     this._wmMap(s.sid);         // a geometry op maps even as a no-op (0069)
     return 0;
   }
-  var prev = s.pendingConfigure;
-  s.pendingConfigure = { w: w, h: h };
-  var err = this._wmEventTo(s.sid, [WMEV.WINDOW_RESIZED, 0, w, h, 0, 0, 0, 0]);
-  if (err) {
-    s.pendingConfigure = prev;
-    return err;
-  }
+  var err = this._wmIssueConfigure(s, w, h);
+  if (err) return err;
   this._wmMap(s.sid);           // the WM sized it: placement decided (0069)
   return 0;
+};
+
+/* Issue one configure (#790): mint the next serial, remember it among the
+ * still-valid issued configures (bounded — the oldest retires), make it the
+ * pending target and deliver WINDOW_RESIZED { w, h, serial }. Delivery
+ * failure (dead process, full ring) rolls the issued/pending state back —
+ * nothing would ever ack it — but never reuses the serial. Returns 0 or the
+ * delivery errno. */
+Kernel.prototype._wmIssueConfigure = function (s, w, h) {
+  var serial = (s.cfgSerial + 1) | 0;
+  var cfg = { w: w | 0, h: h | 0, serial: serial };
+  var prev = s.pendingConfigure, prevIssued = s.issued;
+  s.cfgSerial = serial;
+  s.issued = prevIssued.concat([cfg]);
+  while (s.issued.length > WM_CFG_OUTSTANDING) s.issued.shift();   // retire oldest
+  s.pendingConfigure = cfg;
+  var err = this._wmEventTo(s.sid, [WMEV.WINDOW_RESIZED, 0, cfg.w, cfg.h, serial, 0, 0, 0]);
+  if (err) {
+    s.pendingConfigure = prev;
+    s.issued = prevIssued;
+    return err;
+  }
+  return 0;
+};
+
+/* Probes (#790): acks refused as ESTALE, gpu frames dropped for a retired
+ * geometry, and consumer-side SH_LOCK misses (spin bound exceeded). */
+Kernel.prototype.configureStaleCount = function () { return this._wmCfgStaleN | 0; };
+Kernel.prototype.wmFrameRejectedCount = function () { return this._wmFrameRejectedN | 0; };
+Kernel.prototype.shmLockMisses = function () { return this._wmShmLockMissN | 0; };
+
+/* Consumer-side frame ownership (#790): acquire SH_LOCK for a front-buffer
+ * copy. Bounded spin (the producer's section is a flip); returns true when
+ * held. The caller MUST release with _shmRelease. On a miss the caller reads
+ * unlocked (the pre-#790 behavior) and the miss is counted. */
+Kernel.prototype._shmAcquire = function (i32) {
+  for (var spin = 0; spin < WM_SHM_LOCK_SPIN; spin++) {
+    if (Atomics.compareExchange(i32, SH_LOCK, 0, 1) === 0) return true;
+  }
+  this._wmShmLockMissN = (this._wmShmLockMissN | 0) + 1;
+  return false;
+};
+Kernel.prototype._shmRelease = function (i32) {
+  Atomics.store(i32, SH_LOCK, 0);
+  Atomics.notify(i32, SH_LOCK);
 };
 
 /* Set the on-screen dst viewport of a FIXED-SIZE surface (todos/0024 —
@@ -7133,10 +7303,15 @@ Kernel.prototype.wmScreenshot = function (sid, pixels) {
   if (!s) return null;
   if (pixels && pixels.has(s.sid)) return pixels.get(s.sid);
   if (s.bitmap) throw Object.assign(new Error('GPU surface requires compositor readback'), { errno: 'ENOSYS' });
+  // Frame ownership (#790): the ONE kernel-side front-buffer read — the
+  // headless composite and thumbnails funnel through here — holds SH_LOCK
+  // across the copy so the producer's next flip waits for it.
+  var held = this._shmAcquire(s.i32);
   var front = Atomics.load(s.i32, SH_FLIP) & 1;
   var bytes = s.w * s.h * 4;
   var rgba = new Uint8Array(bytes);
   rgba.set(s.u8.subarray(SH_HDR_BYTES + front * bytes, SH_HDR_BYTES + (front + 1) * bytes));
+  if (held) this._shmRelease(s.i32);
   return { w: s.w, h: s.h, rgba: rgba };
 };
 
@@ -10177,7 +10352,8 @@ var KERNEL_EXPORTS = {
   W_STOPCODE: W_STOPCODE,
   // WM surfaces (todos/WM.md) — layout constants MUST MATCH host.js.
   SH_MAGIC: SH_MAGIC, SH_W: SH_W, SH_H: SH_H, SH_FORMAT: SH_FORMAT,
-  SH_FLIP: SH_FLIP, SH_SEQ: SH_SEQ,
+  SH_FLIP: SH_FLIP, SH_SEQ: SH_SEQ, SH_GEN: SH_GEN, SH_LOCK: SH_LOCK,
+  WM_CFG_OUTSTANDING: WM_CFG_OUTSTANDING,
   SH_MAGIC_VALUE: SH_MAGIC_VALUE, SH_HDR_BYTES: SH_HDR_BYTES,
   IR_WPOS: IR_WPOS, IR_RPOS: IR_RPOS, IR_CAP: IR_CAP, IR_DROPPED: IR_DROPPED,
   IR_HDR_BYTES: IR_HDR_BYTES, IR_RECORD_WORDS: IR_RECORD_WORDS,

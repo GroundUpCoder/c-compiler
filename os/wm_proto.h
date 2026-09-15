@@ -29,7 +29,9 @@ enum {
     WMP_RESTORE = 0x13, WMP_RESTACK = 0x14, WMP_CLOSE_REQ = 0x15,
     WMP_RESIZE = 0x16,                 /* { sid, w, h }: asks the client;
                                           geometry changes at its ack ->
-                                          EV_CONFIGURED (todos/0019) */
+                                          EV_CONFIGURED (todos/0019); every
+                                          ask carries a configure serial the
+                                          ack must name (#790) */
     WMP_SET_DST = 0x17,                /* { sid, w, h }: viewport scaling
                                           (todos/0024) — set the on-screen
                                           dst rect of a FIXED-SIZE surface;
@@ -170,9 +172,16 @@ enum {
     /* events */
     WMP_EV_VISIBILITY = 0x95,       /* full window record, requested visibility */
     WMP_EV_ACTIVATION_REQUEST = 0x96, /* { sid, visibility serial }, echo both in WMP_FOCUS */
+    WMP_EV_CONFIGURE_DECLINED = 0x97,  /* { sid, serial, w, h } (#790): the client
+                                          could not produce a buffer for that
+                                          configure (allocation failure); the
+                                          kernel dropped its pending state —
+                                          policy may RESIZE again */
     WMP_EV_CREATED = 0x80, WMP_EV_DESTROYED = 0x81, WMP_EV_TITLE = 0x82,
     WMP_EV_FOCUS = 0x83, WMP_EV_MOVED = 0x84, WMP_EV_MINIMIZED = 0x85,
-    WMP_EV_CONFIGURED = 0x86,          /* { sid, w, h }: resize ack landed */
+    WMP_EV_CONFIGURED = 0x86,          /* { sid, w, h, serial }: resize ack
+                                          landed; serial = the acked configure
+                                          (#790; older readers stop at w, h) */
     WMP_EV_SCREEN = 0x87,              /* { w, h }: screen resolution changed
                                           (todos/0023); the kernel has already
                                           clamped window positions */

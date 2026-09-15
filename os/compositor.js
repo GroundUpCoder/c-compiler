@@ -345,30 +345,44 @@ function startCompositor(kernel, canvas, device) {
     p.end();
   }
 
-  // ---- shm surfaces: per-surface GPUTexture, upload gated on frameSeq
-  // (same seq/size discipline as the old scratch-canvas cache).
-  var shmCache = new Map();   // sid -> { seq, w, h, tex, bind, scratch }
+  // ---- shm surfaces: per-surface GPUTexture, upload gated on the frame
+  // identity (gen, seq) (#790) — the buffer GENERATION distinguishes a
+  // fresh SAB of the SAME size (an equal-size reconfigure restarts seq, so
+  // seq alone collided with the old pixels), the size check covers the
+  // rest. The copy runs under SH_LOCK (the frame-ownership word): a
+  // producer never flips while we read, and we NEVER wait — on contention
+  // (a flip in flight) the previous valid frame stays on screen and the
+  // next rAF retries (uploadRetry keeps the frame dirty).
+  var shmCache = new Map();   // sid -> { gen, seq, w, h, tex, bind, scratch }
+  var uploadRetry = false;    // an upload was skipped on SH_LOCK contention
   function shmBindFor(surf) {
     var seq = Atomics.load(surf.i32, K.SH_SEQ);
+    var gen = Atomics.load(surf.i32, K.SH_GEN);
     var c = shmCache.get(surf.sid);
-    // Size check: after a resize ack the surface has a FRESH SAB whose seq
-    // restarts, so seq alone could collide with the stale old-size pixels.
-    if (!c || c.w !== surf.w || c.h !== surf.h) {
+    if (!c || c.w !== surf.w || c.h !== surf.h || c.gen !== gen) {
       if (c) c.tex.destroy();
       var tex = device.createTexture({
         size: { width: surf.w, height: surf.h }, format: 'rgba8unorm',
         usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
       });
-      c = { seq: seq - 1, w: surf.w, h: surf.h, tex: tex, bind: bindFor(tex),
+      c = { gen: gen, seq: seq - 1, w: surf.w, h: surf.h, tex: tex, bind: bindFor(tex),
             scratch: new Uint8Array(surf.w * surf.h * 4) };
       shmCache.set(surf.sid, c);
     }
     if (c.seq !== seq) {
+      if (Atomics.compareExchange(surf.i32, K.SH_LOCK, 0, 1) !== 0) {
+        stats.shmContended++;
+        uploadRetry = true;             // keep the last good frame; retry next rAF
+        return c.bind;
+      }
       var bytes = surf.w * surf.h * 4;
       var front = Atomics.load(surf.i32, K.SH_FLIP) & 1;
+      seq = Atomics.load(surf.i32, K.SH_SEQ);   // re-read under the lock
       // Copy out of the SAB (writeTexture wants non-racing bytes; same copy
       // the putImageData path made).
       c.scratch.set(new Uint8Array(surf.sab, K.SH_HDR_BYTES + front * bytes, bytes));
+      Atomics.store(surf.i32, K.SH_LOCK, 0);
+      Atomics.notify(surf.i32, K.SH_LOCK);
       device.queue.writeTexture({ texture: c.tex }, c.scratch,
         { bytesPerRow: surf.w * 4 }, { width: surf.w, height: surf.h });
       c.seq = seq;
@@ -587,7 +601,8 @@ function startCompositor(kernel, canvas, device) {
   // disabled), so the hidden-tab honest pause is asserted by freezing the
   // clock and watching the wake counters go flat.
   var stats = { frames: 0, submits: 0, skipped: 0, parks: 0, wakes: 0,
-                deviceLosses: 0, recoveries: 0 };   // #551 recovery accounting
+                deviceLosses: 0, recoveries: 0,     // #551 recovery accounting
+                shmContended: 0 };                  // #790 SH_LOCK contention retries
   self.__compositorStats = stats;   // test probe (tests/browser/os-compositor.mjs)
   initGpuState();                   // first build of the device-derived state
   var lastSig = null;
@@ -921,6 +936,9 @@ function startCompositor(kernel, canvas, device) {
     }
     device.queue.submit([enc.finish()]);
     stats.submits++;
+    // A skipped shm upload (SH_LOCK contention, #790) leaves a surface one
+    // frame behind: forget the signature so the next rAF re-submits.
+    if (uploadRetry) { uploadRetry = false; lastSig = null; }
     requestAnimationFrame(draw);   // a dirty frame always re-arms (GRACE fresh)
   }
   // Every kernel-side scene change (all _bumpWm sites, gpu presents,

@@ -160,11 +160,12 @@ const cmd = async (conn, type, i32s) => {
 };
 
 // ---- surface-side helpers (test_wm.js shape) ----
-function makeFb(w, h) {
+function makeFb(w, h, gen) {     // gen: the configure serial answered (#790)
   const sab = new SharedArrayBuffer(K.SH_HDR_BYTES + 2 * w * h * 4);
   const i32 = new Int32Array(sab);
   i32[K.SH_MAGIC] = K.SH_MAGIC_VALUE;
   i32[K.SH_W] = w; i32[K.SH_H] = h;
+  i32[K.SH_GEN] = gen | 0;
   return { sab, i32, u8: new Uint8Array(sab), w, h };
 }
 function makeRing(cap) {
@@ -442,15 +443,16 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('client got WINDOW_RESIZED', rr.length === 1 &&
     rr[0].type === K.WMEV.WINDOW_RESIZED && rr[0].win === c1.sid &&
     rr[0].w[0] === 100 && rr[0].w[1] === 70, JSON.stringify(rr));
-  const fbR = makeFb(100, 70);
+  const rSer = rr[0].w[2];                             // configure serial (#790)
+  const fbR = makeFb(100, 70, rSer);
   present(fbR, [50, 60, 70, 255]);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fbR.sab, ring: null });
-  const rAck = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: c1.sid, w: 100, h: 70 });
+  const rAck = await rpc(appPid, K.OP.SURFACE_CONFIGURE, { sid: c1.sid, w: 100, h: 70, serial: rSer });
   check('SURFACE_CONFIGURE ack ok', !rAck.errno, JSON.stringify(rAck));
   f = await readEvent(wm);
-  check('EV_CONFIGURED { sid, w, h } at the ack', f.type === WMP.EV_CONFIGURED &&
-    f.g(0) === c1.sid && f.g(1) === 100 && f.g(2) === 70,
-    JSON.stringify([f.type, f.g(0), f.g(1), f.g(2)]));
+  check('EV_CONFIGURED { sid, w, h, serial } at the ack (#790)', f.type === WMP.EV_CONFIGURED &&
+    f.g(0) === c1.sid && f.g(1) === 100 && f.g(2) === 70 && f.g(3) === rSer,
+    JSON.stringify([f.type, f.g(0), f.g(1), f.g(2), f.g(3)]));
   check('kernel geometry follows the ack',
     kernel.wmList().find(s => s.sid === c1.sid).w === 100);
   f = await cmd(wm, WMP.RESIZE, [999, 64, 64]);

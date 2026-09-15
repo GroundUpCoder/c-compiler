@@ -141,16 +141,36 @@ SURFACE_SET_TITLE(id, title)
 SURFACE_SET_FLAGS(id, flags)           flag-word update (todos/0018; 0x1006):
                                        bit0 borderless, bit1 relative-mouse,
                                        bit2 resizable (todos/0021)
-SURFACE_CONFIGURE(id, w, h)            the client's resize ACK (todos/0019;
-                                       new fb SAB rides the wm-sabs channel)
+SURFACE_CONFIGURE(id, w, h, serial)    the client's resize ACK (todos/0019;
+                                       new fb SAB rides the wm-sabs channel).
+                                       Since #790 it NAMES the configure
+                                       serial the WINDOW_RESIZED record
+                                       carried (word [4]); the SAB's SH_GEN
+                                       must equal it; a retired/unknown/
+                                       backward serial is ESTALE (no change);
+                                       `decline: true` with no SAB retires
+                                       the serial (allocation failure) and
+                                       emits EV_CONFIGURE_DECLINED
 ```
 
 **shm SAB layout** (per surface): a 64-byte header — magic/version, w, h,
-format (RGBA8), flip index (Atomics), frameSeq, damage rect (reserved) —
+format (RGBA8), flip index (Atomics), frameSeq, **generation** (`SH_GEN`,
+#790: the configure serial the buffer was allocated for; 1 = create), the
+**frame-ownership word** (`SH_LOCK`, #790), damage rect (reserved) —
 followed by two framebuffers (`w*h*4` each). **Mailbox semantics**: producer
-writes the back buffer, flips, never blocks; newest frame wins; compositor
-samples the front buffer at its own rAF cadence. No tearing, no
-backpressure coupling between app frame rate and compositor.
+writes the back buffer, flips, never blocks on the compositor's cadence;
+newest frame wins; compositor samples the front buffer at its own rAF
+cadence. **Frame ownership is real since #790**: the consumer (compositor
+upload, kernel screenshot) holds `SH_LOCK` across its front-buffer copy and
+the producer takes it only across the flip (its memcpy targets the back
+buffer, which no consumer reads), so a copy in progress is never overwritten
+by the producer's next present — the pre-#790 two-buffer flip had exactly
+that race (`tests/kernel/test_shm_ownership.js` reproduces it as a red
+control). The compositor never waits (contention = keep the last good frame,
+retry next rAF); the producer's wait is bounded by one synchronous copy. A
+frame's identity is `(gen, seq)` — seq restarts per SAB, so the compositor's
+upload cache keys on the generation too (an equal-size reconfigure is a new
+buffer). No backpressure coupling between app frame rate and compositor.
 
 **gpu transport lifetime discipline**: the kernel imports each arriving
 bitmap then `close()`s it; if frames arrive faster than rAF, drop-oldest
@@ -1280,6 +1300,31 @@ RESIZE/EV_CONFIGURED, `test_wm_e2e.js` real-C resize leg,
   kernel immediately re-issues the configure for the still-pending size.
   A request that can't reach the client (dead process, full ring) leaves
   no pending state — nothing would ever ack it.
+- **Identities (#790, `logs/2026-09-15/790-frame-identity.md`)**: every
+  issued configure carries a per-surface monotonic SERIAL (WINDOW_RESIZED
+  word [4]; `SURFACE_RESIZE` replies with it; `EV_CONFIGURED` carries it as
+  its 4th word). The kernel keeps a bounded set of still-valid issued
+  configures (`WM_CFG_OUTSTANDING` = 4, oldest retire) plus the committed
+  serial; the ack must NAME its serial and its SAB's `SH_GEN` must equal
+  it. Accept = still-valid issued AND newer than committed (an intermediate
+  resize may still display; the newest target is re-issued under ITS
+  serial); unknown/retired/backward serials or dims that are not the
+  serial's are `ESTALE` and move nothing (the host releases the buffer,
+  counted host- and kernel-side). A client that cannot allocate the buffer
+  DECLINES the serial (`decline: true`, no SAB): the serial and everything
+  older retire, nothing stays pending, `EV_CONFIGURE_DECLINED {sid, serial,
+  w, h}` tells policy. gpu-transport frames ship with the committed serial
+  and the kernel closes a frame of a retired serial or a non-committed
+  size unseen (`wmFrameRejectedCount()`). Pointer records carry the
+  committed serial as their geometry epoch (ring word [6]). GET_STATE /
+  wmList expose buffer (w, h, gen, frameSeq), dst and configure (committed,
+  pending, outstanding) identities. SDL3's `SDL_GetWindowSizeInPixels` /
+  `SDL_GetWindowPixelDensity` / `SDL_GetWindowDisplayScale` answer 1:1
+  (1 buffer px = 1 screen px; a WM-scaled fixed-size window is presentation
+  policy the app never sees). Tests: `test_wm_frames.js` (kernel),
+  `test_shm_ownership.js` (real-thread ownership + red control),
+  `tests/host/test_surface_configure.js` (host adapters), browser
+  `os-ui-frames.mjs` (installed image, software + WebGPU storms/drag).
 - **Chrome**: non-borderless windows grew a `WM_BORDER` (4px) Win95-ish
   frame around title+client. Since #388 the DRAWN geometry and the HIT
   geometry are deliberately DIFFERENT — do not "fix" one to match the
