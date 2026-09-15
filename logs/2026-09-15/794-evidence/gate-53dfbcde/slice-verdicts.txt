@@ -1,0 +1,55 @@
+== blockfs
+blockfs suite: 15 passed, 0 failed  (86.3s)  [15/15 selected, 15/15 recorded]  summary: build/test-blockfs/summary.json
+  1 passed, 0 failed  (86.6s)  → build/test-run/summary.json
+exit=0
+== kernel-1
+[33m⚠ kernel suite: --filter=test_git_net_e2e.js,test_term_e2e.js,test_present_e2e.js,test_wm_service_e2e.js,test_netsurf_demos_e2e.js,test_cairo_e2e.js selected 6 of 211 files — this run covers PART of the suite.[0m
+kernel suite: 6 passed, 0 failed  (223.4s)  [6/211 selected, 6/211 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== kernel-2
+[33m⚠ kernel suite: --filter=test_netsurf_mutation_e2e.js,test_seed_e2e.js,test_netsurf_http_e2e.js,test_notepad_menu_e2e.js,test_win32_ports.js,test_recycle_e2e.js,test_sameboy_e2e.js,test_user32_e2e.js,test_mgpp_e2e.js,test_netsurf_select_e2e.js,test_deck_e2e.js,test_netsurf_select_reconvert_e2e.
+kernel suite: 54 passed, 0 failed, 6 carried from earlier run(s)  (310.8s)  [54/211 selected, 60/211 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== kernel-3
+[33m⚠ kernel suite: --filter=test_netsurf_events_e2e.js,test_netsurf_content_e2e.js,test_symbolfont_e2e.js,test_comdlg_diag_e2e.js,test_menubox_e2e.js,test_mgba_e2e.js,test_wm_lifecycle_policy.js,test_wm_lifecycle.js,test_wgpu_loopguard_headless_e2e.js,test_user32_lifecycle_policy.js,test_ui_lifecy
+kernel suite: 148 passed, 0 failed, 60 carried from earlier run(s)  (188.4s)  [148/211 selected, 208/211 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== kernel-osboot
+[33m⚠ kernel suite: --filter=test_os_boot.js selected 1 of 211 files — this run covers PART of the suite.[0m
+kernel suite: 1 passed, 0 failed, 210 carried from earlier run(s)  (731.0s)  [1/211 selected, 211/211 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== kernel-sibling
+[33m⚠ kernel suite: --filter=gucos-packages selected 2 of 211 files — this run covers PART of the suite.[0m
+kernel suite: 2 passed, 0 failed, 208 carried from earlier run(s)  (19.3s)  [2/211 selected, 210/211 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== light-1
+All mkpkg baseline checks passed
+  ok   first bake exits 0 (post-bake seal+version check passed)
+All host tests passed
+  3 passed, 0 failed  (344.2s)  → build/test-run/summary.json
+exit=0
+== py
+904 passed, 0 failed, 111 skipped
+  1 passed, 0 failed  (407.7s)  → build/test-run/summary.json
+exit=0
+== sweep-1
+browser os sweep: 2 passed, 0 failed  (257.6s)  [2/77 selected, 2/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-2
+browser os sweep: 4 passed, 0 failed, 2 carried from earlier run(s)  (272.7s)  [4/77 selected, 6/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-3
+browser os sweep: 3 passed, 0 failed, 6 carried from earlier run(s)  (269.4s)  [3/77 selected, 9/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-4
+browser os sweep: 5 passed, 0 failed, 9 carried from earlier run(s)  (268.5s)  [5/77 selected, 14/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-5
+browser os sweep: 13 passed, 0 failed, 14 carried from earlier run(s)  (259.2s)  [13/77 selected, 27/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-6
+browser os sweep: 34 passed, 0 failed, 27 carried from earlier run(s)  (286.0s)  [34/77 selected, 61/77 recorded]  summary: build/test-browser/summary.json
+exit=0
+== sweep-7
+browser os sweep: 16 passed, 0 failed, 61 carried from earlier run(s)  (53.5s)  [16/77 selected, 77/77 recorded]  summary: build/test-browser/summary.json
+exit=0

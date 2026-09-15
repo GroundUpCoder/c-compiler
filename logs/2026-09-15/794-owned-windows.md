@@ -171,3 +171,28 @@ claude-fable-5-1 — disclosed switch, Codex capped until 2026-09-19) REJECTED
    as cosmetic, not changed (rebuttal: the anchored-child `animRootSid`
    mechanism is scene-side and would need its own review; no correctness
    effect).
+
+## Re-review APPROVED; mapped gate on exact 53dfbcde — GREEN (sliced)
+
+Reviewer thread 01a0a256-3dbd-7211-b78c-21c7f5a587b5 re-reviewed the
+counter-pass and APPROVED exact 53dfbcde (range 6a9277d5..53dfbcde), all six
+findings closed (1–2 fixed, 3 → #795, 4–5 fixed, 6 rebuttal accepted).
+
+`node tests/run.js --diff 6a9277d5` on this tip maps to all 25 suites
+(compiler.js changed; only `netsurf-patch` omitted). Executed as foreground
+slices under the tool cap, one heavy suite at a time, with the kernel and
+browser records PURGED first so every row below is this tip's own:
+
+- `todos` 3/3, `unit` 850/0/3, `host` all files — exit 0; `blockfs` 15/15;
+  run.py categories 904 passed / 0 failed / 111 skipped — exit 0.
+- `kernel`: 211/211 recorded (test_wm_owned.js is the 211th), 0 failed,
+  `resumed: 0`; slices in `gate-53dfbcde/kernel-slices.json`;
+  `test_os_boot.js` solo 731 s; sibling members last.
+- `sweep`: 77/77 recorded, 0 failed, `resumed: 0`; seven slices
+  (`sweep-slices.json`), `os-ui-lifecycle.mjs` included.
+
+Records: `gate-53dfbcde/kernel-summary.json`, `browser-summary.json`
+(`done: true`, `recorded == total`, zero non-pass), `slice-verdicts.txt`.
+No single run-level summary exists for a sliced gate; these merged per-suite
+records are the evidence. Integration: fast-forward of main to this tip.
+Not deployed (live edge v291; main now carries image 294).
