@@ -171,3 +171,41 @@ REJECTED 7799eb32..d5a04892 with one blocking and nine lesser findings:
 
 Re-review of the exact counter-pass tip and the mapped gate on it are
 recorded below.
+
+## Re-review APPROVED; mapped gate on exact 229f8418 — GREEN (sliced)
+
+Reviewer thread 01a0a73c-8aae-75ee-b218-377ff863ffaa re-reviewed the
+counter-pass and APPROVED exact 229f8418 (range 7799eb32..229f8418), all ten
+round-1 findings closed (`790-evidence/review-round1.md`, `review-round2.md`).
+Two non-blocking nits from round 2 — the `790-evidence/` folder did not yet
+exist at the tip, and this section was still to be appended — are closed by
+this docs-only commit (evidence and records are exempt from re-review).
+
+`node tests/run.js --diff 7799eb32` on this tip maps to all 25 suites
+(compiler.js changed; only `netsurf-patch` omitted). Executed as foreground
+slices under the tool cap, one heavy suite at a time, with the kernel and
+browser records PURGED first so every row below is this tip's own:
+
+- `todos` 3/3, `unit` 850/0/3, `host` all files (incl. the new
+  `test_compositor_shm.js` and `test_surface_configure.js`) — exit 0;
+  `blockfs` 15/15; run.py categories 904 passed / 0 failed / 111 skipped.
+- `kernel`: 213/213 recorded (test_wm_frames.js, test_shm_ownership.js are
+  the two new members), 0 failed, `resumed: 0`; slices in
+  `gate-229f8418/kernel-slices.json`. `test_os_boot.js` solo: the FIRST run
+  hit the 900 s cap two checks from the end with zero failed checks
+  (recorded as a timeout, `slice-verdicts.txt`); the solo rerun on the idle
+  machine passed in 711 s and REPLACED that row (the merged record shows
+  zero non-pass). Sibling members last.
+- `sweep`: 78/78 recorded, 0 failed, `resumed: 0`; seven slices
+  (`sweep-slices.json`), `os-ui-frames.mjs` and `os-gpubox.mjs` (its new
+  `framesRejected === 0` leg) included.
+
+Records: `gate-229f8418/kernel-summary.json`, `browser-summary.json`
+(`done: true`, `recorded == total`, zero non-pass), `slice-verdicts.txt`.
+No single run-level summary exists for a sliced gate; these merged per-suite
+records are the evidence. Browser evidence at this tip (four runs, one
+unloaded and three under `CC_UNDER_LOAD=10`, both drivers, every phase
+exactly w*h px / 0 stale / all probe deltas 0) is under
+`790-evidence/browser-under-load/` with `manifest-sha256.json` over the whole
+folder. Integration: fast-forward of main to this tip. Not deployed (live
+edge v291; main now carries image 295).

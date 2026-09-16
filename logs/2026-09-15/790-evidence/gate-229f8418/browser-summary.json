@@ -1,0 +1,711 @@
+{
+  "suite": "browser os sweep",
+  "startedAt": "2026-09-16T00:42:07.186Z",
+  "node": "v25.8.2",
+  "jobs": 1,
+  "repeat": 1,
+  "underLoad": 0,
+  "done": true,
+  "elapsedMs": 53770,
+  "filter": "os-edittab.mjs,os-vt2zoom.mjs,os-snap.mjs,os-scale.mjs,os-abort-backtrace.mjs,os-frame-lifecycle.mjs,os-debugtext.mjs,os-aero.mjs,os-gamepad.mjs,os-paint.mjs,os-sedit.mjs,os-cairo.mjs,os-gdi.mjs,os-spawntrace.mjs,os-null-trap.mjs,os-fsbtn.mjs",
+  "files": {
+    "total": 78,
+    "selected": 16,
+    "executed": 16,
+    "resumed": 0,
+    "carried": 62,
+    "recorded": 78
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-16T00:14:54.424Z",
+      "filter": "os-git-cli.mjs,os-sweep.mjs,os-hush-errexit.mjs",
+      "total": 78,
+      "selected": 2,
+      "executed": 2,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 255213
+    },
+    {
+      "startedAt": "2026-09-16T00:19:14.702Z",
+      "filter": "os-clang.mjs,os-objc-exceptions.mjs,os-netbridge-https.mjs,os-harness-unit.mjs",
+      "total": 78,
+      "selected": 4,
+      "executed": 4,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 270527
+    },
+    {
+      "startedAt": "2026-09-16T00:23:50.145Z",
+      "filter": "os-osk.mjs,os-shell.mjs,os-recycle.mjs",
+      "total": 78,
+      "selected": 3,
+      "executed": 3,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 255545
+    },
+    {
+      "startedAt": "2026-09-16T00:28:11.108Z",
+      "filter": "os-mgpp.mjs,os-fileman.mjs,os-gcode.mjs,os-touch.mjs,os-drop.mjs",
+      "total": 78,
+      "selected": 5,
+      "executed": 5,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 267373
+    },
+    {
+      "startedAt": "2026-09-16T00:32:42.969Z",
+      "filter": "os-wheel.mjs,os-vt1mobile.mjs,os-foundation.mjs,os-compositor.mjs,os-renderclip.mjs,os-warmpool.mjs,os-ctxmenu.mjs,os-foundation-arrays.mjs,os-keybind.mjs,os-saver.mjs,os-doompage-motion.mjs,os-gpubox.mjs,os-egress.mjs",
+      "total": 78,
+      "selected": 13,
+      "executed": 13,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 260129
+    },
+    {
+      "startedAt": "2026-09-16T00:37:07.991Z",
+      "filter": "os-devloss.mjs,os-minimal.mjs,os-doom.mjs,os-term.mjs,os-objc.mjs,os-sounds.mjs,os-quake.mjs,os-git-net.mjs,os-gucman.mjs,os-spawn-build.mjs,os-clipboard.mjs,os-deck.mjs,os-present.mjs,os-wm.mjs,os-fontbridge.mjs,os-sameboy.mjs,os-user32.mjs,os-undo.mjs,os-hires.mjs,os-pollball.mjs,os-vsync.mjs,os-vt.mjs,os-boots.mjs,os-mobile2x.mjs,os-rendertarget.mjs,os-small.mjs,os-paste-mac.mjs,os-winmine.mjs,os-loopguard.mjs,os-doompage-renders.mjs,os-overview.mjs,os-ui-lifecycle.mjs,os-rust.mjs,os-screen.mjs,os-ui-frames.mjs",
+      "total": 78,
+      "selected": 35,
+      "executed": 35,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 294065
+    },
+    {
+      "startedAt": "2026-09-16T00:42:07.186Z",
+      "filter": "os-edittab.mjs,os-vt2zoom.mjs,os-snap.mjs,os-scale.mjs,os-abort-backtrace.mjs,os-frame-lifecycle.mjs,os-debugtext.mjs,os-aero.mjs,os-gamepad.mjs,os-paint.mjs,os-sedit.mjs,os-cairo.mjs,os-gdi.mjs,os-spawntrace.mjs,os-null-trap.mjs,os-fsbtn.mjs",
+      "total": 78,
+      "selected": 16,
+      "executed": 16,
+      "resumed": 0,
+      "jobs": 1,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 53770
+    }
+  ],
+  "results": [
+    {
+      "file": "os-git-cli.mjs",
+      "status": "pass",
+      "ms": 252250,
+      "log": "build/test-browser/os-git-cli.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:14:54.424Z"
+    },
+    {
+      "file": "os-hush-errexit.mjs",
+      "status": "pass",
+      "ms": 2962,
+      "log": "build/test-browser/os-hush-errexit.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:14:54.424Z"
+    },
+    {
+      "file": "os-clang.mjs",
+      "status": "pass",
+      "ms": 223457,
+      "log": "build/test-browser/os-clang.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:19:14.702Z"
+    },
+    {
+      "file": "os-harness-unit.mjs",
+      "status": "pass",
+      "ms": 59,
+      "log": "build/test-browser/os-harness-unit.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:19:14.702Z"
+    },
+    {
+      "file": "os-netbridge-https.mjs",
+      "status": "pass",
+      "ms": 469,
+      "log": "build/test-browser/os-netbridge-https.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:19:14.702Z"
+    },
+    {
+      "file": "os-objc-exceptions.mjs",
+      "status": "pass",
+      "ms": 46541,
+      "log": "build/test-browser/os-objc-exceptions.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:19:14.702Z"
+    },
+    {
+      "file": "os-osk.mjs",
+      "status": "pass",
+      "ms": 93995,
+      "log": "build/test-browser/os-osk.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:23:50.145Z"
+    },
+    {
+      "file": "os-recycle.mjs",
+      "status": "pass",
+      "ms": 50070,
+      "log": "build/test-browser/os-recycle.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:23:50.145Z"
+    },
+    {
+      "file": "os-shell.mjs",
+      "status": "pass",
+      "ms": 111478,
+      "log": "build/test-browser/os-shell.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:23:50.145Z"
+    },
+    {
+      "file": "os-drop.mjs",
+      "status": "pass",
+      "ms": 5753,
+      "log": "build/test-browser/os-drop.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:28:11.108Z"
+    },
+    {
+      "file": "os-fileman.mjs",
+      "status": "pass",
+      "ms": 80459,
+      "log": "build/test-browser/os-fileman.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:28:11.108Z"
+    },
+    {
+      "file": "os-gcode.mjs",
+      "status": "pass",
+      "ms": 70413,
+      "log": "build/test-browser/os-gcode.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:28:11.108Z"
+    },
+    {
+      "file": "os-mgpp.mjs",
+      "status": "pass",
+      "ms": 73321,
+      "log": "build/test-browser/os-mgpp.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:28:11.108Z"
+    },
+    {
+      "file": "os-touch.mjs",
+      "status": "pass",
+      "ms": 37425,
+      "log": "build/test-browser/os-touch.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:28:11.108Z"
+    },
+    {
+      "file": "os-compositor.mjs",
+      "status": "pass",
+      "ms": 22759,
+      "log": "build/test-browser/os-compositor.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-ctxmenu.mjs",
+      "status": "pass",
+      "ms": 18800,
+      "log": "build/test-browser/os-ctxmenu.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-doompage-motion.mjs",
+      "status": "pass",
+      "ms": 14072,
+      "log": "build/test-browser/os-doompage-motion.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-egress.mjs",
+      "status": "pass",
+      "ms": 15458,
+      "log": "build/test-browser/os-egress.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-foundation-arrays.mjs",
+      "status": "pass",
+      "ms": 16733,
+      "log": "build/test-browser/os-foundation-arrays.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-foundation.mjs",
+      "status": "pass",
+      "ms": 27043,
+      "log": "build/test-browser/os-foundation.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-gpubox.mjs",
+      "status": "pass",
+      "ms": 15059,
+      "log": "build/test-browser/os-gpubox.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-keybind.mjs",
+      "status": "pass",
+      "ms": 15321,
+      "log": "build/test-browser/os-keybind.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-renderclip.mjs",
+      "status": "pass",
+      "ms": 4789,
+      "log": "build/test-browser/os-renderclip.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-saver.mjs",
+      "status": "pass",
+      "ms": 15260,
+      "log": "build/test-browser/os-saver.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-vt1mobile.mjs",
+      "status": "pass",
+      "ms": 32758,
+      "log": "build/test-browser/os-vt1mobile.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-warmpool.mjs",
+      "status": "pass",
+      "ms": 18118,
+      "log": "build/test-browser/os-warmpool.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-wheel.mjs",
+      "status": "pass",
+      "ms": 43949,
+      "log": "build/test-browser/os-wheel.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:32:42.969Z"
+    },
+    {
+      "file": "os-boots.mjs",
+      "status": "pass",
+      "ms": 6248,
+      "log": "build/test-browser/os-boots.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-clipboard.mjs",
+      "status": "pass",
+      "ms": 9230,
+      "log": "build/test-browser/os-clipboard.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-deck.mjs",
+      "status": "pass",
+      "ms": 9194,
+      "log": "build/test-browser/os-deck.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-devloss.mjs",
+      "status": "pass",
+      "ms": 14679,
+      "log": "build/test-browser/os-devloss.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-doom.mjs",
+      "status": "pass",
+      "ms": 14022,
+      "log": "build/test-browser/os-doom.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-doompage-renders.mjs",
+      "status": "pass",
+      "ms": 5069,
+      "log": "build/test-browser/os-doompage-renders.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-fontbridge.mjs",
+      "status": "pass",
+      "ms": 8124,
+      "log": "build/test-browser/os-fontbridge.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-git-net.mjs",
+      "status": "pass",
+      "ms": 11270,
+      "log": "build/test-browser/os-git-net.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-gucman.mjs",
+      "status": "pass",
+      "ms": 11046,
+      "log": "build/test-browser/os-gucman.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-hires.mjs",
+      "status": "pass",
+      "ms": 7444,
+      "log": "build/test-browser/os-hires.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-loopguard.mjs",
+      "status": "pass",
+      "ms": 5237,
+      "log": "build/test-browser/os-loopguard.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-minimal.mjs",
+      "status": "pass",
+      "ms": 12858,
+      "log": "build/test-browser/os-minimal.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-mobile2x.mjs",
+      "status": "pass",
+      "ms": 5612,
+      "log": "build/test-browser/os-mobile2x.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-objc.mjs",
+      "status": "pass",
+      "ms": 11668,
+      "log": "build/test-browser/os-objc.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-overview.mjs",
+      "status": "pass",
+      "ms": 5088,
+      "log": "build/test-browser/os-overview.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-paste-mac.mjs",
+      "status": "pass",
+      "ms": 4935,
+      "log": "build/test-browser/os-paste-mac.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-pollball.mjs",
+      "status": "pass",
+      "ms": 7514,
+      "log": "build/test-browser/os-pollball.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-present.mjs",
+      "status": "pass",
+      "ms": 9019,
+      "log": "build/test-browser/os-present.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-quake.mjs",
+      "status": "pass",
+      "ms": 11213,
+      "log": "build/test-browser/os-quake.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-rendertarget.mjs",
+      "status": "pass",
+      "ms": 5760,
+      "log": "build/test-browser/os-rendertarget.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-rust.mjs",
+      "status": "pass",
+      "ms": 4408,
+      "log": "build/test-browser/os-rust.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-sameboy.mjs",
+      "status": "pass",
+      "ms": 7961,
+      "log": "build/test-browser/os-sameboy.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-screen.mjs",
+      "status": "pass",
+      "ms": 4407,
+      "log": "build/test-browser/os-screen.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-small.mjs",
+      "status": "pass",
+      "ms": 5748,
+      "log": "build/test-browser/os-small.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-sounds.mjs",
+      "status": "pass",
+      "ms": 10576,
+      "log": "build/test-browser/os-sounds.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-spawn-build.mjs",
+      "status": "pass",
+      "ms": 10515,
+      "log": "build/test-browser/os-spawn-build.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-term.mjs",
+      "status": "pass",
+      "ms": 11375,
+      "log": "build/test-browser/os-term.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-ui-frames.mjs",
+      "status": "pass",
+      "ms": 6917,
+      "log": "build/test-browser/os-ui-frames.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-ui-lifecycle.mjs",
+      "status": "pass",
+      "ms": 18026,
+      "log": "build/test-browser/os-ui-lifecycle.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-undo.mjs",
+      "status": "pass",
+      "ms": 6280,
+      "log": "build/test-browser/os-undo.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-user32.mjs",
+      "status": "pass",
+      "ms": 7823,
+      "log": "build/test-browser/os-user32.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-vsync.mjs",
+      "status": "pass",
+      "ms": 6357,
+      "log": "build/test-browser/os-vsync.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-vt.mjs",
+      "status": "pass",
+      "ms": 6361,
+      "log": "build/test-browser/os-vt.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-winmine.mjs",
+      "status": "pass",
+      "ms": 5724,
+      "log": "build/test-browser/os-winmine.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-wm.mjs",
+      "status": "pass",
+      "ms": 6340,
+      "log": "build/test-browser/os-wm.mjs.log",
+      "carried": true,
+      "carriedFrom": "2026-09-16T00:37:07.991Z"
+    },
+    {
+      "file": "os-abort-backtrace.mjs",
+      "status": "pass",
+      "ms": 3262,
+      "log": "build/test-browser/os-abort-backtrace.mjs.log"
+    },
+    {
+      "file": "os-aero.mjs",
+      "status": "pass",
+      "ms": 3435,
+      "log": "build/test-browser/os-aero.mjs.log"
+    },
+    {
+      "file": "os-cairo.mjs",
+      "status": "pass",
+      "ms": 2954,
+      "log": "build/test-browser/os-cairo.mjs.log"
+    },
+    {
+      "file": "os-debugtext.mjs",
+      "status": "pass",
+      "ms": 3471,
+      "log": "build/test-browser/os-debugtext.mjs.log"
+    },
+    {
+      "file": "os-edittab.mjs",
+      "status": "pass",
+      "ms": 4644,
+      "log": "build/test-browser/os-edittab.mjs.log"
+    },
+    {
+      "file": "os-frame-lifecycle.mjs",
+      "status": "pass",
+      "ms": 3447,
+      "log": "build/test-browser/os-frame-lifecycle.mjs.log"
+    },
+    {
+      "file": "os-fsbtn.mjs",
+      "status": "pass",
+      "ms": 2649,
+      "log": "build/test-browser/os-fsbtn.mjs.log"
+    },
+    {
+      "file": "os-gamepad.mjs",
+      "status": "pass",
+      "ms": 3289,
+      "log": "build/test-browser/os-gamepad.mjs.log"
+    },
+    {
+      "file": "os-gdi.mjs",
+      "status": "pass",
+      "ms": 2912,
+      "log": "build/test-browser/os-gdi.mjs.log"
+    },
+    {
+      "file": "os-null-trap.mjs",
+      "status": "pass",
+      "ms": 2817,
+      "log": "build/test-browser/os-null-trap.mjs.log"
+    },
+    {
+      "file": "os-paint.mjs",
+      "status": "pass",
+      "ms": 3176,
+      "log": "build/test-browser/os-paint.mjs.log"
+    },
+    {
+      "file": "os-scale.mjs",
+      "status": "pass",
+      "ms": 3545,
+      "log": "build/test-browser/os-scale.mjs.log"
+    },
+    {
+      "file": "os-sedit.mjs",
+      "status": "pass",
+      "ms": 3098,
+      "log": "build/test-browser/os-sedit.mjs.log"
+    },
+    {
+      "file": "os-snap.mjs",
+      "status": "pass",
+      "ms": 4162,
+      "log": "build/test-browser/os-snap.mjs.log"
+    },
+    {
+      "file": "os-spawntrace.mjs",
+      "status": "pass",
+      "ms": 2772,
+      "log": "build/test-browser/os-spawntrace.mjs.log"
+    },
+    {
+      "file": "os-vt2zoom.mjs",
+      "status": "pass",
+      "ms": 4130,
+      "log": "build/test-browser/os-vt2zoom.mjs.log"
+    }
+  ],
+  "evidence": {
+    "expected": 16,
+    "fresh": 16,
+    "resumedExistenceOnly": 0
+  }
+}

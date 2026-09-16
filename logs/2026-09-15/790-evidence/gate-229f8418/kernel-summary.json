@@ -1,0 +1,1802 @@
+{
+  "suite": "kernel suite",
+  "startedAt": "2026-09-15T23:44:49.070Z",
+  "node": "v25.8.2",
+  "jobs": 6,
+  "repeat": 1,
+  "underLoad": 0,
+  "done": true,
+  "elapsedMs": 711300,
+  "filter": "test_os_boot.js",
+  "files": {
+    "total": 213,
+    "selected": 1,
+    "executed": 1,
+    "resumed": 0,
+    "carried": 212,
+    "recorded": 213
+  },
+  "runs": [
+    {
+      "startedAt": "2026-09-15T23:12:14.125Z",
+      "filter": "test_git_net_e2e.js,test_term_e2e.js,test_present_e2e.js,test_wm_service_e2e.js,test_netsurf_demos_e2e.js,test_cairo_e2e.js",
+      "total": 213,
+      "selected": 6,
+      "executed": 6,
+      "resumed": 0,
+      "jobs": 6,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 408076
+    },
+    {
+      "startedAt": "2026-09-15T23:19:21.892Z",
+      "filter": "test_netsurf_mutation_e2e.js,test_seed_e2e.js,test_netsurf_http_e2e.js,test_notepad_menu_e2e.js,test_win32_ports.js,test_recycle_e2e.js,test_sameboy_e2e.js,test_user32_e2e.js,test_mgpp_e2e.js,test_netsurf_select_e2e.js,test_deck_e2e.js,test_netsurf_select_reconvert_e2e.js,test_os_apps_e2e.js,test_gucman_libgit2_e2e.js,test_keymap_e2e.js,test_punes_e2e.js,test_sounds_e2e.js,test_saver_e2e.js,test_ctxmenu_e2e.js,test_snap_e2e.js,test_mgp_livereload_e2e.js,test_software_e2e.js,test_gcode_native.js,test_clipboard_e2e.js,test_fileman_ops_e2e.js,test_cc_win32_e2e.js,test_repl_pty_e2e.js,test_overview_e2e.js,test_gcode_timeout_e2e.js,test_gcode_intr_chatty_e2e.js,test_gcode_intr_honesty_e2e.js,test_multiface_font_e2e.js,test_netsurf_pointer_e2e.js,test_netsurf_filegadget_e2e.js,test_gucman_e2e.js,test_openwith_e2e.js,test_hostpaste_e2e.js,test_winmine_e2e.js,test_paint_e2e.js,test_ksvc_e2e.js,test_micropython_stdlib_e2e.js,test_sdl_delay_e2e.js,test_micropython_script_e2e.js,test_notepad_e2e.js,test_calc_e2e.js,test_defaults_sync_e2e.js,test_ctlpanel_e2e.js,test_lb_vscroll_e2e.js,test_jobctl_tty_e2e.js,test_cpython_clang_e2e.js,test_rust_e2e.js,test_heavylock_e2e.js,test_wm_owned.js,test_pipes_spsc.js,test_wm_frames.js,test_shm_ownership.js",
+      "total": 213,
+      "selected": 56,
+      "executed": 56,
+      "resumed": 0,
+      "jobs": 6,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 322741
+    },
+    {
+      "startedAt": "2026-09-15T23:24:49.408Z",
+      "filter": "test_netsurf_events_e2e.js,test_netsurf_content_e2e.js,test_symbolfont_e2e.js,test_comdlg_diag_e2e.js,test_menubox_e2e.js,test_mgba_e2e.js,test_wm_lifecycle_policy.js,test_wm_lifecycle.js,test_wgpu_loopguard_headless_e2e.js,test_user32_lifecycle_policy.js,test_ui_lifecycle_e2e.js,test_trap_report_delivery.js,test_taskbar_owner_e2e.js,test_syscall_restart_e2e.js,test_start_failure_e2e.js,test_spawn_build_e2e.js,test_small_e2e.js,test_sleep_overshoot_e2e.js,test_shell_restart_e2e.js,test_sedit_e2e.js,test_sedit_core.js,test_sdlttf_e2e.js,test_sdl_util_e2e.js,test_sdl_rotated_e2e.js,test_sdl_rendertarget_e2e.js,test_sdl_raster_e2e.js,test_sdl_events_e2e.js,test_sdl_debugtext_e2e.js,test_render_vsync_e2e.js,test_objc_exceptions_e2e.js,test_objc_e2e.js,test_null_trap_e2e.js,test_loopguard_headless_e2e.js,test_hush_errexit_e2e.js,test_gucman_upgrade_e2e.js,test_gucman_scripts_e2e.js,test_gucedit.js,test_gamepad_e2e.js,test_frame_lifecycle_e2e.js,test_foundation_e2e.js,test_foundation_arrays_e2e.js,test_cc_lua_sqlite_e2e.js,test_cc_imagelibs_e2e.js,test_cc_freetype_e2e.js,test_cc_cjson_e2e.js,test_abort_backtrace_e2e.js,test_netsurf_e2e.js,test_clang_pkgs_e2e.js,test_edit_punct_repro.js,test_fileman_nav_e2e.js,test_gdi32_e2e.js,test_vi_e2e.js,test_netsurf_layout_e2e.js,test_cmdalt_e2e.js,test_curl_e2e.js,test_git_e2e.js,test_netsurf_img_reconvert_e2e.js,test_netsurf_js_e2e.js,test_waitevent_e2e.js,test_rust_std_e2e.js,test_listview_e2e.js,test_ticketbridge_e2e.js,test_fileman_e2e.js,test_pbcopy_e2e.js,test_http_e2e.js,test_gucman_apps_e2e.js,test_vsync_boot_e2e.js,test_wait_e2e.js,test_itimer_e2e.js,test_spawn_budget_kill_honesty.js,test_desk_icons_e2e.js,test_wm.js,test_netsurf_restyle_e2e.js,test_signals_e2e.js,test_netsurf_console_e2e.js,test_kernel32_e2e.js,test_desktop_defaults_e2e.js,test_gucman_doom_e2e.js,test_netsurf_dragslop_e2e.js,test_gucman_quake_e2e.js,test_jobctl_e2e.js,test_wm_fatal_e2e.js,test_comp_park_e2e.js,test_egress_e2e.js,test_cursor_e2e.js,test_os_boot_kill_honesty.js,test_gcode_intr_flush_e2e.js,test_gpubox_menu_e2e.js,test_gpubox_dawn_e2e.js,test_netbridge_e2e.js,test_minesweeper_sample_e2e.js,test_spsc_e2e.js,test_gcode_step2_e2e.js,test_cc_libpng_e2e.js,test_fileman_watch_e2e.js,test_module_cache.js,test_fswatch_e2e.js,test_stdinc_e2e.js,test_skey_e2e.js,test_cc_srclib_e2e.js,test_cc_libjpeg_e2e.js,test_sockwake_e2e.js,test_gucman_sources_e2e.js,test_sdl_render_e2e.js,test_fs_e2e.js,test_strace_e2e.js,test_rust_pkgs_e2e.js,test_code_e2e.js,test_readdir_page.js,test_boot_guard_e2e.js,test_symlink_create_e2e.js,test_pipes_e2e.js,test_hostclip_e2e.js,test_sockets_e2e.js,test_e2e.js,test_http.js,test_realpath_e2e.js,test_keybind_registry.js,test_kernel.js,test_rofs_e2e.js,test_pty_e2e.js,test_wm_e2e.js,test_gdiplus_e2e.js,test_gpu_multiwin_dawn_e2e.js,test_vdso_e2e.js,test_cc_srclib.js,test_wm_policy.js,test_audio_e2e.js,test_cfgstore_e2e.js,test_tty_e2e.js,test_read_fill_e2e.js,test_wm_aero.js,test_overlays.js,test_win32rc.js,test_audio.js,test_sockets.js,test_wm_anchored.js,test_keybind.js,test_pty.js,test_mounts.js,test_zerolen_read.js,test_pipes.js,test_strace.js,test_rofs.js,test_procfs.js,test_vsync.js,test_vdso.js,test_tty.js",
+      "total": 213,
+      "selected": 148,
+      "executed": 148,
+      "resumed": 0,
+      "jobs": 6,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 190736
+    },
+    {
+      "startedAt": "2026-09-15T23:43:22.453Z",
+      "filter": "gucos-packages",
+      "total": 213,
+      "selected": 2,
+      "executed": 2,
+      "resumed": 0,
+      "jobs": 6,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 55029
+    },
+    {
+      "startedAt": "2026-09-15T23:44:49.070Z",
+      "filter": "test_os_boot.js",
+      "total": 213,
+      "selected": 1,
+      "executed": 1,
+      "resumed": 0,
+      "jobs": 6,
+      "repeat": 1,
+      "underLoad": 0,
+      "done": true,
+      "elapsedMs": 711300
+    }
+  ],
+  "results": [
+    {
+      "file": "test_git_net_e2e.js",
+      "status": "pass",
+      "ms": 205285,
+      "log": "build/test-kernel/test_git_net_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:12:14.125Z"
+    },
+    {
+      "file": "test_term_e2e.js",
+      "status": "pass",
+      "ms": 225764,
+      "log": "build/test-kernel/test_term_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:12:14.125Z"
+    },
+    {
+      "file": "test_cairo_e2e.js",
+      "status": "pass",
+      "ms": 6556,
+      "log": "build/test-kernel/test_cairo_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:12:14.125Z"
+    },
+    {
+      "file": "test_netsurf_demos_e2e.js",
+      "status": "pass",
+      "ms": 53268,
+      "log": "build/test-kernel/test_netsurf_demos_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:12:14.125Z"
+    },
+    {
+      "file": "test_wm_service_e2e.js",
+      "status": "pass",
+      "ms": 60631,
+      "log": "build/test-kernel/test_wm_service_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:12:14.125Z"
+    },
+    {
+      "file": "test_present_e2e.js",
+      "status": "pass",
+      "ms": 202787,
+      "log": "build/test-kernel/test_present_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:12:14.125Z"
+    },
+    {
+      "file": "test_wm_frames.js",
+      "status": "pass",
+      "ms": 91,
+      "log": "build/test-kernel/test_wm_frames.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_wm_owned.js",
+      "status": "pass",
+      "ms": 562,
+      "log": "build/test-kernel/test_wm_owned.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_shm_ownership.js",
+      "status": "pass",
+      "ms": 623,
+      "log": "build/test-kernel/test_shm_ownership.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_pipes_spsc.js",
+      "status": "pass",
+      "ms": 69,
+      "log": "build/test-kernel/test_pipes_spsc.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_recycle_e2e.js",
+      "status": "pass",
+      "ms": 22334,
+      "log": "build/test-kernel/test_recycle_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_notepad_menu_e2e.js",
+      "status": "pass",
+      "ms": 28121,
+      "log": "build/test-kernel/test_notepad_menu_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_netsurf_http_e2e.js",
+      "status": "pass",
+      "ms": 35798,
+      "log": "build/test-kernel/test_netsurf_http_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_sameboy_e2e.js",
+      "status": "pass",
+      "ms": 20915,
+      "log": "build/test-kernel/test_sameboy_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_user32_e2e.js",
+      "status": "pass",
+      "ms": 19951,
+      "log": "build/test-kernel/test_user32_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_mgpp_e2e.js",
+      "status": "pass",
+      "ms": 19507,
+      "log": "build/test-kernel/test_mgpp_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_netsurf_select_e2e.js",
+      "status": "pass",
+      "ms": 17591,
+      "log": "build/test-kernel/test_netsurf_select_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_deck_e2e.js",
+      "status": "pass",
+      "ms": 18990,
+      "log": "build/test-kernel/test_deck_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_netsurf_select_reconvert_e2e.js",
+      "status": "pass",
+      "ms": 17381,
+      "log": "build/test-kernel/test_netsurf_select_reconvert_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_os_apps_e2e.js",
+      "status": "pass",
+      "ms": 18317,
+      "log": "build/test-kernel/test_os_apps_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_keymap_e2e.js",
+      "status": "pass",
+      "ms": 17916,
+      "log": "build/test-kernel/test_keymap_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_sounds_e2e.js",
+      "status": "pass",
+      "ms": 14659,
+      "log": "build/test-kernel/test_sounds_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_saver_e2e.js",
+      "status": "pass",
+      "ms": 13803,
+      "log": "build/test-kernel/test_saver_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_ctxmenu_e2e.js",
+      "status": "pass",
+      "ms": 13105,
+      "log": "build/test-kernel/test_ctxmenu_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_snap_e2e.js",
+      "status": "pass",
+      "ms": 12370,
+      "log": "build/test-kernel/test_snap_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_mgp_livereload_e2e.js",
+      "status": "pass",
+      "ms": 12552,
+      "log": "build/test-kernel/test_mgp_livereload_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_clipboard_e2e.js",
+      "status": "pass",
+      "ms": 11749,
+      "log": "build/test-kernel/test_clipboard_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_gcode_native.js",
+      "status": "pass",
+      "ms": 14949,
+      "log": "build/test-kernel/test_gcode_native.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_netsurf_mutation_e2e.js",
+      "status": "pass",
+      "ms": 117448,
+      "log": "build/test-kernel/test_netsurf_mutation_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_fileman_ops_e2e.js",
+      "status": "pass",
+      "ms": 11994,
+      "log": "build/test-kernel/test_fileman_ops_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_overview_e2e.js",
+      "status": "pass",
+      "ms": 9854,
+      "log": "build/test-kernel/test_overview_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_gcode_timeout_e2e.js",
+      "status": "pass",
+      "ms": 10031,
+      "log": "build/test-kernel/test_gcode_timeout_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_gcode_intr_chatty_e2e.js",
+      "status": "pass",
+      "ms": 10032,
+      "log": "build/test-kernel/test_gcode_intr_chatty_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_gcode_intr_honesty_e2e.js",
+      "status": "pass",
+      "ms": 10032,
+      "log": "build/test-kernel/test_gcode_intr_honesty_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_multiface_font_e2e.js",
+      "status": "pass",
+      "ms": 9490,
+      "log": "build/test-kernel/test_multiface_font_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_netsurf_pointer_e2e.js",
+      "status": "pass",
+      "ms": 8280,
+      "log": "build/test-kernel/test_netsurf_pointer_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_openwith_e2e.js",
+      "status": "pass",
+      "ms": 8353,
+      "log": "build/test-kernel/test_openwith_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_netsurf_filegadget_e2e.js",
+      "status": "pass",
+      "ms": 8720,
+      "log": "build/test-kernel/test_netsurf_filegadget_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_hostpaste_e2e.js",
+      "status": "pass",
+      "ms": 7543,
+      "log": "build/test-kernel/test_hostpaste_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_winmine_e2e.js",
+      "status": "pass",
+      "ms": 7886,
+      "log": "build/test-kernel/test_winmine_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_paint_e2e.js",
+      "status": "pass",
+      "ms": 7536,
+      "log": "build/test-kernel/test_paint_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_ksvc_e2e.js",
+      "status": "pass",
+      "ms": 7333,
+      "log": "build/test-kernel/test_ksvc_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_micropython_stdlib_e2e.js",
+      "status": "pass",
+      "ms": 7846,
+      "log": "build/test-kernel/test_micropython_stdlib_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_sdl_delay_e2e.js",
+      "status": "pass",
+      "ms": 7220,
+      "log": "build/test-kernel/test_sdl_delay_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_notepad_e2e.js",
+      "status": "pass",
+      "ms": 7389,
+      "log": "build/test-kernel/test_notepad_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_micropython_script_e2e.js",
+      "status": "pass",
+      "ms": 7683,
+      "log": "build/test-kernel/test_micropython_script_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_ctlpanel_e2e.js",
+      "status": "pass",
+      "ms": 7093,
+      "log": "build/test-kernel/test_ctlpanel_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_calc_e2e.js",
+      "status": "pass",
+      "ms": 7480,
+      "log": "build/test-kernel/test_calc_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_jobctl_tty_e2e.js",
+      "status": "pass",
+      "ms": 6083,
+      "log": "build/test-kernel/test_jobctl_tty_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_lb_vscroll_e2e.js",
+      "status": "pass",
+      "ms": 6417,
+      "log": "build/test-kernel/test_lb_vscroll_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_heavylock_e2e.js",
+      "status": "pass",
+      "ms": 5914,
+      "log": "build/test-kernel/test_heavylock_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_rust_e2e.js",
+      "status": "pass",
+      "ms": 6601,
+      "log": "build/test-kernel/test_rust_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_repl_pty_e2e.js",
+      "status": "pass",
+      "ms": 11381,
+      "log": "build/test-kernel/test_repl_pty_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_win32_ports.js",
+      "status": "pass",
+      "ms": 24719,
+      "log": "build/test-kernel/test_win32_ports.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_seed_e2e.js",
+      "status": "pass",
+      "ms": 39371,
+      "log": "build/test-kernel/test_seed_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_gucman_libgit2_e2e.js",
+      "status": "pass",
+      "ms": 20043,
+      "log": "build/test-kernel/test_gucman_libgit2_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_punes_e2e.js",
+      "status": "pass",
+      "ms": 14743,
+      "log": "build/test-kernel/test_punes_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_software_e2e.js",
+      "status": "pass",
+      "ms": 16006,
+      "log": "build/test-kernel/test_software_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_cc_win32_e2e.js",
+      "status": "pass",
+      "ms": 13095,
+      "log": "build/test-kernel/test_cc_win32_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_gucman_e2e.js",
+      "status": "pass",
+      "ms": 21631,
+      "log": "build/test-kernel/test_gucman_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_defaults_sync_e2e.js",
+      "status": "pass",
+      "ms": 8591,
+      "log": "build/test-kernel/test_defaults_sync_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_cpython_clang_e2e.js",
+      "status": "pass",
+      "ms": 7194,
+      "log": "build/test-kernel/test_cpython_clang_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:19:21.892Z"
+    },
+    {
+      "file": "test_trap_report_delivery.js",
+      "status": "pass",
+      "ms": 42,
+      "log": "build/test-kernel/test_trap_report_delivery.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_small_e2e.js",
+      "status": "pass",
+      "ms": 829,
+      "log": "build/test-kernel/test_small_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_user32_lifecycle_policy.js",
+      "status": "pass",
+      "ms": 3432,
+      "log": "build/test-kernel/test_user32_lifecycle_policy.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_foundation_arrays_e2e.js",
+      "status": "pass",
+      "ms": 3754,
+      "log": "build/test-kernel/test_foundation_arrays_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_wm_lifecycle_policy.js",
+      "status": "pass",
+      "ms": 2145,
+      "log": "build/test-kernel/test_wm_lifecycle_policy.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_wm_lifecycle.js",
+      "status": "pass",
+      "ms": 48,
+      "log": "build/test-kernel/test_wm_lifecycle.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_foundation_e2e.js",
+      "status": "pass",
+      "ms": 7719,
+      "log": "build/test-kernel/test_foundation_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_wm.js",
+      "status": "pass",
+      "ms": 2723,
+      "log": "build/test-kernel/test_wm.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_readdir_page.js",
+      "status": "pass",
+      "ms": 996,
+      "log": "build/test-kernel/test_readdir_page.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_http.js",
+      "status": "pass",
+      "ms": 813,
+      "log": "build/test-kernel/test_http.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_keybind_registry.js",
+      "status": "pass",
+      "ms": 745,
+      "log": "build/test-kernel/test_keybind_registry.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_kernel.js",
+      "status": "pass",
+      "ms": 737,
+      "log": "build/test-kernel/test_kernel.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_wm_policy.js",
+      "status": "pass",
+      "ms": 395,
+      "log": "build/test-kernel/test_wm_policy.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_wm_aero.js",
+      "status": "pass",
+      "ms": 308,
+      "log": "build/test-kernel/test_wm_aero.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_win32rc.js",
+      "status": "pass",
+      "ms": 90,
+      "log": "build/test-kernel/test_win32rc.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_audio.js",
+      "status": "pass",
+      "ms": 40,
+      "log": "build/test-kernel/test_audio.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sockets.js",
+      "status": "pass",
+      "ms": 46,
+      "log": "build/test-kernel/test_sockets.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_wm_anchored.js",
+      "status": "pass",
+      "ms": 46,
+      "log": "build/test-kernel/test_wm_anchored.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_keybind.js",
+      "status": "pass",
+      "ms": 41,
+      "log": "build/test-kernel/test_keybind.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_pty.js",
+      "status": "pass",
+      "ms": 46,
+      "log": "build/test-kernel/test_pty.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_zerolen_read.js",
+      "status": "pass",
+      "ms": 46,
+      "log": "build/test-kernel/test_zerolen_read.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_pipes.js",
+      "status": "pass",
+      "ms": 50,
+      "log": "build/test-kernel/test_pipes.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_strace.js",
+      "status": "pass",
+      "ms": 39,
+      "log": "build/test-kernel/test_strace.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_rofs.js",
+      "status": "pass",
+      "ms": 37,
+      "log": "build/test-kernel/test_rofs.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_vsync.js",
+      "status": "pass",
+      "ms": 32,
+      "log": "build/test-kernel/test_vsync.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_tty.js",
+      "status": "pass",
+      "ms": 31,
+      "log": "build/test-kernel/test_tty.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_vdso.js",
+      "status": "pass",
+      "ms": 31,
+      "log": "build/test-kernel/test_vdso.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_objc_e2e.js",
+      "status": "pass",
+      "ms": 6149,
+      "log": "build/test-kernel/test_objc_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_hush_errexit_e2e.js",
+      "status": "pass",
+      "ms": 603,
+      "log": "build/test-kernel/test_hush_errexit_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_objc_exceptions_e2e.js",
+      "status": "pass",
+      "ms": 11802,
+      "log": "build/test-kernel/test_objc_exceptions_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_start_failure_e2e.js",
+      "status": "pass",
+      "ms": 507,
+      "log": "build/test-kernel/test_start_failure_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_syscall_restart_e2e.js",
+      "status": "pass",
+      "ms": 406,
+      "log": "build/test-kernel/test_syscall_restart_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_spawn_build_e2e.js",
+      "status": "pass",
+      "ms": 3323,
+      "log": "build/test-kernel/test_spawn_build_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_null_trap_e2e.js",
+      "status": "pass",
+      "ms": 690,
+      "log": "build/test-kernel/test_null_trap_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_shell_restart_e2e.js",
+      "status": "pass",
+      "ms": 1233,
+      "log": "build/test-kernel/test_shell_restart_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_abort_backtrace_e2e.js",
+      "status": "pass",
+      "ms": 1114,
+      "log": "build/test-kernel/test_abort_backtrace_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gamepad_e2e.js",
+      "status": "pass",
+      "ms": 1141,
+      "log": "build/test-kernel/test_gamepad_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sdl_events_e2e.js",
+      "status": "pass",
+      "ms": 908,
+      "log": "build/test-kernel/test_sdl_events_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_frame_lifecycle_e2e.js",
+      "status": "pass",
+      "ms": 1896,
+      "log": "build/test-kernel/test_frame_lifecycle_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_wgpu_loopguard_headless_e2e.js",
+      "status": "pass",
+      "ms": 819,
+      "log": "build/test-kernel/test_wgpu_loopguard_headless_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_loopguard_headless_e2e.js",
+      "status": "pass",
+      "ms": 1125,
+      "log": "build/test-kernel/test_loopguard_headless_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_ui_lifecycle_e2e.js",
+      "status": "pass",
+      "ms": 2826,
+      "log": "build/test-kernel/test_ui_lifecycle_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sleep_overshoot_e2e.js",
+      "status": "pass",
+      "ms": 3048,
+      "log": "build/test-kernel/test_sleep_overshoot_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sdl_raster_e2e.js",
+      "status": "pass",
+      "ms": 1358,
+      "log": "build/test-kernel/test_sdl_raster_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sdl_util_e2e.js",
+      "status": "pass",
+      "ms": 1486,
+      "log": "build/test-kernel/test_sdl_util_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_render_vsync_e2e.js",
+      "status": "pass",
+      "ms": 9845,
+      "log": "build/test-kernel/test_render_vsync_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_netsurf_content_e2e.js",
+      "status": "pass",
+      "ms": 5081,
+      "log": "build/test-kernel/test_netsurf_content_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_netsurf_events_e2e.js",
+      "status": "pass",
+      "ms": 5234,
+      "log": "build/test-kernel/test_netsurf_events_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_comdlg_diag_e2e.js",
+      "status": "pass",
+      "ms": 5804,
+      "log": "build/test-kernel/test_comdlg_diag_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_mgba_e2e.js",
+      "status": "pass",
+      "ms": 5185,
+      "log": "build/test-kernel/test_mgba_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_menubox_e2e.js",
+      "status": "pass",
+      "ms": 5623,
+      "log": "build/test-kernel/test_menubox_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sedit_e2e.js",
+      "status": "pass",
+      "ms": 14392,
+      "log": "build/test-kernel/test_sedit_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_netsurf_e2e.js",
+      "status": "pass",
+      "ms": 4677,
+      "log": "build/test-kernel/test_netsurf_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_edit_punct_repro.js",
+      "status": "pass",
+      "ms": 5012,
+      "log": "build/test-kernel/test_edit_punct_repro.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_fileman_nav_e2e.js",
+      "status": "pass",
+      "ms": 4696,
+      "log": "build/test-kernel/test_fileman_nav_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gdi32_e2e.js",
+      "status": "pass",
+      "ms": 4596,
+      "log": "build/test-kernel/test_gdi32_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_vi_e2e.js",
+      "status": "pass",
+      "ms": 4210,
+      "log": "build/test-kernel/test_vi_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_netsurf_img_reconvert_e2e.js",
+      "status": "pass",
+      "ms": 3746,
+      "log": "build/test-kernel/test_netsurf_img_reconvert_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_netsurf_layout_e2e.js",
+      "status": "pass",
+      "ms": 4108,
+      "log": "build/test-kernel/test_netsurf_layout_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_netsurf_js_e2e.js",
+      "status": "pass",
+      "ms": 3761,
+      "log": "build/test-kernel/test_netsurf_js_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_waitevent_e2e.js",
+      "status": "pass",
+      "ms": 3798,
+      "log": "build/test-kernel/test_waitevent_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_rust_std_e2e.js",
+      "status": "pass",
+      "ms": 4360,
+      "log": "build/test-kernel/test_rust_std_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_listview_e2e.js",
+      "status": "pass",
+      "ms": 3522,
+      "log": "build/test-kernel/test_listview_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_curl_e2e.js",
+      "status": "pass",
+      "ms": 9893,
+      "log": "build/test-kernel/test_curl_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_ticketbridge_e2e.js",
+      "status": "pass",
+      "ms": 3339,
+      "log": "build/test-kernel/test_ticketbridge_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_fileman_e2e.js",
+      "status": "pass",
+      "ms": 3518,
+      "log": "build/test-kernel/test_fileman_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_pbcopy_e2e.js",
+      "status": "pass",
+      "ms": 3623,
+      "log": "build/test-kernel/test_pbcopy_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_http_e2e.js",
+      "status": "pass",
+      "ms": 3376,
+      "log": "build/test-kernel/test_http_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_vsync_boot_e2e.js",
+      "status": "pass",
+      "ms": 3348,
+      "log": "build/test-kernel/test_vsync_boot_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_wait_e2e.js",
+      "status": "pass",
+      "ms": 2966,
+      "log": "build/test-kernel/test_wait_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_itimer_e2e.js",
+      "status": "pass",
+      "ms": 2755,
+      "log": "build/test-kernel/test_itimer_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_spawn_budget_kill_honesty.js",
+      "status": "pass",
+      "ms": 2815,
+      "log": "build/test-kernel/test_spawn_budget_kill_honesty.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_desk_icons_e2e.js",
+      "status": "pass",
+      "ms": 2725,
+      "log": "build/test-kernel/test_desk_icons_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_netsurf_restyle_e2e.js",
+      "status": "pass",
+      "ms": 2684,
+      "log": "build/test-kernel/test_netsurf_restyle_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_signals_e2e.js",
+      "status": "pass",
+      "ms": 2603,
+      "log": "build/test-kernel/test_signals_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_netsurf_console_e2e.js",
+      "status": "pass",
+      "ms": 2556,
+      "log": "build/test-kernel/test_netsurf_console_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_kernel32_e2e.js",
+      "status": "pass",
+      "ms": 2492,
+      "log": "build/test-kernel/test_kernel32_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_desktop_defaults_e2e.js",
+      "status": "pass",
+      "ms": 2725,
+      "log": "build/test-kernel/test_desktop_defaults_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_netsurf_dragslop_e2e.js",
+      "status": "pass",
+      "ms": 2246,
+      "log": "build/test-kernel/test_netsurf_dragslop_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_jobctl_e2e.js",
+      "status": "pass",
+      "ms": 2111,
+      "log": "build/test-kernel/test_jobctl_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_wm_fatal_e2e.js",
+      "status": "pass",
+      "ms": 2276,
+      "log": "build/test-kernel/test_wm_fatal_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_comp_park_e2e.js",
+      "status": "pass",
+      "ms": 1979,
+      "log": "build/test-kernel/test_comp_park_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cursor_e2e.js",
+      "status": "pass",
+      "ms": 2106,
+      "log": "build/test-kernel/test_cursor_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_os_boot_kill_honesty.js",
+      "status": "pass",
+      "ms": 1869,
+      "log": "build/test-kernel/test_os_boot_kill_honesty.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gcode_intr_flush_e2e.js",
+      "status": "pass",
+      "ms": 1853,
+      "log": "build/test-kernel/test_gcode_intr_flush_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gpubox_menu_e2e.js",
+      "status": "pass",
+      "ms": 2389,
+      "log": "build/test-kernel/test_gpubox_menu_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gpubox_dawn_e2e.js",
+      "status": "pass",
+      "ms": 2441,
+      "log": "build/test-kernel/test_gpubox_dawn_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_netbridge_e2e.js",
+      "status": "pass",
+      "ms": 2593,
+      "log": "build/test-kernel/test_netbridge_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_minesweeper_sample_e2e.js",
+      "status": "pass",
+      "ms": 1834,
+      "log": "build/test-kernel/test_minesweeper_sample_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_spsc_e2e.js",
+      "status": "pass",
+      "ms": 1620,
+      "log": "build/test-kernel/test_spsc_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gcode_step2_e2e.js",
+      "status": "pass",
+      "ms": 1558,
+      "log": "build/test-kernel/test_gcode_step2_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_fileman_watch_e2e.js",
+      "status": "pass",
+      "ms": 1631,
+      "log": "build/test-kernel/test_fileman_watch_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_module_cache.js",
+      "status": "pass",
+      "ms": 1616,
+      "log": "build/test-kernel/test_module_cache.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_fswatch_e2e.js",
+      "status": "pass",
+      "ms": 1591,
+      "log": "build/test-kernel/test_fswatch_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_skey_e2e.js",
+      "status": "pass",
+      "ms": 1481,
+      "log": "build/test-kernel/test_skey_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cc_srclib_e2e.js",
+      "status": "pass",
+      "ms": 1466,
+      "log": "build/test-kernel/test_cc_srclib_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sockwake_e2e.js",
+      "status": "pass",
+      "ms": 1350,
+      "log": "build/test-kernel/test_sockwake_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_fs_e2e.js",
+      "status": "pass",
+      "ms": 1197,
+      "log": "build/test-kernel/test_fs_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sdl_render_e2e.js",
+      "status": "pass",
+      "ms": 1357,
+      "log": "build/test-kernel/test_sdl_render_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_strace_e2e.js",
+      "status": "pass",
+      "ms": 1136,
+      "log": "build/test-kernel/test_strace_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_code_e2e.js",
+      "status": "pass",
+      "ms": 1130,
+      "log": "build/test-kernel/test_code_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_boot_guard_e2e.js",
+      "status": "pass",
+      "ms": 1184,
+      "log": "build/test-kernel/test_boot_guard_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_symlink_create_e2e.js",
+      "status": "pass",
+      "ms": 1124,
+      "log": "build/test-kernel/test_symlink_create_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_pipes_e2e.js",
+      "status": "pass",
+      "ms": 1087,
+      "log": "build/test-kernel/test_pipes_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_hostclip_e2e.js",
+      "status": "pass",
+      "ms": 1095,
+      "log": "build/test-kernel/test_hostclip_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sockets_e2e.js",
+      "status": "pass",
+      "ms": 979,
+      "log": "build/test-kernel/test_sockets_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_e2e.js",
+      "status": "pass",
+      "ms": 957,
+      "log": "build/test-kernel/test_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_rofs_e2e.js",
+      "status": "pass",
+      "ms": 697,
+      "log": "build/test-kernel/test_rofs_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_realpath_e2e.js",
+      "status": "pass",
+      "ms": 989,
+      "log": "build/test-kernel/test_realpath_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_wm_e2e.js",
+      "status": "pass",
+      "ms": 652,
+      "log": "build/test-kernel/test_wm_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_pty_e2e.js",
+      "status": "pass",
+      "ms": 734,
+      "log": "build/test-kernel/test_pty_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gdiplus_e2e.js",
+      "status": "pass",
+      "ms": 543,
+      "log": "build/test-kernel/test_gdiplus_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gpu_multiwin_dawn_e2e.js",
+      "status": "pass",
+      "ms": 593,
+      "log": "build/test-kernel/test_gpu_multiwin_dawn_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_read_fill_e2e.js",
+      "status": "pass",
+      "ms": 369,
+      "log": "build/test-kernel/test_read_fill_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_vdso_e2e.js",
+      "status": "pass",
+      "ms": 472,
+      "log": "build/test-kernel/test_vdso_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_audio_e2e.js",
+      "status": "pass",
+      "ms": 1875,
+      "log": "build/test-kernel/test_audio_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_taskbar_owner_e2e.js",
+      "status": "pass",
+      "ms": 3605,
+      "log": "build/test-kernel/test_taskbar_owner_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gucedit.js",
+      "status": "pass",
+      "ms": 2896,
+      "log": "build/test-kernel/test_gucedit.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sedit_core.js",
+      "status": "pass",
+      "ms": 848,
+      "log": "build/test-kernel/test_sedit_core.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sdl_rendertarget_e2e.js",
+      "status": "pass",
+      "ms": 1371,
+      "log": "build/test-kernel/test_sdl_rendertarget_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sdl_debugtext_e2e.js",
+      "status": "pass",
+      "ms": 1394,
+      "log": "build/test-kernel/test_sdl_debugtext_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sdl_rotated_e2e.js",
+      "status": "pass",
+      "ms": 1368,
+      "log": "build/test-kernel/test_sdl_rotated_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_sdlttf_e2e.js",
+      "status": "pass",
+      "ms": 2444,
+      "log": "build/test-kernel/test_sdlttf_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_egress_e2e.js",
+      "status": "pass",
+      "ms": 2117,
+      "log": "build/test-kernel/test_egress_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cc_srclib.js",
+      "status": "pass",
+      "ms": 1251,
+      "log": "build/test-kernel/test_cc_srclib.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cfgstore_e2e.js",
+      "status": "pass",
+      "ms": 365,
+      "log": "build/test-kernel/test_cfgstore_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_overlays.js",
+      "status": "pass",
+      "ms": 174,
+      "log": "build/test-kernel/test_overlays.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_mounts.js",
+      "status": "pass",
+      "ms": 52,
+      "log": "build/test-kernel/test_mounts.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_procfs.js",
+      "status": "pass",
+      "ms": 41,
+      "log": "build/test-kernel/test_procfs.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_tty_e2e.js",
+      "status": "pass",
+      "ms": 332,
+      "log": "build/test-kernel/test_tty_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cc_imagelibs_e2e.js",
+      "status": "pass",
+      "ms": 29036,
+      "log": "build/test-kernel/test_cc_imagelibs_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cc_cjson_e2e.js",
+      "status": "pass",
+      "ms": 2905,
+      "log": "build/test-kernel/test_cc_cjson_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cc_lua_sqlite_e2e.js",
+      "status": "pass",
+      "ms": 10655,
+      "log": "build/test-kernel/test_cc_lua_sqlite_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cc_freetype_e2e.js",
+      "status": "pass",
+      "ms": 5873,
+      "log": "build/test-kernel/test_cc_freetype_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gucman_scripts_e2e.js",
+      "status": "pass",
+      "ms": 4080,
+      "log": "build/test-kernel/test_gucman_scripts_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gucman_upgrade_e2e.js",
+      "status": "pass",
+      "ms": 4750,
+      "log": "build/test-kernel/test_gucman_upgrade_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_symbolfont_e2e.js",
+      "status": "pass",
+      "ms": 5461,
+      "log": "build/test-kernel/test_symbolfont_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_clang_pkgs_e2e.js",
+      "status": "pass",
+      "ms": 4497,
+      "log": "build/test-kernel/test_clang_pkgs_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cmdalt_e2e.js",
+      "status": "pass",
+      "ms": 5382,
+      "log": "build/test-kernel/test_cmdalt_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_git_e2e.js",
+      "status": "pass",
+      "ms": 5087,
+      "log": "build/test-kernel/test_git_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gucman_apps_e2e.js",
+      "status": "pass",
+      "ms": 5421,
+      "log": "build/test-kernel/test_gucman_apps_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gucman_doom_e2e.js",
+      "status": "pass",
+      "ms": 3638,
+      "log": "build/test-kernel/test_gucman_doom_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gucman_quake_e2e.js",
+      "status": "pass",
+      "ms": 3135,
+      "log": "build/test-kernel/test_gucman_quake_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cc_libpng_e2e.js",
+      "status": "pass",
+      "ms": 6801,
+      "log": "build/test-kernel/test_cc_libpng_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_stdinc_e2e.js",
+      "status": "pass",
+      "ms": 2519,
+      "log": "build/test-kernel/test_stdinc_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_cc_libjpeg_e2e.js",
+      "status": "pass",
+      "ms": 4075,
+      "log": "build/test-kernel/test_cc_libjpeg_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_gucman_sources_e2e.js",
+      "status": "pass",
+      "ms": 2207,
+      "log": "build/test-kernel/test_gucman_sources_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "test_rust_pkgs_e2e.js",
+      "status": "pass",
+      "ms": 2185,
+      "log": "build/test-kernel/test_rust_pkgs_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:24:49.408Z"
+    },
+    {
+      "file": "gucos-packages/test_repo_contract.js",
+      "status": "pass",
+      "ms": 28,
+      "log": "build/test-kernel/gucos-packages_test_repo_contract.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:43:22.453Z"
+    },
+    {
+      "file": "gucos-packages/test_fontpkg_e2e.js",
+      "status": "pass",
+      "ms": 55000,
+      "log": "build/test-kernel/gucos-packages_test_fontpkg_e2e.js.log",
+      "carried": true,
+      "carriedFrom": "2026-09-15T23:43:22.453Z"
+    },
+    {
+      "file": "test_os_boot.js",
+      "status": "pass",
+      "ms": 711297,
+      "log": "build/test-kernel/test_os_boot.js.log"
+    }
+  ],
+  "evidence": {
+    "expected": 1,
+    "fresh": 1,
+    "resumedExistenceOnly": 0
+  },
+  "sibling": {
+    "repo": "gucos-packages",
+    "status": "ok",
+    "root": "/Users/jku/git/gucos-packages",
+    "via": "main-clone sibling",
+    "members": 2
+  }
+}

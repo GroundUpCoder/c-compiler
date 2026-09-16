@@ -1,0 +1,15 @@
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 36.6 GB free
+[fixture] os/os-system.img fresh (v295)
+[33m⚠ browser os sweep: --filter=os-ui-frames selected 1 of 78 files — this run covers PART of the suite.[0m
+--- browser os sweep (3 runs = 1×3 repeat, UNDER LOAD ×10, 1 jobs) ---
+ok   os-ui-frames.mjs #1  8.5s
+ok   os-ui-frames.mjs #2  9.6s
+ok   os-ui-frames.mjs #3  8.7s
+
+flake report (3× each, under load ×10):
+  [32mstable[0m os-ui-frames.mjs  3/3 passed  (flake 0%)
+
+  [32mall 1 file(s) stable across 3 runs.[0m
+evidence: 1/1 selected members have logs post-dating the run start
+
+browser os sweep: 3 passed, 0 failed, 1 carried from earlier run(s)  (26.8s)  [1/78 selected, 2/78 recorded]  summary: build/test-browser/summary.json

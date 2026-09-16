@@ -1,0 +1,126 @@
+{
+  "commit": "229f8418385193343bc7fe7662ccf0461b14a175",
+  "kind": "automated Playwright wmctl/mouse resize storms + WebGPU canvas screenshots; no manual interaction",
+  "url": "http://localhost:3351/os/os.html?hostkeys=off",
+  "files": {
+    "host.js": "65f6127929452c3506dd376eae5cf6a46f5bc2c3f5acfe70d1149a62dbd16289",
+    "kernel.js": "602700fb6c4fb916a4b13d75d898d61f577a095f3c7674a71f658563584adca6",
+    "compiler.js": "1625de087029f638f765448664be136810ee1d2d0ac5c9d3db6c8aa56fe58a22",
+    "os/image.json": "8fb09a7c5e57c344c2618b41a8bcd621330279b3ea2a3f18703985824326c382",
+    "os/compositor.js": "3809f1e134af371eeeacd0ce1f0a2e8db2cd3a6317738aebb524a9d066437c55",
+    "os/kernel-worker.js": "0085b0f9a581e8f2aad3260f3fbf43f7881d5025994232174a36a828e7a83b92",
+    "os/process-worker.js": "345c96d10dcb06a0ccfbec092a6dd9c21d13f2a40204bee8e9a25e741f50c4a2",
+    "tests/browser/os-ui-frames.mjs": "24c94029b1441c23fa21fc166559bd9a941e8d8d2873a234fe077ac2e7d982ab",
+    "tests/browser/ui-frames.c": "3b99ef323e0155f9d7a118eea192cf330fca8b31687766af2455721829b7e25b",
+    "os/os-system.img": "c704c93af10b2a3f09c30cad6de13cdcc64abd5fc31f318e97d35131092d603e"
+  },
+  "runs": [
+    {
+      "driver": "software",
+      "phases": [
+        {
+          "phase": "initial 240x160",
+          "got": 38400,
+          "stale": 0,
+          "captures": 2
+        },
+        {
+          "phase": "storm1 -> 400x300",
+          "got": 120000,
+          "stale": 0,
+          "captures": 1
+        },
+        {
+          "phase": "storm2 -> 300x200 (equal-size regeneration)",
+          "got": 60000,
+          "stale": 0,
+          "captures": 1
+        },
+        {
+          "phase": "storm3 alternating x20 -> 360x240",
+          "got": 86400,
+          "stale": 0,
+          "captures": 1
+        },
+        {
+          "phase": "frame drag -> 400x270",
+          "got": 108000,
+          "stale": 0,
+          "captures": 2
+        }
+      ],
+      "resizedEvents": 31,
+      "probes": {
+        "wmFrames": 0,
+        "configureStale": 0,
+        "framesRejected": 0,
+        "shmLockMisses": 0,
+        "shmFlipMisses": 0,
+        "shmContended": 0
+      },
+      "transcript": "/root/ui-frames software &\n[1] 7 /root/ui-frames software\n~ # RENDER-DRIVER software\nPIXEL-GEOMETRY 240 160 240 160 density 1.000 scale 1.000\nUI-FRAMES-READY\nFRAME-GEOMETRY 240 160 frame 1\nwmctl list | grep 'UI frames target' | tr '\\t' ' '; echo GEOM1-D''ONE\n3 7 240x160+12+36 - 1 f---R---- UI frames target\nGEOM1-DONE\n~ # S=3; wmctl resize $S 300 200; wmctl resize $S 260 180; wmctl resize $S 300 200; wmctl resize $S 320 240; wmctl resize \r\n$S 200 150; wmctl resize $S 400 300; wmctl wait dim $S 400x300; echo STORM1-D''ONE\nRESIZED 300 200 now 260 180 consistent\nRESIZED 260 180 now 260 180 consistent\nFRAME-GEOMETRY 260 180 frame 43\nRESIZED 300 200 now 300 200 consistent\nFRAME-GEOMETRY 300 200 frame 44\nRESIZED 320 240 now 320 240 consistent\nFRAME-GEOMETRY 320 240 frame 45\nRESIZED 200 150 now 200 150 consistent\nFRAME-GEOMETRY 200 150 frame 46\nRESIZED 400 300 now 400 300 consistent\nFRAME-GEOMETRY 400 300 frame 48\nSTORM1-DONE\n~ # S=3; wmctl resize $S 300 200; wmctl wait dim $S 300x200; wmctl resize $S 400 300; wmctl resize $S 300 200; wmctl wait \r\ndim $S 300x200; echo STORM2-D''ONE\nRESIZED 300 200 now 300 200 consistent\nFRAME-GEOMETRY 300 200 frame 68\nRESIZED 400 300 now 400 300 consistent\nRESIZED 300 200 now 300 200 consistent\nSTORM2-DONE\n~ # S=3; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize \r\n$S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resi\r\nze $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl r\r\nesize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmct\r\nl resize $S 360 240; wmctl wait dim $S 360x240; echo STORM3-D''ONE\nRESIZED 280 220 now 280 220 consistent\nFRAME-GEOMETRY 280 220 frame 94\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 96\nRESIZED 280 220 now 280 220 consistent\nFRAME-GEOMETRY 280 220 frame 97\nRESIZED 360 240 now 280 220 consistent\nRESIZED 280 220 now 280 220 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 100\nRESIZED 280 220 now 280 220 consistent\nFRAME-GEOMETRY 280 220 frame 102\nRESIZED 360 240 now 280 220 consistent\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 104\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 280 220 consistent\nFRAME-GEOMETRY 280 220 frame 107\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 108\nRESIZED 280 220 now 280 220 consistent\nFRAME-GEOMETRY 280 220 frame 109\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 111\nRESIZED 280 220 now 280 220 consistent\nFRAME-GEOMETRY 280 220 frame 112\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 113\nSTORM3-DONE\n~ # wmctl list | grep 'UI frames target' | tr '\\t' ' '; echo GEOM2-D''ONE\n3 7 360x240+12+36 - 1 f---R---- UI frames target\nGEOM2-DONE\n~ # RESIZED 400 270 now 400 270 consistent\nFRAME-GEOMETRY 400 270 frame 151\nS=3; wmctl close $S; echo CLOSE-S''ENT\nCLOSE-SENT\n~ # UI-FRAMES-EXIT frames 177\n"
+    },
+    {
+      "driver": "gpu",
+      "phases": [
+        {
+          "phase": "initial 240x160",
+          "got": 38400,
+          "stale": 0,
+          "captures": 2
+        },
+        {
+          "phase": "storm1 -> 400x300",
+          "got": 120000,
+          "stale": 0,
+          "captures": 1
+        },
+        {
+          "phase": "storm2 -> 300x200 (equal-size regeneration)",
+          "got": 60000,
+          "stale": 0,
+          "captures": 1
+        },
+        {
+          "phase": "storm3 alternating x20 -> 360x240",
+          "got": 86400,
+          "stale": 0,
+          "captures": 1
+        },
+        {
+          "phase": "frame drag -> 400x270",
+          "got": 108000,
+          "stale": 0,
+          "captures": 2
+        }
+      ],
+      "resizedEvents": 32,
+      "probes": {
+        "wmFrames": 161,
+        "configureStale": 0,
+        "framesRejected": 0,
+        "shmLockMisses": 0,
+        "shmFlipMisses": 0,
+        "shmContended": 0
+      },
+      "transcript": "/root/ui-frames gpu &\n[2] 48 /root/ui-frames gpu\n[1] Done                   /root/ui-frames software\n~ # RENDER-DRIVER gucos\nPIXEL-GEOMETRY 240 160 240 160 density 1.000 scale 1.000\nUI-FRAMES-READY\nFRAME-GEOMETRY 240 160 frame 1\nwmctl list | grep 'UI frames target' | tr '\\t' ' '; echo GEOM3-D''ONE\n4 48 240x160+40+60 - 1 f---R---- UI frames target\nGEOM3-DONE\n~ # S=4; wmctl resize $S 300 200; wmctl resize $S 260 180; wmctl resize $S 300 200; wmctl resize $S 320 240; wmctl resize \r\n$S 200 150; wmctl resize $S 400 300; wmctl wait dim $S 400x300; echo STORM1-D''ONE\nRESIZED 300 200 now 300 200 consistent\nFRAME-GEOMETRY 300 200 frame 29\nRESIZED 260 180 now 260 180 consistent\nFRAME-GEOMETRY 260 180 frame 31\nRESIZED 300 200 now 300 200 consistent\nFRAME-GEOMETRY 300 200 frame 32\nRESIZED 320 240 now 320 240 consistent\nFRAME-GEOMETRY 320 240 frame 34\nRESIZED 200 150 now 200 150 consistent\nFRAME-GEOMETRY 200 150 frame 35\nRESIZED 400 300 now 400 300 consistent\nFRAME-GEOMETRY 400 300 frame 36\nSTORM1-DONE\n~ # S=4; wmctl resize $S 300 200; wmctl wait dim $S 300x200; wmctl resize $S 400 300; wmctl resize $S 300 200; wmctl wait \r\ndim $S 300x200; echo STORM2-D''ONE\nRESIZED 300 200 now 300 200 consistent\nFRAME-GEOMETRY 300 200 frame 54\nRESIZED 400 300 now 400 300 consistent\nFRAME-GEOMETRY 400 300 frame 56\nRESIZED 300 200 now 300 200 consistent\nFRAME-GEOMETRY 300 200 frame 58\nSTORM2-DONE\n~ # S=4; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize \r\n$S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resi\r\nze $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl r\r\nesize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmct\r\nl resize $S 360 240; wmctl wait dim $S 360x240; echo STORM3-D''ONE\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 92\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 280 220 consistent\nFRAME-GEOMETRY 280 220 frame 95\nRESIZED 360 240 now 280 220 consistent\nRESIZED 280 220 now 280 220 consistent\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 99\nRESIZED 280 220 now 280 220 consistent\nRESIZED 280 220 now 280 220 consistent\nFRAME-GEOMETRY 280 220 frame 100\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 280 220 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 102\nSTORM3-DONE\n~ # wmctl list | grep 'UI frames target' | tr '\\t' ' '; echo GEOM4-D''ONE\n4 48 360x240+40+60 - 1 f---R---- UI frames target\nGEOM4-DONE\n~ # RESIZED 400 270 now 400 270 consistent\nFRAME-GEOMETRY 400 270 frame 137\nS=4; wmctl close $S; echo CLOSE-S''ENT\nCLOSE-SENT\n~ # UI-FRAMES-EXIT frames 162\n"
+    }
+  ],
+  "underLoad": 10,
+  "browser": "149.0.7827.55",
+  "errors": [],
+  "served": {
+    "host.js": "65f6127929452c3506dd376eae5cf6a46f5bc2c3f5acfe70d1149a62dbd16289",
+    "kernel.js": "602700fb6c4fb916a4b13d75d898d61f577a095f3c7674a71f658563584adca6",
+    "compiler.js": "1625de087029f638f765448664be136810ee1d2d0ac5c9d3db6c8aa56fe58a22",
+    "os/image.json": "8fb09a7c5e57c344c2618b41a8bcd621330279b3ea2a3f18703985824326c382",
+    "os/compositor.js": "3809f1e134af371eeeacd0ce1f0a2e8db2cd3a6317738aebb524a9d066437c55",
+    "os/kernel-worker.js": "0085b0f9a581e8f2aad3260f3fbf43f7881d5025994232174a36a828e7a83b92",
+    "os/process-worker.js": "345c96d10dcb06a0ccfbec092a6dd9c21d13f2a40204bee8e9a25e741f50c4a2",
+    "tests/browser/os-ui-frames.mjs": "24c94029b1441c23fa21fc166559bd9a941e8d8d2873a234fe077ac2e7d982ab",
+    "tests/browser/ui-frames.c": "3b99ef323e0155f9d7a118eea192cf330fca8b31687766af2455721829b7e25b",
+    "os/os-system.img": "c704c93af10b2a3f09c30cad6de13cdcc64abd5fc31f318e97d35131092d603e"
+  },
+  "installed": "\n\nBusyBox v1.37.0-wasm (2026-07-09 14:38:25 KST) hush - the humble shell\nEnter 'help' for a list of built-in commands.\n\n~ # cat /usr/share/os-release; echo UI-IMAGE-PIN-O''K\nNAME=gucOS\nPRETTY_NAME=\"gucOS (groundupcoder OS)\"\nVERSION_ID=295\nPACKAGES=cairo,cairodemo,calc,cjson,demos,doom,foundation,freetype,gameboy,gcode,giflib,git,jq,libgit2,libjpeg,libnsbmp,libnsgif,libpng,lua,mgba,micropython,netsurf,netsurf-demos,paint,pixman,punes,quake,sameboy,sent,sqlite3,win32,winmine,zlib\nUI-IMAGE-PIN-OK\n~ # ",
+  "finalTranscript": "/root/ui-frames gpu &\n[2] 48 /root/ui-frames gpu\n[1] Done                   /root/ui-frames software\n~ # RENDER-DRIVER gucos\nPIXEL-GEOMETRY 240 160 240 160 density 1.000 scale 1.000\nUI-FRAMES-READY\nFRAME-GEOMETRY 240 160 frame 1\nwmctl list | grep 'UI frames target' | tr '\\t' ' '; echo GEOM3-D''ONE\n4 48 240x160+40+60 - 1 f---R---- UI frames target\nGEOM3-DONE\n~ # S=4; wmctl resize $S 300 200; wmctl resize $S 260 180; wmctl resize $S 300 200; wmctl resize $S 320 240; wmctl resize \r\n$S 200 150; wmctl resize $S 400 300; wmctl wait dim $S 400x300; echo STORM1-D''ONE\nRESIZED 300 200 now 300 200 consistent\nFRAME-GEOMETRY 300 200 frame 29\nRESIZED 260 180 now 260 180 consistent\nFRAME-GEOMETRY 260 180 frame 31\nRESIZED 300 200 now 300 200 consistent\nFRAME-GEOMETRY 300 200 frame 32\nRESIZED 320 240 now 320 240 consistent\nFRAME-GEOMETRY 320 240 frame 34\nRESIZED 200 150 now 200 150 consistent\nFRAME-GEOMETRY 200 150 frame 35\nRESIZED 400 300 now 400 300 consistent\nFRAME-GEOMETRY 400 300 frame 36\nSTORM1-DONE\n~ # S=4; wmctl resize $S 300 200; wmctl wait dim $S 300x200; wmctl resize $S 400 300; wmctl resize $S 300 200; wmctl wait \r\ndim $S 300x200; echo STORM2-D''ONE\nRESIZED 300 200 now 300 200 consistent\nFRAME-GEOMETRY 300 200 frame 54\nRESIZED 400 300 now 400 300 consistent\nFRAME-GEOMETRY 400 300 frame 56\nRESIZED 300 200 now 300 200 consistent\nFRAME-GEOMETRY 300 200 frame 58\nSTORM2-DONE\n~ # S=4; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize \r\n$S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resi\r\nze $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl r\r\nesize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmctl resize $S 360 240; wmctl resize $S 280 220; wmct\r\nl resize $S 360 240; wmctl wait dim $S 360x240; echo STORM3-D''ONE\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 92\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 280 220 consistent\nFRAME-GEOMETRY 280 220 frame 95\nRESIZED 360 240 now 280 220 consistent\nRESIZED 280 220 now 280 220 consistent\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 99\nRESIZED 280 220 now 280 220 consistent\nRESIZED 280 220 now 280 220 consistent\nFRAME-GEOMETRY 280 220 frame 100\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 280 220 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nRESIZED 280 220 now 360 240 consistent\nRESIZED 360 240 now 360 240 consistent\nFRAME-GEOMETRY 360 240 frame 102\nSTORM3-DONE\n~ # wmctl list | grep 'UI frames target' | tr '\\t' ' '; echo GEOM4-D''ONE\n4 48 360x240+40+60 - 1 f---R---- UI frames target\nGEOM4-DONE\n~ # RESIZED 400 270 now 400 270 consistent\nFRAME-GEOMETRY 400 270 frame 137\nS=4; wmctl close $S; echo CLOSE-S''ENT\nCLOSE-SENT\n~ # UI-FRAMES-EXIT frames 162\n"
+}

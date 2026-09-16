@@ -1,0 +1,8 @@
+  ok   two surfaces created
+  ok   producer really ran concurrently (338 frames, seq +301)
+  ok   ZERO torn screenshots under the lock (400 reads)
+  ok   no lock misses on either side
+  ok   SH_LOCK is free afterwards
+  ok   RED CONTROL: an unlocked producer tears the kernel read (1 torn in 0 reads, 39 frames)
+
+test_shm_ownership: all passed

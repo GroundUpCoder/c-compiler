@@ -1,0 +1,33 @@
+registry: 211 declared + 0 excluded == 211 on disk (tests/kernel/run.js)
+registry: 2 declared + 0 excluded == 2 on disk (gucos-packages/tests/manifest.json)
+sibling tests: gucos-packages at /Users/jku/git/gucos-packages (via main-clone sibling) — 2 member(s) join the suite
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 39.0 GB free
+[33m⚠ kernel suite: --filter=test_wm_frames.js,test_shm_ownership.js,test_wm.js,test_wm_policy.js,test_wm_anchored.js selected 5 of 213 files — this run covers PART of the suite.[0m
+--- kernel suite (15 runs = 5×3 repeat, UNDER LOAD ×10, 6 jobs) ---
+ok   test_shm_ownership.js #1  1.1s
+ok   test_shm_ownership.js #3  1.1s
+ok   test_shm_ownership.js #2  1.1s
+ok   test_wm_policy.js #1  0.5s
+ok   test_wm_policy.js #2  0.5s
+ok   test_wm_policy.js #3  0.5s
+ok   test_wm_frames.js #2  0.1s
+ok   test_wm_frames.js #1  0.1s
+ok   test_wm_frames.js #3  0.1s
+ok   test_wm_anchored.js #1  0.1s
+ok   test_wm_anchored.js #2  0.1s
+ok   test_wm_anchored.js #3  0.1s
+ok   test_wm.js #1  2.9s
+ok   test_wm.js #2  2.9s
+ok   test_wm.js #3  2.9s
+
+flake report (3× each, under load ×10):
+  [32mstable[0m test_shm_ownership.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_wm_policy.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_wm_frames.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_wm_anchored.js  3/3 passed  (flake 0%)
+  [32mstable[0m test_wm.js  3/3 passed  (flake 0%)
+
+  [32mall 5 file(s) stable across 3 runs.[0m
+evidence: 5/5 selected members have logs post-dating the run start
+
+kernel suite: 15 passed, 0 failed, 7 carried from earlier run(s)  (2.9s)  [5/213 selected, 12/213 recorded]  summary: build/test-kernel/summary.json

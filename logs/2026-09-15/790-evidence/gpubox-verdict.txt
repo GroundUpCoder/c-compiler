@@ -1,0 +1,8 @@
+[preflight] clean: no abandoned fixtures, no orphaned serve.js, 36.6 GB free
+[fixture] os/os-system.img fresh (v295)
+[33m⚠ browser os sweep: --filter=os-gpubox selected 1 of 78 files — this run covers PART of the suite.[0m
+--- browser os sweep (1 files, 1 jobs) ---
+ok   os-gpubox.mjs  15.0s
+evidence: 1/1 selected members have logs post-dating the run start
+
+browser os sweep: 1 passed, 0 failed, 1 carried from earlier run(s)  (15.0s)  [1/78 selected, 2/78 recorded]  summary: build/test-browser/summary.json

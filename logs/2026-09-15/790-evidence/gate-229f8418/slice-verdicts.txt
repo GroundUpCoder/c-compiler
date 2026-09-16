@@ -1,0 +1,48 @@
+== k1
+[33m⚠ kernel suite: --filter=test_git_net_e2e.js,test_term_e2e.js,test_present_e2e.js,test_wm_service_e2e.js,test_netsurf_demos_e2e.js,test_cairo_e2e.js selected 6 of 213 files — this run covers PART of the suite.[0m
+kernel suite: 6 passed, 0 failed  (408.1s)  [6/213 selected, 6/213 recorded]  summary: build/test-kernel/summary.json
+== k2
+[33m⚠ kernel suite: --filter=test_netsurf_mutation_e2e.js,test_seed_e2e.js,test_netsurf_http_e2e.js,test_notepad_menu_e2e.js,test_win32_ports.js,test_recycle_e2e.js,test_sameboy_e2e.js,test_user32_e2e.js,test_mgpp_e2e.js,test_netsurf_select_e2e.js,test_deck_e2e.js,test_netsurf_select_reconvert_e2e.js,test_os_apps_e2e.js,test_gucman_libgit2_e2e.js,test_keymap_e2e.js,test_punes_e2e.js,test_sounds_e2e.js,test_saver_e2e.js,test_ctxmenu_e2e.js,test_snap_e2e.js,test_mgp_livereload_e2e.js,test_software_e2e.js,test_gcode_native.js,test_clipboard_e2e.js,test_fileman_ops_e2e.js,test_cc_win32_e2e.js,test_repl_pty_e2e.js,test_overview_e2e.js,test_gcode_timeout_e2e.js,test_gcode_intr_chatty_e2e.js,test_gcode_intr_honesty_e2e.js,test_multiface_font_e2e.js,test_netsurf_pointer_e2e.js,test_netsurf_filegadget_e2e.js,test_gucman_e2e.js,test_openwith_e2e.js,test_hostpaste_e2e.js,test_winmine_e2e.js,test_paint_e2e.js,test_ksvc_e2e.js,test_micropython_stdlib_e2e.js,test_sdl_delay_e2e.js,test_micropython_script_e2e.js,test_notepad_e2e.js,test_calc_e2e.js,test_defaults_sync_e2e.js,test_ctlpanel_e2e.js,test_lb_vscroll_e2e.js,test_jobctl_tty_e2e.js,test_cpython_clang_e2e.js,test_rust_e2e.js,test_heavylock_e2e.js,test_wm_owned.js,test_pipes_spsc.js,test_wm_frames.js,test_shm_ownership.js selected 56 of 213 files — this run covers PART of the suite.[0m
+kernel suite: 56 passed, 0 failed, 6 carried from earlier run(s)  (322.7s)  [56/213 selected, 62/213 recorded]  summary: build/test-kernel/summary.json
+== k3
+[33m⚠ kernel suite: --filter=test_netsurf_events_e2e.js,test_netsurf_content_e2e.js,test_symbolfont_e2e.js,test_comdlg_diag_e2e.js,test_menubox_e2e.js,test_mgba_e2e.js,test_wm_lifecycle_policy.js,test_wm_lifecycle.js,test_wgpu_loopguard_headless_e2e.js,test_user32_lifecycle_policy.js,test_ui_lifecycle_e2e.js,test_trap_report_delivery.js,test_taskbar_owner_e2e.js,test_syscall_restart_e2e.js,test_start_failure_e2e.js,test_spawn_build_e2e.js,test_small_e2e.js,test_sleep_overshoot_e2e.js,test_shell_restart_e2e.js,test_sedit_e2e.js,test_sedit_core.js,test_sdlttf_e2e.js,test_sdl_util_e2e.js,test_sdl_rotated_e2e.js,test_sdl_rendertarget_e2e.js,test_sdl_raster_e2e.js,test_sdl_events_e2e.js,test_sdl_debugtext_e2e.js,test_render_vsync_e2e.js,test_objc_exceptions_e2e.js,test_objc_e2e.js,test_null_trap_e2e.js,test_loopguard_headless_e2e.js,test_hush_errexit_e2e.js,test_gucman_upgrade_e2e.js,test_gucman_scripts_e2e.js,test_gucedit.js,test_gamepad_e2e.js,test_frame_lifecycle_e2e.js,test_foundation_e2e.js,test_foundation_arrays_e2e.js,test_cc_lua_sqlite_e2e.js,test_cc_imagelibs_e2e.js,test_cc_freetype_e2e.js,test_cc_cjson_e2e.js,test_abort_backtrace_e2e.js,test_netsurf_e2e.js,test_clang_pkgs_e2e.js,test_edit_punct_repro.js,test_fileman_nav_e2e.js,test_gdi32_e2e.js,test_vi_e2e.js,test_netsurf_layout_e2e.js,test_cmdalt_e2e.js,test_curl_e2e.js,test_git_e2e.js,test_netsurf_img_reconvert_e2e.js,test_netsurf_js_e2e.js,test_waitevent_e2e.js,test_rust_std_e2e.js,test_listview_e2e.js,test_ticketbridge_e2e.js,test_fileman_e2e.js,test_pbcopy_e2e.js,test_http_e2e.js,test_gucman_apps_e2e.js,test_vsync_boot_e2e.js,test_wait_e2e.js,test_itimer_e2e.js,test_spawn_budget_kill_honesty.js,test_desk_icons_e2e.js,test_wm.js,test_netsurf_restyle_e2e.js,test_signals_e2e.js,test_netsurf_console_e2e.js,test_kernel32_e2e.js,test_desktop_defaults_e2e.js,test_gucman_doom_e2e.js,test_netsurf_dragslop_e2e.js,test_gucman_quake_e2e.js,test_jobctl_e2e.js,test_wm_fatal_e2e.js,test_comp_park_e2e.js,test_egress_e2e.js,test_cursor_e2e.js,test_os_boot_kill_honesty.js,test_gcode_intr_flush_e2e.js,test_gpubox_menu_e2e.js,test_gpubox_dawn_e2e.js,test_netbridge_e2e.js,test_minesweeper_sample_e2e.js,test_spsc_e2e.js,test_gcode_step2_e2e.js,test_cc_libpng_e2e.js,test_fileman_watch_e2e.js,test_module_cache.js,test_fswatch_e2e.js,test_stdinc_e2e.js,test_skey_e2e.js,test_cc_srclib_e2e.js,test_cc_libjpeg_e2e.js,test_sockwake_e2e.js,test_gucman_sources_e2e.js,test_sdl_render_e2e.js,test_fs_e2e.js,test_strace_e2e.js,test_rust_pkgs_e2e.js,test_code_e2e.js,test_readdir_page.js,test_boot_guard_e2e.js,test_symlink_create_e2e.js,test_pipes_e2e.js,test_hostclip_e2e.js,test_sockets_e2e.js,test_e2e.js,test_http.js,test_realpath_e2e.js,test_keybind_registry.js,test_kernel.js,test_rofs_e2e.js,test_pty_e2e.js,test_wm_e2e.js,test_gdiplus_e2e.js,test_gpu_multiwin_dawn_e2e.js,test_vdso_e2e.js,test_cc_srclib.js,test_wm_policy.js,test_audio_e2e.js,test_cfgstore_e2e.js,test_tty_e2e.js,test_read_fill_e2e.js,test_wm_aero.js,test_overlays.js,test_win32rc.js,test_audio.js,test_sockets.js,test_wm_anchored.js,test_keybind.js,test_pty.js,test_mounts.js,test_zerolen_read.js,test_pipes.js,test_strace.js,test_rofs.js,test_procfs.js,test_vsync.js,test_vdso.js,test_tty.js selected 148 of 213 files — this run covers PART of the suite.[0m
+kernel suite: 148 passed, 0 failed, 62 carried from earlier run(s)  (190.7s)  [148/213 selected, 210/213 recorded]  summary: build/test-kernel/summary.json
+== ksib
+[33m⚠ kernel suite: --filter=gucos-packages selected 2 of 213 files — this run covers PART of the suite.[0m
+kernel suite: 2 passed, 0 failed, 211 carried from earlier run(s)  (55.0s)  [2/213 selected, 213/213 recorded]  summary: build/test-kernel/summary.json
+== kboot (first run TIMED OUT at 900s with 0 failed checks; solo rerun below replaced it)
+[33m⚠ kernel suite: --filter=test_os_boot.js selected 1 of 213 files — this run covers PART of the suite.[0m
+kernel suite: 0 passed, 1 failed, 210 carried from earlier run(s)  (900.4s)  [1/213 selected, 211/213 recorded]  summary: build/test-kernel/summary.json
+exit=1
+kernel suite: 1 passed, 0 failed, 212 carried from earlier run(s)  (711.3s)  [1/213 selected, 213/213 recorded]  summary: build/test-kernel/summary.json
+exit=0
+== light
+falsy: 2 passed, 0 failed  (0.7s)  [2/2 selected, 2/2 recorded]  summary: ../../../../var/folders/7s/tqxc4nvx7l3dpxbblqkg9m980000gn/T/pool-excl-9Tiof8/artifacts-6-falsy/summary.json
+  3 passed, 0 failed  (563.2s)  → build/test-run/summary.json
+== blockfs
+blockfs suite: 15 passed, 0 failed  (86.2s)  [15/15 selected, 15/15 recorded]  summary: build/test-blockfs/summary.json
+  1 passed, 0 failed  (86.5s)  → build/test-run/summary.json
+== py
+904 passed, 0 failed, 111 skipped
+  1 passed, 0 failed  (407.5s)  → build/test-run/summary.json
+== sweep-1
+[33m⚠ browser os sweep: --filter=os-git-cli.mjs,os-sweep.mjs,os-hush-errexit.mjs selected 2 of 78 files — this run covers PART of the suite.[0m
+browser os sweep: 2 passed, 0 failed  (255.2s)  [2/78 selected, 2/78 recorded]  summary: build/test-browser/summary.json
+== sweep-2
+[33m⚠ browser os sweep: --filter=os-clang.mjs,os-objc-exceptions.mjs,os-netbridge-https.mjs,os-harness-unit.mjs selected 4 of 78 files — this run covers PART of the suite.[0m
+browser os sweep: 4 passed, 0 failed, 2 carried from earlier run(s)  (270.5s)  [4/78 selected, 6/78 recorded]  summary: build/test-browser/summary.json
+== sweep-3
+[33m⚠ browser os sweep: --filter=os-osk.mjs,os-shell.mjs,os-recycle.mjs selected 3 of 78 files — this run covers PART of the suite.[0m
+browser os sweep: 3 passed, 0 failed, 6 carried from earlier run(s)  (255.5s)  [3/78 selected, 9/78 recorded]  summary: build/test-browser/summary.json
+== sweep-4
+[33m⚠ browser os sweep: --filter=os-mgpp.mjs,os-fileman.mjs,os-gcode.mjs,os-touch.mjs,os-drop.mjs selected 5 of 78 files — this run covers PART of the suite.[0m
+browser os sweep: 5 passed, 0 failed, 9 carried from earlier run(s)  (267.4s)  [5/78 selected, 14/78 recorded]  summary: build/test-browser/summary.json
+== sweep-5
+[33m⚠ browser os sweep: --filter=os-wheel.mjs,os-vt1mobile.mjs,os-foundation.mjs,os-compositor.mjs,os-renderclip.mjs,os-warmpool.mjs,os-ctxmenu.mjs,os-foundation-arrays.mjs,os-keybind.mjs,os-saver.mjs,os-doompage-motion.mjs,os-gpubox.mjs,os-egress.mjs selected 13 of 78 files — this run covers PART of the suite.[0m
+browser os sweep: 13 passed, 0 failed, 14 carried from earlier run(s)  (260.1s)  [13/78 selected, 27/78 recorded]  summary: build/test-browser/summary.json
+== sweep-6
+[33m⚠ browser os sweep: --filter=os-devloss.mjs,os-minimal.mjs,os-doom.mjs,os-term.mjs,os-objc.mjs,os-sounds.mjs,os-quake.mjs,os-git-net.mjs,os-gucman.mjs,os-spawn-build.mjs,os-clipboard.mjs,os-deck.mjs,os-present.mjs,os-wm.mjs,os-fontbridge.mjs,os-sameboy.mjs,os-user32.mjs,os-undo.mjs,os-hires.mjs,os-pollball.mjs,os-vsync.mjs,os-vt.mjs,os-boots.mjs,os-mobile2x.mjs,os-rendertarget.mjs,os-small.mjs,os-paste-mac.mjs,os-winmine.mjs,os-loopguard.mjs,os-doompage-renders.mjs,os-overview.mjs,os-ui-lifecycle.mjs,os-rust.mjs,os-screen.mjs,os-ui-frames.mjs selected 35 of 78 files — this run covers PART of the suite.[0m
+browser os sweep: 35 passed, 0 failed, 27 carried from earlier run(s)  (294.1s)  [35/78 selected, 62/78 recorded]  summary: build/test-browser/summary.json
+== sweep-7
+[33m⚠ browser os sweep: --filter=os-edittab.mjs,os-vt2zoom.mjs,os-snap.mjs,os-scale.mjs,os-abort-backtrace.mjs,os-frame-lifecycle.mjs,os-debugtext.mjs,os-aero.mjs,os-gamepad.mjs,os-paint.mjs,os-sedit.mjs,os-cairo.mjs,os-gdi.mjs,os-spawntrace.mjs,os-null-trap.mjs,os-fsbtn.mjs selected 16 of 78 files — this run covers PART of the suite.[0m
+browser os sweep: 16 passed, 0 failed, 62 carried from earlier run(s)  (53.8s)  [16/78 selected, 78/78 recorded]  summary: build/test-browser/summary.json
