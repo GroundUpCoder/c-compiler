@@ -6,7 +6,7 @@ module.exports = function () {
   const directory = fs.mkdtempSync(path.join(base, 'node-' + Date.now() + '-'));
   const pins = {};
   for (const file of ['compiler.js', 'host.js', 'tests/host/run.js',
-    'tests/host/test_async_lifecycle.js', 'tests/host/async-lifecycle-evidence.js', 'tests/lib/compile-c.js']) {
+    'tests/host/test_async_lifecycle.js', 'tests/host/async-lifecycle-evidence.js', 'tests/foundation/corpus.js']) {
     pins[file] = crypto.createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex');
   }
   const state = {start: new Date().toISOString(),

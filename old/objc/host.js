@@ -7285,7 +7285,7 @@ function captureWasmCallback(callback, nullable) {
 function captureTableCallback(ctx, index, nullable) {
   if (nullable && index === 0) return null;
   const callback = ctx.getIndirectFunctionTable().get(index);
-  return captureWasmCallback(callback, false);
+  return captureWasmCallback(ctx.callbackWrappers?.get(callback) || callback, false);
 }
 
 // #791: one auxiliary memory-only FreeType instance per application. Font file
@@ -13482,6 +13482,11 @@ async function runModule({
         terminateInvocation(new ExitStatus(status));
         throw cancellationTrap();
       },
+      // Wasm catch_all_ref also sees host throws. Private process termination
+      // must bypass Objective-C handlers and finally bodies at every boundary.
+      __guc_objc_eh_guard: function () {
+        if (hostControl) throw hostControl;
+      },
       // #760: diagnostic only. libc retains SIGABRT delivery/termination;
       // capturing here sees callers before the kernel tears the worker down.
       __abort_report: function () {
@@ -13712,6 +13717,7 @@ async function runModule({
 
   /* Build runtime context and conditionally create filesystem imports */
   const ctx = {
+    callbackWrappers: new Map(),
     readString: readString,
     createVaReader: createVaReader,
     setErrno: setErrno,
@@ -14182,6 +14188,18 @@ async function runModule({
   }
 
   const instance = new WebAssembly.Instance(module, imports);
+
+  // Resolve compiler-generated exception boundaries against original function
+  // identities before onReady, constructors or main can mutate the table.
+  // A later registration follows the current entry, even when it moved slots;
+  // already registered callbacks retain their captured guarded callable.
+  const callbackTable = instance.exports.__indirect_function_table;
+  if (callbackTable) {
+    for (const name of Object.keys(instance.exports)) {
+      const match = /^__guc_objc_callback_([1-9][0-9]*)$/.exec(name);
+      if (match) ctx.callbackWrappers.set(callbackTable.get(Number(match[1])), instance.exports[name]);
+    }
+  }
 
   if (ctx.bindSigDispatch) ctx.bindSigDispatch(instance.exports);
   if (onReady) onReady({ sdl: sdl, instance: instance });

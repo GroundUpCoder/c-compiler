@@ -1,0 +1,82 @@
+[
+  {
+    "commit": "7050d4ab03b3ffa74180593c9842dde9804a035b",
+    "subject": "Implement #779: owning arrays and Objective-C fast enumeration"
+  },
+  {
+    "commit": "30d41a2596fbdc4bb29cd03c6c65c88b2a0a06f4",
+    "subject": "Implement #781: Objective-C exceptions and ownership cleanup"
+  },
+  {
+    "commit": "4b09ec2ff906f0431633e63f9fe973310f461702",
+    "subject": "Implement #777: NSObject manual ownership and autorelease pools"
+  },
+  {
+    "commit": "fb3a482d4afbd4b017910a96e701290ecc706bfb",
+    "subject": "fix(objc): bound protocol collection appends under large inputs"
+  },
+  {
+    "commit": "c0a357c9f26a90cbb0dc7560ea141d031c542037",
+    "subject": "fix(objc): compare nested member offsets in linked ABI layouts"
+  },
+  {
+    "commit": "c1c59d3094b6d36058659d19130869d2dadfdaad",
+    "subject": "fix(objc): validate implementations against independent object guarantees"
+  },
+  {
+    "commit": "97287dab4a64190d8f9588f88ba20d3996ca37aa",
+    "subject": "fix(objc): resolve canonical protocol obligations without inventing overrides"
+  },
+  {
+    "commit": "e19302a14ec56726dec2ab35acd985e587214f01",
+    "subject": "fix(objc): reconcile dynamic sends with linked protocol completion"
+  },
+  {
+    "commit": "3f265d095e28d3ad97579fc81bb5be5fd485979a",
+    "subject": "feat(objc): preserve directional object method contracts across units"
+  },
+  {
+    "commit": "67113fdc862c69a9b93a79e11b6b424a85e05681",
+    "subject": "fix(objc): validate protocol identities and declared methods at link"
+  },
+  {
+    "commit": "665c9a5495a456934882d56cc038dffede9b0d64",
+    "subject": "fix(objc): share completed class layout with forward qualifier views"
+  },
+  {
+    "commit": "85dce406228dbff9b76aa7898d67c9439a308ef0",
+    "subject": "fix: preserve Objective-C contracts across types and translation units (#775)"
+  },
+  {
+    "commit": "fbeabab5cc03b6537bd65968d432f3f5d4f18a4c",
+    "subject": "feat: emit NSString-compatible constant objects through library ABI (#775)"
+  },
+  {
+    "commit": "5c8a5349762878245568cdab351dc7feda2c78a7",
+    "subject": "feat: preserve Objective-C object types and initialize shared classes (#775)"
+  },
+  {
+    "commit": "9c6fa71cfa3b5f1dd05f806e317d8fcf32404647",
+    "subject": "feat: link Objective-C classes and selectors across translation units (#775)"
+  },
+  {
+    "commit": "a2582c08a9b1051d9e2b1a94c8cc95c37902e51c",
+    "subject": "feat: lower variadic Objective-C sends through C ABI (#775)"
+  },
+  {
+    "commit": "41afda0793b8aa9e64d18add78924854db944884",
+    "subject": "feat: resolve static Objective-C signatures and lower aggregate methods (#775)"
+  },
+  {
+    "commit": "fd427c9bfcfc87c97096f5d88675bb62b22b3d54",
+    "subject": "fix: preserve Objective-C tokenization in predefined macros (#772)"
+  },
+  {
+    "commit": "904b13607b34fbd76b4a89581986cf9b32413323",
+    "subject": "fix: refuse non-object message receivers in Objective-C spike (#772)"
+  },
+  {
+    "commit": "3fed5f11024b824e0148382564a6750950388289",
+    "subject": "feat: add isolated Objective-C AST and typed runtime experiment (#772)"
+  }
+]

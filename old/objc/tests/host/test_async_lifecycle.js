@@ -25,7 +25,7 @@ if (!mode) {
   } catch (error) { evidence.finish(error); console.error(error); process.exitCode = 1; }
 } else {
   const C = require('../../compiler.js'), host = require('../../host.js');
-  const {compile} = require('../lib/compile-c.js');
+  const foundation = require('../foundation/corpus.js');
   const timeout = setTimeout(() => { console.error('async lifecycle did not settle'); process.exit(1); }, 10000);
   (async () => {
     assert.strictEqual(typeof WebAssembly.Suspending === 'function', mode === 'jspi');
@@ -54,7 +54,7 @@ ${frame ? '__sdl_set_animation_frame_func(frame);' :
   lifetime.startsWith('suspended-main') ? pause : ''}return 0;}`;
         record.source = source;
         evidence.record(record);
-        const {bytes} = compile(C, {'/tests/async.c': source}, ['async.c']);
+        const {bytes} = foundation.compile(C, {'/tests/async.c': source}, ['async.c']);
         evidence.bytes(record, bytes);
         let drained = 0, stderr = '', observed;
         const sentinel = new Error('async host identity');
@@ -95,7 +95,7 @@ void late(void *p) {write(2,"BAD-LATE",8);}
 int main(void) {emscripten_async_call(late,0,5);return ${status};}`};
     evidence.record(record);
     try {
-      const {bytes} = compile(C, {'/tests/drain.c': record.source}, ['drain.c']);
+      const {bytes} = foundation.compile(C, {'/tests/drain.c': record.source}, ['drain.c']);
       evidence.bytes(record, bytes);
       const block = host.BLOCK_FS.create(new host.BLOCK_FS.MemoryByteStore(8 * 1024 * 1024));
       let output = '', drains = 0;

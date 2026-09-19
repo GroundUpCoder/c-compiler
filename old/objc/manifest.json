@@ -1,0 +1,417 @@
+{
+  "commit": "c80a436848f8917e841e586374b38e332eaabf2d",
+  "files": [
+    {
+      "path": "compiler.js",
+      "sha256": "1625de087029f638f765448664be136810ee1d2d0ac5c9d3db6c8aa56fe58a22"
+    },
+    {
+      "path": "host.js",
+      "sha256": "65f6127929452c3506dd376eae5cf6a46f5bc2c3f5acfe70d1149a62dbd16289"
+    },
+    {
+      "path": "os/cc.c",
+      "sha256": "4ad72ff58edd0297c6b2b381c4057459a19cf8e1be97eb9d9df34f1464cb6d75"
+    },
+    {
+      "path": "os/foundation/Foundation/Foundation.h",
+      "sha256": "1d4da8b25c8e816e5709b8a660f002f3c90e0923d6739a013e47be92dc586341"
+    },
+    {
+      "path": "os/foundation/Foundation/NSArray.h",
+      "sha256": "05751212cf074a389b68024fcdcbaa8cf58c0ce49e5029b09f9111ebcfaa22b9"
+    },
+    {
+      "path": "os/foundation/Foundation/NSAutoreleasePool.h",
+      "sha256": "0dbb2bcda8a6a80d1c5584460cc40be73fd1614dec489e04f55ae5a3a331e146"
+    },
+    {
+      "path": "os/foundation/Foundation/NSEnumerator.h",
+      "sha256": "775601e1d9096eb4eaa71670b4244ea11122bcbab579ea614a98b0d78481cb09"
+    },
+    {
+      "path": "os/foundation/Foundation/NSException.h",
+      "sha256": "16500d45de5093ae6f637c1677642f2cb004074c923df1290714a07e72214687"
+    },
+    {
+      "path": "os/foundation/Foundation/NSObjCRuntime.h",
+      "sha256": "cae42ce6629fd78ab6398232a5a26d609440f9e284128936eeaa675ffe8659d1"
+    },
+    {
+      "path": "os/foundation/Foundation/NSObject.h",
+      "sha256": "65d14f31fe36d307822a94159b1f874044548e7f1b9e6ea6b091b0189391e41a"
+    },
+    {
+      "path": "os/foundation/Foundation/NSString.h",
+      "sha256": "5ee785981e81b8eee743fc467a1692187d0f887b83a0c6e1d46bbced72f3b8a9"
+    },
+    {
+      "path": "os/foundation/NSArray.m",
+      "sha256": "0d37e54ce138806724765a8e67754d3f573c7b33d81864afb8d864bdd2f22850"
+    },
+    {
+      "path": "os/foundation/NSAutoreleasePool.m",
+      "sha256": "e390bbc40009e1c376efef6b5680575086e3e1c95656fc7f039334462c75dafc"
+    },
+    {
+      "path": "os/foundation/NSEnumerator.m",
+      "sha256": "1eaf13ddaaed10e361b032a47f3b2aedce57b2cbcc9c4e2f57b56752b61916a5"
+    },
+    {
+      "path": "os/foundation/NSException.m",
+      "sha256": "c38fb2476a1bd641e087eacf2201319067f4adfc51cc4ec2caae6d2706f63b58"
+    },
+    {
+      "path": "os/foundation/NSObject.m",
+      "sha256": "cd0a20127f30881c0f70113edddb6797d31db2bda3c54a6243bd027cd3746c40"
+    },
+    {
+      "path": "os/foundation/NSString.m",
+      "sha256": "aa85bbbca53c7cd78b3ce7d0ff34befb27e46663b4e6835300a073efdc91194b"
+    },
+    {
+      "path": "os/foundation/README.md",
+      "sha256": "b12b712b69c854fe4a781e692ed806f2de229fe5b5f210f30b2b26a228bcd48e"
+    },
+    {
+      "path": "os/foundation/lib.json",
+      "sha256": "7f916e2c0f74e8c8e58806c08e392ffd62df4831842c9b2a77a532464fccd911"
+    },
+    {
+      "path": "os/image.json",
+      "sha256": "8fb09a7c5e57c344c2618b41a8bcd621330279b3ea2a3f18703985824326c382"
+    },
+    {
+      "path": "os/os-common.js",
+      "sha256": "41c262c7f13f90cc15b90d954b15677a042ebe940a2964450fe07bee466365a9"
+    },
+    {
+      "path": "packages/foundation.json",
+      "sha256": "232ccdf6af1a402124761afbec93d3086857c1cc27251830df716aaf79964fdb"
+    },
+    {
+      "path": "tests/browser/os-foundation-arrays.mjs",
+      "sha256": "07f5823413e8cf3812bfba4d8ea75b37e8ef5736a93b431ceb3d0054f825f063"
+    },
+    {
+      "path": "tests/browser/os-foundation.mjs",
+      "sha256": "bf81e1e7de9ca7bf98aedacf8cecbd232051aabea0e1c5f6b74867f78021c023"
+    },
+    {
+      "path": "tests/browser/os-objc-exceptions.mjs",
+      "sha256": "ad82059a965f690f4c8480520142beafdf97659f660e3d15a57da9e0d5636fb1"
+    },
+    {
+      "path": "tests/browser/os-objc.mjs",
+      "sha256": "ee68ebb47ef0725d8f92fa5cc83d9a1a8d5a6059bd53f07e126b3a60cc7b72ee"
+    },
+    {
+      "path": "tests/foundation/array-cleanup.m",
+      "sha256": "129843298cd6cb742a08652efd0d382a7c3d9f296d5cd3704489afb0b04cb0d6"
+    },
+    {
+      "path": "tests/foundation/array-cross-a.m",
+      "sha256": "1961b2e0f153356f2f063ccfdcb204b2c52cdfda15e4e6eb7d1cfc1d45d43327"
+    },
+    {
+      "path": "tests/foundation/array-cross-b.m",
+      "sha256": "27937ed0c326a90913138a404dc4e8940a1eeae5cac2394a507440ec70d04ed6"
+    },
+    {
+      "path": "tests/foundation/array-cross-main.m",
+      "sha256": "d5bfc7a9cd72149d28a465227ad62ec8080a67dc779f79e2022894f21345e32a"
+    },
+    {
+      "path": "tests/foundation/array-cross.h",
+      "sha256": "d8967e3e8e450d38b22c3e947dffd2e4500b119c8e9f366d992f688f62925c15"
+    },
+    {
+      "path": "tests/foundation/array-enumeration.m",
+      "sha256": "e7f8924ba809fc8489d8b11e76e61c31e326afbc081ae7004af4af585aa7e4fc"
+    },
+    {
+      "path": "tests/foundation/array-failure.m",
+      "sha256": "f86fcec482b7bc76b58f8da5d6ce4c35320d6e1376e1855eb90c05bd2cb20cf1"
+    },
+    {
+      "path": "tests/foundation/array-provider.m",
+      "sha256": "ca82a9459344548a306f7cfb115b1559e36aa3034c70cfdd251f28205addb431"
+    },
+    {
+      "path": "tests/foundation/array-reentrancy.m",
+      "sha256": "a75ded0081fdfe800fae22b28e89e46cf5c2e14aaa59393d3489bc758b6c54d2"
+    },
+    {
+      "path": "tests/foundation/array-subclasses.m",
+      "sha256": "b935af88a653cff361a965fd2d17f2481950ce034b541890d21754e3d78e5b7d"
+    },
+    {
+      "path": "tests/foundation/arrays-browser.mjs",
+      "sha256": "0fabf1c8070e7824a8d48b90b2cf3d8baf3aebce835578cfa3df8bb8bc73a9a9"
+    },
+    {
+      "path": "tests/foundation/arrays-corpus.js",
+      "sha256": "407116f93a1f282ff52846607c7de72553f1852f66c64b7d1d73b9c8e23baf15"
+    },
+    {
+      "path": "tests/foundation/arrays-evidence.js",
+      "sha256": "011f246ee8c498e8f44973e21675c3111ac98ffa2a0ed83426606baccd699334"
+    },
+    {
+      "path": "tests/foundation/arrays-os.js",
+      "sha256": "3c635681da5524ec3c61fceefd038efa3f5401b4f293f73b30efe6e0df07424e"
+    },
+    {
+      "path": "tests/foundation/arrays.m",
+      "sha256": "8a3550507e4a3056f26fd51dcf675e993f145c611176671a8b5c58ca568bca83"
+    },
+    {
+      "path": "tests/foundation/bookkeeping-failure.m",
+      "sha256": "9d936034ab991e855805604a2cf5a35e06a9a3bdc4cd99de9779ff2a3a5bb9f3"
+    },
+    {
+      "path": "tests/foundation/browser.mjs",
+      "sha256": "34eb3aa4f61fe14d839e3ae29bb53b5a7f92d214e3882254fca14cfbe59e3d78"
+    },
+    {
+      "path": "tests/foundation/corpus.js",
+      "sha256": "d1c88ff5a0ca1159b2af22b834f8408cca2327a557a318280dbe96ef17af11aa"
+    },
+    {
+      "path": "tests/foundation/cross-a.m",
+      "sha256": "483f0553cbb85f9dc4dba60b825b3594c798db43d4ae6a00434893e2b47b4ff5"
+    },
+    {
+      "path": "tests/foundation/cross-b.m",
+      "sha256": "ac1ffcbc5d7b13e9336ba7d6124e8f450bc3084c33bcc413bfeb1a5dc18dc51a"
+    },
+    {
+      "path": "tests/foundation/cross-main.m",
+      "sha256": "262e8ce847845d366ccb2889562f84d5c6acadf6c5cfae1b7fb5b25dd24dee92"
+    },
+    {
+      "path": "tests/foundation/cross.h",
+      "sha256": "63961da2131e9532244659a07963d22ed86b199d76c848bc6fb5be5d675b83e8"
+    },
+    {
+      "path": "tests/foundation/evidence.js",
+      "sha256": "850e745a9afde26f9ab4ed2a1e8d5b90944d2bf68b3cfef7898746f03e20f2a7"
+    },
+    {
+      "path": "tests/foundation/exhaustion.m",
+      "sha256": "6a42320a94a2884ea301e67041fda4f4fe41801b62b9b962d71180a375cd0e4b"
+    },
+    {
+      "path": "tests/foundation/files.js",
+      "sha256": "4b75b09feaf3badbf247be142aeb0bbf074693b39c66726ab9665960ac8441fe"
+    },
+    {
+      "path": "tests/foundation/identity.m",
+      "sha256": "40d080a34ad182ed7130073b5a8645b0f3dfd92c99a55f45e4178f1b77bf6984"
+    },
+    {
+      "path": "tests/foundation/immortals.m",
+      "sha256": "6423917b0229dd9733d69d82c7b38fc3556abe046565c4ee38e64e6efa293317"
+    },
+    {
+      "path": "tests/foundation/literal-a.m",
+      "sha256": "9daa168ff16f91fa66f413b2feab137c20c7da32a3ca55cde712e0ab13ce0af6"
+    },
+    {
+      "path": "tests/foundation/literal-b.m",
+      "sha256": "d64501b8ce82a02009dea9f641a31eff05c9bcbeaeb0548788deaa5dfa18bfc8"
+    },
+    {
+      "path": "tests/foundation/literal-inspect.m",
+      "sha256": "68a1f40d1883e9cfce51e10ccd3a54328b02c6b1371069c12a105f40bdb38a88"
+    },
+    {
+      "path": "tests/foundation/literal-main.m",
+      "sha256": "6afa326e36ef3aa7060373429a6d003421838566209a0cdbc682fce4337b214a"
+    },
+    {
+      "path": "tests/foundation/literal-provider.h",
+      "sha256": "fe0e00a08d425f2d122e690937e1fdbd3974b4ebf52f6da7443fc1ad874bc8fe"
+    },
+    {
+      "path": "tests/foundation/missing-pool.m",
+      "sha256": "0d93ccdb797b88986322a6f47c8e9f3af826865ad9e5a8a4e18c106937655880"
+    },
+    {
+      "path": "tests/foundation/misuse.m",
+      "sha256": "8cac3e84544f0f7c395b350ee53404765d60b4b293b36050d1ff282e4e2ce25c"
+    },
+    {
+      "path": "tests/foundation/os-script.js",
+      "sha256": "688dd7650f239ca0e8a76694bf5021ce2ceb7ead2774e06b2e20121800e5fec4"
+    },
+    {
+      "path": "tests/foundation/ownership.m",
+      "sha256": "ee0cb91d080346b5690f5e784dcfc3c6ad9356fd94b2efb8e4d43769b4557fec"
+    },
+    {
+      "path": "tests/foundation/pools.m",
+      "sha256": "28bdac03f25a264cd9d0132aa4c6e4ee176911d5e5bb36f8a7072e5c34f9d409"
+    },
+    {
+      "path": "tests/foundation/reentrant-growth.m",
+      "sha256": "1d5372d760f06a2513490adc839036f87720ea5705210a4a4bc449b168f1a354"
+    },
+    {
+      "path": "tests/foundation/scope-flow.m",
+      "sha256": "7f5debf19dd4869cbf37c2a214c26138f04a4bb113021d7bba57f404b0eb9efb"
+    },
+    {
+      "path": "tests/foundation/scope-snapshot.m",
+      "sha256": "890b67e510904850b982c19c1a345d50df3ce2a8eeb8163fcc6dc26b4336f127"
+    },
+    {
+      "path": "tests/foundation/scope.m",
+      "sha256": "92a494a24e7b2fde50133ec126e8628d25065596091b40afbdcc8256dfa5ff32"
+    },
+    {
+      "path": "tests/foundation/scoped-failure.m",
+      "sha256": "9672342ad391b2d7825fbc269e85adf3f496a8bcf9a864822f50a73c473aebaf"
+    },
+    {
+      "path": "tests/foundation/string-bounds.m",
+      "sha256": "63fcc32b5ab69250745728571489f960f0147fd83965864895c56a0df289c7a9"
+    },
+    {
+      "path": "tests/foundation/string-cleanup.m",
+      "sha256": "e614fb03df51c270562b00997265a63819b0423e5f52d21a165479138c38d237"
+    },
+    {
+      "path": "tests/foundation/string-diagnostic-exhaustion.m",
+      "sha256": "09bd0cc35c3decccef92becc0720f957e9f79083c46b77c359d5eab889cae5ed"
+    },
+    {
+      "path": "tests/foundation/string-exception-exhaustion.m",
+      "sha256": "9d24a63490438abb19e2d70e9bb8f83e2a1723519b7214ee056df72972ff6a7f"
+    },
+    {
+      "path": "tests/foundation/string-exceptions.m",
+      "sha256": "6aadea9e3315d0a219842b5313b680068c3973de2a10fa4ce9ebb4a034f3155c"
+    },
+    {
+      "path": "tests/foundation/strings-codec.m",
+      "sha256": "bd596fc42904513171aceb621f4643c2708ecf940ebca3ce3f92268655c39d41"
+    },
+    {
+      "path": "tests/foundation/strings-exhaustion.m",
+      "sha256": "f607dc44494e237e7d7b163bc40cab422e6c1acf31da94db1c52cfcb5787d015"
+    },
+    {
+      "path": "tests/foundation/strings.m",
+      "sha256": "ced1cdb386b3616781d782f332e85fc55c6ab83ab964afbdd2b967c4df3a5588"
+    },
+    {
+      "path": "tests/host/run.js",
+      "sha256": "a533c14dbb6050303bcfbc09cc70a7b78ab39bbf25b6c8152e9bdf051b011bdd"
+    },
+    {
+      "path": "tests/host/test_callback_capture.js",
+      "sha256": "a61ef57c63a7dd40230e9b0d4a77b369b16cbf6664c8155d54f804a86bed2bbd"
+    },
+    {
+      "path": "tests/host/test_foundation.js",
+      "sha256": "e2617aa5e6c8b92031f6ace90d972a16ad6ab1f5dfefa45f30e78b154b644a9c"
+    },
+    {
+      "path": "tests/host/test_foundation_arrays.js",
+      "sha256": "df2ea2c8c1c2a7c7436b6052c2934b630761d3b42f14d360b0e9ea346d217dab"
+    },
+    {
+      "path": "tests/host/test_objc.js",
+      "sha256": "889ecd9f29f17a6c1d02af930ac7ab99b56ec52db5463777291a36fdb5cc7e69"
+    },
+    {
+      "path": "tests/host/test_objc_exceptions.js",
+      "sha256": "b2f0e9cc7e5d9ca5d720bcbb2a7f53d7e633582c324ddc13afd4aae2dbbc660e"
+    },
+    {
+      "path": "tests/kernel/run.js",
+      "sha256": "99a90530fd4fa1d683b525c3df85afc128c4f4130636fcfc76bb7b8544987cf5"
+    },
+    {
+      "path": "tests/kernel/test_cc_srclib.js",
+      "sha256": "add4fd1fc1ee4227d35477d629990880e7b942efc9b05f49e4290fb8fe4b711d"
+    },
+    {
+      "path": "tests/kernel/test_foundation_arrays_e2e.js",
+      "sha256": "4967eb58ffeaa6441ec70a34b2218ef171dfd29de56ca445e274dff3d4e9bcaa"
+    },
+    {
+      "path": "tests/kernel/test_foundation_e2e.js",
+      "sha256": "5ef1d766b49c1aee8c1e9dc5c50bc0f8d42cdd76826ff987c1298be1ca1fd4c0"
+    },
+    {
+      "path": "tests/kernel/test_objc_e2e.js",
+      "sha256": "28f08769796aa5ba02b0f4945b6e828b6b0e82880c373a5fc21a34f1d2725193"
+    },
+    {
+      "path": "tests/kernel/test_objc_exceptions_e2e.js",
+      "sha256": "2e8c0cc262aaf6846a9f1fcdf6c8ad54e9f98db3301c7fa182216920c2e7208d"
+    },
+    {
+      "path": "tests/objc/README.md",
+      "sha256": "7233a2e653fd8eeef3c472f9a497ac84162cdda08a4971b5ace097d0a54b2689"
+    },
+    {
+      "path": "tests/objc/aggregate-abi.c",
+      "sha256": "823e0b8f836ac0257a2bb925424515b2026749ee3d715d0d108e477254b17d44"
+    },
+    {
+      "path": "tests/objc/browser.mjs",
+      "sha256": "7b47992a5308d3c46813f3d70c29d40f5e17ab776d204b565d06fd2e8d9c08b8"
+    },
+    {
+      "path": "tests/objc/cases.js",
+      "sha256": "f86576f94f86f78ad21d4e931c53024f73d7a8242443fa23f45c16989d12bb5d"
+    },
+    {
+      "path": "tests/objc/core.m",
+      "sha256": "ebb1e99d3918c18a7d6ffed38e388537a6cac571c894b060e433586f3a6b33ef"
+    },
+    {
+      "path": "tests/objc/exceptions-browser.mjs",
+      "sha256": "21b3b77e5a81587bfb9123cc6bf2aa3ec624fa649bbecefd298aa744ddb6bc88"
+    },
+    {
+      "path": "tests/objc/exceptions-evidence.js",
+      "sha256": "6feaa3d5d322536d5f101c3bb6b03f9b63ac32afa8ba3673e72c7f00ada56141"
+    },
+    {
+      "path": "tests/objc/exceptions-os.js",
+      "sha256": "b05bedb24a87a4131fcfb32e6820502092597d86acb30adb3b8f7c7cec892df6"
+    },
+    {
+      "path": "tests/objc/exceptions.js",
+      "sha256": "087aca72c8a973e7d3037279ecbdcbb1f846286a9bcd6fc693d3095a54a975db"
+    },
+    {
+      "path": "tests/objc/os-script.js",
+      "sha256": "ac9efe8b821cd3ae87366379e38a10d6cb549b173688f444757ee57e3d0c86a4"
+    },
+    {
+      "path": "tests/objc/round2.js",
+      "sha256": "b14d67bbb7c7f62d9e0a9f5416ecbb24156c98f4e771276287d4522e558b96ac"
+    },
+    {
+      "path": "tests/run.js",
+      "sha256": "78c30b6868751bf70e635a34462346c4a0855d0637d219c59f6644b89e88070a"
+    },
+    {
+      "path": "todos/FOUNDATION.md",
+      "sha256": "02768a14fdd06ae04b999caf8a05f1512011eea6b174037f75bf8a8d4015458e"
+    },
+    {
+      "path": "tests/host/test_async_lifecycle.js",
+      "sha256": "205453724dc9a433300a5280a3473ea7ef48e3d82ae1c7ca36b41b9f738e0b61"
+    },
+    {
+      "path": "tests/host/async-lifecycle-evidence.js",
+      "sha256": "8581ad043be2b78d4f7b211bfa7ab0b6aca854748b18e0b77b95565cdcd8007c"
+    }
+  ]
+}

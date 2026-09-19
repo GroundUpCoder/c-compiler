@@ -2,6 +2,11 @@
 (() => {
 "use strict";
 
+// Objective-C class identity stays on types across AST lowering (#772).
+const objcClassTypes = new WeakMap();
+const objcClassQualifiers = new WeakMap();
+const objcClassOwnership = new WeakMap();
+
 // ====================
 // Array append (spread-safe)
 // ====================
@@ -361,7 +366,7 @@ function hexVal(c) {
 // Raw lexer (phase 1)
 // ====================
 
-function lex(filename, source, lineOffsets) {
+function lex(filename, source, lineOffsets, objectiveC = String(filename).endsWith(".m")) {
   const textEncoder = new TextEncoder();
   const textDecoder = new TextDecoder();
   const bytes = textEncoder.encode(source);
@@ -709,6 +714,11 @@ function lex(filename, source, lineOffsets) {
       if (handled) continue;
     }
 
+    // Objective-C's @ is a separate preprocessing token: whitespace and
+    // macro expansion between it and a directive name remain meaningful.
+    if (objectiveC && peek() === 64) {
+      mark(); advance(); addToken(TokenKind.OTHER, '@'); continue;
+    }
     // Punctuation
     if (tryPunct()) continue;
 
@@ -1263,8 +1273,8 @@ function postProcess(lexResult) {
         else if (p && p.op === "pop") { if (stack.length) cur = stack.pop(); }
         continue; // drop the marker
       }
-      if (t.kind === TokenKind.KEYWORD &&
-          (t.keyword === Keyword.STRUCT || t.keyword === Keyword.UNION)) {
+      if (t.text === "@" || (t.kind === TokenKind.KEYWORD &&
+          (t.keyword === Keyword.STRUCT || t.keyword === Keyword.UNION))) {
         t.packValue = cur;
       }
       kept.push(t);
@@ -1383,7 +1393,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
   for (const [name, val] of ppRegistry.defines) {
     const m = { isFunctionLike: false, isVariadic: false, params: [], replacement: [] };
     if (val !== null) {
-      const lexRes = lex(name, val);
+      const lexRes = lex(name, val, undefined, ppRegistry.objectiveC);
       for (const t of lexRes.tokens) {
         if (t.kind !== TokenKind.EOS) m.replacement.push(t);
       }
@@ -1393,7 +1403,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
 
   // --- 1b. PROCESS PRELUDE ---
   if (ppRegistry.prelude) {
-    const preludeLex = lex("<prelude>", ppRegistry.prelude);
+    const preludeLex = lex("<prelude>", ppRegistry.prelude, undefined, ppRegistry.objectiveC);
     const preludeTokens = preludeLex.tokens.filter(t => t.kind !== TokenKind.EOS);
     initialTokens = [...preludeTokens, ...initialTokens];
   }
@@ -1507,7 +1517,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
   }
 
   function executePragmaOperator(strTok, currentFile) {
-    const lexed = lex(currentFile, destringize(strTok.text));
+    const lexed = lex(currentFile, destringize(strTok.text), undefined, ppRegistry.objectiveC);
     const toks = lexed.tokens.filter(tk =>
       tk.kind !== TokenKind.EOS && tk.kind !== TokenKind.NEWLINE);
     applyPragma(toks, currentFile);
@@ -1769,7 +1779,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                   } else {
                     const merged = left.text + right.text;
                     const mergedSym = intern(merged);
-                    const lexed = lex(left.filename, mergedSym);
+                    const lexed = lex(left.filename, mergedSym, undefined, ppRegistry.objectiveC);
                     // C11 6.10.3.3p3: the concatenation must form ONE valid
                     // preprocessing token. It used to take the FIRST lexed
                     // token and silently DROP the rest (`x ## ++` became
@@ -2129,7 +2139,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
       if (content === null) return null;
       const resolved = intern(fullPath);
       const { spliced, lineOffsets } = spliceLines(content);
-      return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
+      return { lexResult: lex(resolved, spliced, lineOffsets, ppRegistry.objectiveC), resolvedFile: resolved };
     };
 
     // Splice line continuations like the real-file path: inline core headers
@@ -2140,7 +2150,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
       if (!ppRegistry.standardHeaders.has(target)) return null;
       const resolved = intern(target);
       const { spliced, lineOffsets } = spliceLines(ppRegistry.standardHeaders.get(target));
-      return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
+      return { lexResult: lex(resolved, spliced, lineOffsets, ppRegistry.objectiveC), resolvedFile: resolved };
     };
 
     // Build the -I search-path list once.
@@ -2257,7 +2267,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
     }
 
     function emitToken(tok) {
-      if (tok.kind === TokenKind.OTHER) {
+      if (tok.kind === TokenKind.OTHER && !(ppRegistry.objectiveC && tok.text.startsWith("@"))) {
         // An "other" pp-token survived preprocessing — only now is it an
         // error (C11 6.4p1; skipped groups/unexpanded macros already
         // dropped theirs).
@@ -2680,20 +2690,37 @@ function cloneToken(t) {
 
 // Convenience: splice + lex + preprocess + post-process
 function tokenize(filename, source, ppRegistry) {
-  if (String(filename).endsWith('.m')) {
-    const result = new LexResult();
-    result.errors.push(new LexError('Objective-C support has been retired; archived sources are in old/objc', filename, 1));
-    return result;
-  }
+  const objectiveC = String(filename).endsWith('.m');
   const { spliced, lineOffsets } = spliceLines(source);
-  const lexResult = lex(filename, spliced, lineOffsets);
-  if (lexResult.errors.length > 0) return lexResult;
+  let result = lex(filename, spliced, lineOffsets, objectiveC);
+  if (result.errors.length > 0) return result;
   if (ppRegistry) {
-    const ppResult = preprocess(filename, lexResult.tokens, ppRegistry);
-    if (ppResult.errors.length > 0) return ppResult;
-    return postProcess(ppResult);
+    const previousObjc = ppRegistry.objectiveC;
+    const previousDefine = ppRegistry.defines.get('__OBJC__');
+    ppRegistry.objectiveC = objectiveC;
+    if (objectiveC) ppRegistry.defines.set('__OBJC__', '1');
+    try { result = preprocess(filename, result.tokens, ppRegistry); }
+    finally {
+      ppRegistry.objectiveC = previousObjc;
+      if (previousDefine === undefined) ppRegistry.defines.delete('__OBJC__');
+      else ppRegistry.defines.set('__OBJC__', previousDefine);
+    }
+    if (result.errors.length > 0) return result;
   }
-  return postProcess(lexResult);
+  result = postProcess(result);
+  if (objectiveC) {
+    const tokens = [];
+    for (let i = 0; i < result.tokens.length; ++i) {
+      let tok = result.tokens[i];
+      if (tok.text === '@' && [TokenKind.IDENT, TokenKind.KEYWORD].includes(result.tokens[i + 1]?.kind)) {
+        const pack = tok.packValue;
+        tok = cloneToken(tok); tok.packValue = pack; tok.text = '@' + result.tokens[++i].text;
+      }
+      tokens.push(tok);
+    }
+    result.tokens = tokens;
+  }
+  return result;
 }
 
 // ====================
@@ -2739,6 +2766,48 @@ return {
 // ====================
 // Parser — Type System
 // ====================
+
+// Directional method contracts are separate from C function compatibility.
+// A caller's result guarantees may be strengthened; its accepted arguments
+// may be broadened. In particular, permissive id assignment is not subtyping.
+function objcObjectSubstitutable(actual, expected, classes = null, protocolRegistry = null) {
+  actual = actual.removeQualifiers(); expected = expected.removeQualifiers();
+  if (!(actual instanceof Types.ObjcObjectPointerType) || !(expected instanceof Types.ObjcObjectPointerType)) return false;
+  if (actual.ownership !== expected.ownership) return false;
+  const protocolNames = type => {
+    if (!classes) return type.protocolNames();
+    const names = new Set(), seen = new Set();
+    const visit = name => {
+      if (names.has(name)) return;
+      names.add(name);
+      for (const parent of protocolRegistry?.get(name)?.parents || []) visit(parent);
+    };
+    for (const p of type.protocols) visit(p);
+    for (let cls=classes.get(type.className); cls && !seen.has(cls.name); cls=cls.parent && classes.get(cls.parent.name)) {
+      seen.add(cls.name);
+      for (const p of cls.protocols) visit(p);
+    }
+    return names;
+  };
+  const protocols = protocolNames(actual);
+  if ([...protocolNames(expected)].some(p => !protocols.has(p))) return false;
+  if (!expected.className) return true;
+  if (!actual.className) return false;
+  const seen = new Set();
+  for (let cls = classes?.get(actual.className) || objcClassTypes.get(actual.baseType.removeQualifiers()); cls && !seen.has(cls.name);) {
+    if (cls.name === expected.className) return true;
+    seen.add(cls.name);
+    cls = cls.parent && (classes?.get(cls.parent.name) || cls.parent);
+  }
+  return actual.className === expected.className;
+}
+function objcMethodSatisfies(actual, expected, equal = (a,b) => a.isCompatibleWith(b), classes = null, protocolRegistry = null) {
+  if (actual.isVarArg !== expected.isVarArg || actual.paramTypes.length !== expected.paramTypes.length) return false;
+  const substitutable = (a,b) => a instanceof Types.ObjcObjectPointerType || b instanceof Types.ObjcObjectPointerType
+    ? objcObjectSubstitutable(a,b,classes,protocolRegistry) : equal(a,b);
+  return substitutable(actual.returnType,expected.returnType) &&
+    expected.paramTypes.slice(2).every((p,i) => substitutable(p,actual.paramTypes[i+2]));
+}
 
 const Types = (() => {
 
@@ -2919,7 +2988,8 @@ class TypeInfo {
   // `T → T*`. Default builds a PointerType. GC kinds override.
   pointer() {
     if (this._pointer) return this._pointer;
-    const p = new PointerType(this);
+    const cls = objcClassTypes.get(this.removeQualifiers());
+    const p = cls ? new ObjcObjectPointerType(this, cls.name, objcClassQualifiers.get(this.removeQualifiers()) || [], objcClassOwnership.get(this.removeQualifiers()) || 'manual', cls.protocolRegistry) : new PointerType(this);
     this._pointer = p;
     return p;
   }
@@ -3050,12 +3120,48 @@ class PointerType extends TypeInfo {
   constructor(baseType) {
     super(4, 4, true);
     this.baseType = baseType;
-    Object.seal(this);
+    if (new.target === PointerType) Object.seal(this);
   }
   isPointer() { return true; }
   _toString() { return "*" + this.baseType.toString(); }
   _eqStructure(other, seen) { return this.baseType.isCompatibleWith(other.baseType, seen); }
   _cloneForQualifier() { return new PointerType(this.baseType); }
+}
+
+// Objective-C object pointers are still i32 linear-memory pointers. Identity,
+// protocol qualification and manual ownership survive ordinary type operations.
+class ObjcObjectPointerType extends PointerType {
+  constructor(baseType, className = null, protocols = [], ownership = 'manual', protocolRegistry = null) {
+    super(baseType);
+    this.className = className;
+    this.protocols = Object.freeze([...new Set(protocols)].sort());
+    this.ownership = ownership;
+    this.protocolRegistry = protocolRegistry;
+    Object.seal(this);
+  }
+  _toString() {
+    return (this.className ? this.className + '*' : 'id') +
+      (this.protocols.length ? '<' + this.protocols.join(',') + '>' : '');
+  }
+  _eqStructure(other) {
+    return this.className === other.className && this.ownership === other.ownership &&
+      this.protocols.length === other.protocols.length && this.protocols.every((p,i) => p === other.protocols[i]);
+  }
+  protocolNames() {
+    const result = new Set();
+    const visit = (name, registry) => {
+      if (result.has(name)) return;
+      result.add(name);
+      for (const p of registry?.get(name)?.parents || []) visit(p,registry);
+    };
+    for (const p of this.protocols) visit(p,this.protocolRegistry);
+    for (let cls=objcClassTypes.get(this.baseType.removeQualifiers()); cls; cls=cls.parent)
+      for (const p of cls.protocols) visit(p,cls.protocolRegistry);
+    return result;
+  }
+  _cloneForQualifier() {
+    return new ObjcObjectPointerType(this.baseType, this.className, this.protocols, this.ownership, this.protocolRegistry);
+  }
 }
 
 // `T[N]` — a C array of N elements of T (linear memory). N=0 marks an
@@ -3127,7 +3233,7 @@ class TagType extends TypeInfo {
     this.tagKind = tagKind;
     this.tagName = tagName;
     this.tagDecl = null;
-    Object.seal(this);
+    if (new.target === TagType) Object.seal(this);
   }
   isTag()    { return true; }
   isStruct() { return this.tagKind === TagKind.STRUCT; }
@@ -3156,6 +3262,25 @@ class TagType extends TypeInfo {
     c.isComplete = this.isComplete;
     c.tagDecl = this.tagDecl;
     return c;
+  }
+}
+
+// Qualified/forward Objective-C class spellings share one live layout, rather
+// than copying an incomplete tag and stranding it when the interface completes.
+class ObjcClassType extends TagType {
+  constructor(name, canonical = null) {
+    super(TagKind.STRUCT,name,0,1);
+    this.canonical = canonical;
+    if (canonical) for (const field of ['size','align','isComplete','tagDecl'])
+      Object.defineProperty(this,field,{get:()=>canonical[field],enumerable:true,configurable:true});
+    Object.seal(this);
+  }
+  _cloneForQualifier() {
+    const clone = new ObjcClassType(this.tagName,this.canonical || this);
+    if (objcClassTypes.has(this)) objcClassTypes.set(clone,objcClassTypes.get(this));
+    if (objcClassQualifiers.has(this)) objcClassQualifiers.set(clone,objcClassQualifiers.get(this));
+    if (objcClassOwnership.has(this)) objcClassOwnership.set(clone,objcClassOwnership.get(this));
+    return clone;
   }
 }
 
@@ -3276,6 +3401,15 @@ class RefExternType extends TypeInfo {
   _cloneForQualifier() { return new RefExternType(); }
 }
 
+// Compiler-internal EH identity. Never stored in C linear memory or exposed
+// as a source-language object pointer.
+class ExceptionRefType extends TypeInfo {
+  constructor() { super(0, 0, false); Object.seal(this); }
+  isRef() { return true; }
+  _toString() { return "<exception reference>"; }
+  _cloneForQualifier() { return new ExceptionRefType(); }
+}
+
 // `__eqref` — the GC-universe top type (eq lattice). Singleton.
 class EqRefType extends TypeInfo {
   constructor() { super(0, 0, true); Object.seal(this); }
@@ -3311,6 +3445,7 @@ const TDOUBLE  = new FloatingType("double",      8, 8);
 const TLDOUBLE = new FloatingType("long double", 8, 8);
 const TEXTERNREF = new ExternRefType();
 const TREFEXTERN = new RefExternType();
+const TEXNREF = new ExceptionRefType();
 const TEQREF = new EqRefType();
 const TAUTO = new AutoType();
 
@@ -3644,11 +3779,11 @@ return {
   TypeInfo,
   PrimitiveType, IntegerType, FloatingType,
   VoidType, AutoType, UnknownType, DivergentType,
-  PointerType, ArrayType, FunctionType, TagType,
+  PointerType, ObjcObjectPointerType, ArrayType, FunctionType, TagType, ObjcClassType,
   GCStructHeapType, GCStructRefType, GCArrayType,
   ExternRefType, RefExternType, EqRefType,
   TUNKNOWN, TVOID, TBOOL, TCHAR, TSCHAR, TUCHAR, TSHORT, TUSHORT,
-  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TEQREF, TAUTO,
+  TINT, TUINT, TLONG, TULONG, TLLONG, TULLONG, TFLOAT, TDOUBLE, TLDOUBLE, TEXTERNREF, TREFEXTERN, TEXNREF, TEQREF, TAUTO,
   TDIVERGENT,
   arrayOf, functionType, getOrCreateTagType, createTagType,
   getOrCreateGCStructType, gcArrayOf, validateNoHeapInValueType,
@@ -4890,8 +5025,25 @@ function typesAreAssignmentCompatible(srcType, targetType, expr) {
   if (s.isPointer() && t.isPointer()) {
     const sBase = s.baseType, tBase = t.baseType;
     if (sBase.isVoid() || tBase.isVoid()) return true;
+    if (s instanceof Types.ObjcObjectPointerType || t instanceof Types.ObjcObjectPointerType) {
+      const objectLike = p => p instanceof Types.ObjcObjectPointerType ||
+        p.baseType.removeQualifiers().tagName === '__guc_objc_class';
+      if (!objectLike(s) || !objectLike(t)) return false;
+      if (t instanceof Types.ObjcObjectPointerType && s instanceof Types.ObjcObjectPointerType &&
+          t.protocols.length && (s.className || s.protocols.length)) {
+        const provided = s.protocolNames();
+        if (t.protocols.some(p => !provided.has(p))) return false;
+      }
+      if ((s instanceof Types.ObjcObjectPointerType && !s.className) ||
+          (t instanceof Types.ObjcObjectPointerType && !t.className)) return true;
+    }
     if (sBase.isConst && !tBase.isConst) return false;
     if (sBase.isVolatile && !tBase.isVolatile) return false;
+    const targetClass = objcClassTypes.get(t.baseType.removeQualifiers());
+    if (targetClass) {
+      for (let cls = objcClassTypes.get(s.baseType.removeQualifiers()); cls; cls = cls.parent)
+        if (cls === targetClass) return true;
+    }
     const su = sBase.removeQualifiers(), tu = tBase.removeQualifiers();
     if (su.isCompatibleWith(tu)) return true;
     if (isCharType(su) && isCharType(tu)) return true;
@@ -5919,6 +6071,8 @@ class TUnit {
     this.minStackBytes = 0;
     this.exportDirectives = [];
     this.exceptionTags = [];
+    this.objc = null;
+    this.startupFunctions = [];
     Object.seal(this);
   }
 }
@@ -6695,6 +6849,9 @@ function optimize(unit, options) {
   // the tree-shake would drop the decl from `declaredFunctions` and the
   // linker would have nothing left to set `.definition` on.
   for (const [, decl] of unit.exportDirectives) enqueueFunc(decl);
+  for (const fn of unit.startupFunctions) enqueueFunc(fn);
+  // Link-time mixed-language catches and export boundaries need these helpers.
+  for (const fn of unit.objc?.ehFunctions?.values() || []) enqueueFunc(fn);
   for (const v of unit.definedVariables) {
     if (v.storageClass !== Types.StorageClass.STATIC) enqueueVar(v);
   }
@@ -7818,7 +7975,7 @@ function hoistDeclarations(funcDef) {
       // them by DVar identity from outside the catch's lexical scope).
       // Hoist them alongside the rest of the locals.
       for (const cc of stmt.catches) {
-        for (const bv of (cc.bindingVars || [])) {
+        for (const bv of [...(cc.bindingVars || []), ...(cc.exnVar ? [cc.exnVar] : [])]) {
           uniquify(bv);
           hoisted.push(bv);
         }
@@ -8103,6 +8260,7 @@ function buildSegments(body, tryCtx) {
         return {
           tag: cc.tag,
           userBindingVars: cc.bindingVars || [],
+          exnVar: cc.exnVar || null,
           entrySegId: allocId(),
         };
       });
@@ -8198,6 +8356,8 @@ function findDispatchEntry(regionId, tag, regions) {
 // an exception no active region handles propagates with tag and payload
 // intact.
 function makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState) {
+  const exnVar = new AST.DVar(loc, '__irreducible_exnref', Types.TEXNREF, Types.StorageClass.NONE, null);
+  exnVar.definition = exnVar;
   const paramTypes = (tag && tag.paramTypes) || [];
   const tempBindings = paramTypes.map((t, idx) => {
     const dv = new AST.DVar(loc,
@@ -8216,6 +8376,10 @@ function makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState) {
     const entry = findDispatchEntry(i, tag, tryCtx.regions);
     if (!entry) continue;
     const bodyStmts = [];
+    if (entry.exnVar) bodyStmts.push(new AST.SExpr(loc,
+      new AST.EBinary(loc, Types.TEXNREF, "ASSIGN",
+        new AST.EIdent(loc, Types.TEXNREF, entry.exnVar),
+        new AST.EIdent(loc, Types.TEXNREF, exnVar))));
     for (let j = 0; j < tempBindings.length && j < entry.userBindingVars.length; j++) {
       const userVar = entry.userBindingVars[j];
       const tmpVar = tempBindings[j];
@@ -8230,8 +8394,7 @@ function makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState) {
 
   // Build the if/else chain: each arm checks __irreducible_handler == R.
   // Final else: rethrow tag(tempBindings...).
-  const rethrowArgs = tempBindings.map(d => new AST.EIdent(loc, d.type, d));
-  let chain = new AST.SThrow(loc, tag, rethrowArgs);
+  let chain = new AST.SThrow(loc, null, [new AST.EIdent(loc, Types.TEXNREF, exnVar)]);
   for (let i = armStmts.length - 1; i >= 0; i--) {
     const arm = armStmts[i];
     const cond = new AST.EBinary(loc, Types.TINT, "EQ",
@@ -8244,6 +8407,7 @@ function makeDispatcherCatch(tag, tryCtx, loc, handlerVar, setState) {
     tag,
     bindings: tempBindingNames,
     bindingVars: tempBindings,
+    exnVar,
     // Codegen lowers this clause as catch_all_ref (capturing the
     // in-flight exception as an exnref) so the SThrow(null) rethrow in
     // the else arm can throw_ref it.
@@ -9013,7 +9177,7 @@ function dumpStmt(stmt, ctx, indent) {
       }
       break;
     case AST.SThrow:
-      ret += " " + stmt.tag.name;
+      ret += " " + (stmt.tag ? stmt.tag.name : "throw_ref");
       for (const arg of stmt.args) ret += dumpExpr(arg, ctx, indent + 1);
       break;
     case AST.SEmpty:
@@ -9534,7 +9698,7 @@ function printC(units, options) {
       return;
     }
     if (stmt instanceof AST.SThrow) {
-      w(ind + "__throw " + stmt.tag.name + "(" + stmt.args.map(a => emitExpr(a)).join(", ") + ");\n");
+      w(ind + "__throw " + (stmt.tag ? stmt.tag.name : "<throw_ref>") + "(" + stmt.args.map(a => emitExpr(a)).join(", ") + ");\n");
       return;
     }
     w(ind + "/* unknown stmt: " + stmt.constructor.name + " */\n");
@@ -9765,6 +9929,8 @@ function gcSectionsPass(units, options) {
   };
 
   // Seed cross-TU roots.
+  const objcRuntime = units.find(u => u.objc)?.objc;
+  if (objcRuntime) enqueueFunc(objcRuntime.ehFunctions.get('uncaught'));
   for (const unit of units) {
     for (const f of unit.definedFunctions) {
       if (f.name === "main" || f.name === "alloca") enqueueFunc(f);
@@ -9816,9 +9982,263 @@ function gcSectionsPass(units, options) {
 // Linker
 // ====================
 
+// A C catch-all may consume a record originating in another translation unit.
+// Extract its payload by rethrowing the exact reference into an internal typed
+// catch, then lower the one original handler through the common exit ladder.
+function lowerObjcLinkedCatches(units) {
+  const runtime = units.find(u => u.objc)?.objc;
+  if (!runtime) return;
+  const parser = Object.create(Parser.prototype);
+  parser.objc = {...runtime, poolScopes:new WeakMap(), ehScopes:new WeakMap(), ehBarriers:new WeakSet()};
+  parser.anonCounter = 0;
+  parser.peek = () => null;
+  parser.error = (tok, message) => { throw new Error(message); };
+  const loc = Lexer.Loc.generated();
+  const ref = v => new AST.EIdent(loc,v.type,v);
+  const seq = a => new AST.SCompound(loc,a);
+  const call = (name,args) => new AST.SExpr(loc,parser.objcEHCall(name,args,loc));
+  for (const unit of units) for (const fn of [...unit.definedFunctions,...unit.staticFunctions]) {
+    let changed = false;
+    const rewrite = node => {
+      if (!(node instanceof AST.Stmt)) return node;
+      if (node instanceof AST.SFor) return new AST.SFor(node.loc,node.init,node.condition,node.increment,rewrite(node.body));
+      const children = node.children.map(rewrite);
+      node = children.some((c,i)=>c!==node.children[i]) ? node._withChildren(children) : node;
+      if (node instanceof AST.SCompound) for (const label of node.labels) label.enclosingBlock=node;
+      if (!(node instanceof AST.STryCatch)) return node;
+      return new AST.STryCatch(node.loc,node.tryBody,node.catches.map(cc => {
+        if (!cc.sourceCatchAll) return cc;
+        changed = true;
+        const record=parser.objcEHVar(Types.TUINT,loc,new AST.EInt(loc,Types.TUINT,0n));
+        const payload=parser.objcEHVar(Types.TUINT,loc), exn=parser.objcEHVar(Types.TEXNREF,loc);
+        const classify = new AST.STryCatch(loc,new AST.SThrow(loc,null,[ref(exn)]),[
+          {tag:runtime.exceptionTag,bindings:[payload.name],bindingVars:[payload],body:new AST.SExpr(loc,
+            new AST.EBinary(loc,Types.TUINT,'ASSIGN',ref(record),ref(payload)))},
+          {tag:null,bindings:[],body:new AST.SEmpty(loc)}
+        ]);
+        const handler=seq([cc.body]);
+        parser.objc.ehScopes.set(handler,{cleanup:call('drop',[ref(record)]),exceptional:true,simple:true,jumpRecord:record});
+        return {...cc,sourceCatchAll:false,exnVar:exn,body:seq([
+          call('guard',[]),new AST.SDecl(loc,[record]),classify,handler])};
+      }));
+    };
+    if (fn.body) fn.body=rewrite(fn.body);
+    if (changed) parser.objcLowerEHScopes(fn);
+  }
+}
+
 function linkTranslationUnits(units, compilerOptions) {
   const errors = [];
+  lowerObjcLinkedCatches(units);
+  // runModule invokes the existing constructor export after binding memory and
+  // imports, before main. Root every TU's eager initialization before GC/inlining.
+  if (!units.some(u => u.filename === '<guc-objc-startup>')) {
+    const startups = units.flatMap(u => u.startupFunctions);
+    if (startups.length) {
+      const loc = Lexer.Loc.generated();
+      const body = new AST.SCompound(loc, startups.map(f => new AST.SExpr(loc,
+        AST.makeCall(loc, new AST.EIdent(loc, f.type, f), []))));
+      const fn = new AST.DFunc(loc, '__wasm_call_ctors', Types.functionType(Types.TVOID, [], false, false), [], Types.StorageClass.NONE, false, body);
+      const unit = AST.makeTUnit('<guc-objc-startup>');
+      unit.definedFunctions.push(fn); unit.exportDirectives.push(['__wasm_call_ctors', fn]);
+      units.push(unit);
+    }
+  }
+  // #777: exact static identities are linker metadata, not an allocation
+  // registry. Actual DVar references preserve per-TU literal identity and are
+  // relocated by ordinary static initialization, before any +load can run.
+  if (units.some(u => u.objc) && !units.some(u => u.filename === '<guc-objc-lifetimes>')) {
+    const loc = Lexer.Loc.generated(), objects = [], classes = new Set();
+    for (const unit of units) if (unit.objc) {
+      for (const cls of unit.objc.classes.values()) if (cls.complete && !classes.has(cls.name)) {
+        classes.add(cls.name); objects.push(cls.variable, cls.meta);
+      }
+      pushAll(objects, unit.objc.literals);
+    }
+    const pointer = Types.TVOID.pointer();
+    const type = Types.arrayOf(pointer, Math.max(1, objects.length));
+    const values = objects.map(v => AST.makeCast(loc, pointer,
+      AST.makeUnary(loc, 'OP_ADDR', new AST.EIdent(loc, v.type, v))));
+    if (!values.length) values.push(AST.makeCast(loc, pointer, new AST.EInt(loc, Types.TINT, 0n)));
+    const table = new AST.DVar(loc, '__guc_objc_immortals', type, Types.StorageClass.NONE, new AST.EInitList(loc, type, values));
+    table.allocClass = Types.AllocClass.MEMORY;
+    const count = new AST.DVar(loc, '__guc_objc_immortal_count', Types.TUINT, Types.StorageClass.NONE,
+      new AST.EInt(loc, Types.TUINT, BigInt(objects.length)));
+    const unit = AST.makeTUnit('<guc-objc-lifetimes>');
+    unit.definedVariables.push(table, count); units.push(unit);
+  }
   const externScope = new Map();
+
+  // C's nominal tag comparison alone cannot validate Objective-C object
+  // layout across independently parsed headers. Check complete ABI shapes,
+  // including nested aggregates, before sharing any class descriptor.
+  function objcABIEqual(a, b, seen = new Map()) {
+    a = a.removeQualifiers(); b = b.removeQualifiers();
+    if (a === b) return true;
+    if (a.constructor !== b.constructor || !a.isCompatibleWith(b)) return false;
+    if (seen.get(a) === b) return true;
+    seen.set(a, b);
+    if (a.isFunction()) return objcABIEqual(a.returnType, b.returnType, seen) &&
+      a.paramTypes.every((t, i) => objcABIEqual(t, b.paramTypes[i], seen));
+    if (a.isPointer() || a.isArray()) return objcABIEqual(a.baseType, b.baseType, seen);
+    if (a.isAggregate() && a.isComplete && b.isComplete) {
+      if (a.size !== b.size || a.align !== b.align) return false;
+      const am = a.tagDecl.members, bm = b.tagDecl.members;
+      return am.length === bm.length && am.every((m, i) => m.name === bm[i].name &&
+        m.byteOffset === bm[i].byteOffset && m.bitOffset === bm[i].bitOffset &&
+        m.bitWidth === bm[i].bitWidth && m.bfAccessBytes === bm[i].bfAccessBytes && objcABIEqual(m.type, bm[i].type, seen));
+    }
+    return true;
+  }
+  // A qualified id shares its protocol identity across units even when no
+  // named class appears in the caller. Validate that identity's full schema.
+  const objcProtocols = new Map();
+  for (const unit of units) for (const protocol of unit.objc?.protocols.values() || []) {
+    if (!protocol.complete) continue;
+    const old = objcProtocols.get(protocol.name);
+    if (old && (old.parents.join(',') !== protocol.parents.join(',') ||
+        old.declared.size !== protocol.declared.size || [...old.declared].some(([key,sig]) =>
+          !protocol.declared.has(key) || !objcABIEqual(sig.type,protocol.declared.get(key).type))))
+      errors.push({message:`inconsistent Objective-C protocol '${protocol.name}'`,locations:[]});
+    else objcProtocols.set(protocol.name,protocol);
+  }
+  const objcClasses = new Map(), objcSignatures = new Map();
+  const recordObjcSignature = (name,key,sig,tok,kind='declaration') => {
+    if (!objcSignatures.has(name)) objcSignatures.set(name,new Map());
+    const signatures = objcSignatures.get(name), entries = signatures.get(key) || [];
+    // Independent object guarantees need not imply one another: an actual
+    // implementation may satisfy their intersection. Only physical ABI
+    // incompatibility is intrinsically inconsistent before checking that IMP.
+    const valueABIEqual = (a,b) => a instanceof Types.ObjcObjectPointerType && b instanceof Types.ObjcObjectPointerType || objcABIEqual(a,b);
+    const old = entries.find(e => e.sig.type.isVarArg !== sig.type.isVarArg ||
+      e.sig.type.paramTypes.length !== sig.type.paramTypes.length ||
+      !valueABIEqual(e.sig.type.returnType,sig.type.returnType) ||
+      e.sig.type.paramTypes.slice(2).some((p,i)=>!valueABIEqual(p,sig.type.paramTypes[i+2])));
+    if (old)
+      errors.push({message:`inconsistent Objective-C signature '${name} ${key}'`,locations:[Lexer.Loc.fromTok(old.tok),Lexer.Loc.fromTok(tok)]});
+    entries.push({sig,tok,kind}); signatures.set(key,entries);
+  };
+
+  for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
+    const previous = objcClasses.get(cls.name);
+    if (previous) {
+      if (previous.interfaceComplete && cls.interfaceComplete && (previous.parent?.name !== cls.parent?.name || !objcABIEqual(previous.type, cls.type)))
+        errors.push({message: `inconsistent Objective-C layout for class '${cls.name}'`, locations: [Lexer.Loc.fromTok(previous.tok), Lexer.Loc.fromTok(cls.tok)]});
+      if (!previous.interfaceComplete || cls.complete) objcClasses.set(cls.name, cls);
+    } else objcClasses.set(cls.name, cls);
+  }
+  // Every complete or partial declaration contributes adoptions. Rebuild
+  // their transitive method obligations using linked protocol identities.
+  for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
+    const canonical = objcClasses.get(cls.name);
+    objcClasses.set(cls.name,{...canonical,protocols:[...new Set([...canonical.protocols,...cls.protocols])]});
+  }
+  const objcRequirements = cls => {
+    const result = [], seen = new Set(), classes = new Set();
+    const visit = name => {
+      if (seen.has(name)) return;
+      seen.add(name);
+      const p = objcProtocols.get(name);
+      if (!p) return;
+      for (const signature of p.declared.values()) result.push(signature);
+      for (const parent of p.parents) visit(parent);
+    };
+    for (let c=objcClasses.get(cls.name); c && !classes.has(c.name); c=c.parent && objcClasses.get(c.parent.name)) {
+      classes.add(c.name);
+      for (const p of c.protocols) visit(p);
+    }
+    return result;
+  };
+  for (const unit of units) for (const cls of unit.objc?.classes.values() || []) {
+    for (const [key,sig] of cls.declared) recordObjcSignature(cls.name,key,sig,cls.tok);
+    for (const sig of objcRequirements(cls)) recordObjcSignature(cls.name,sig.key,sig,cls.tok,'requirement');
+  }
+  for (const unit of units) for (const send of unit.objc?.sends || [])
+    if (send.staticClass) recordObjcSignature(send.staticClass.name,send.key,send.sig,send.tok,'caller');
+
+  for (const unit of units) for (const send of unit.objc?.sends || []) {
+    if (send.staticClass) continue;
+    const protocolCandidates = [], visited = new Set();
+    const visitProtocol = name => {
+      if (visited.has(name)) return;
+      visited.add(name);
+      const p = objcProtocols.get(name);
+      if (!p) return;
+      for (const key of ['-' + send.name,'+' + send.name])
+        if (p.declared.has(key)) protocolCandidates.push(p.declared.get(key));
+      for (const parent of p.parents) visitProtocol(parent);
+    };
+    for (const name of send.protocols) visitProtocol(name);
+    if (protocolCandidates.length) {
+      if (protocolCandidates.some(sig => !objcABIEqual(sig.type,send.sig.type)))
+        errors.push({message:`Objective-C ambiguous signature for dynamic receiver selector '${send.name}' across translation units`,locations:[Lexer.Loc.fromTok(send.tok)]});
+      continue;
+    }
+    for (const other of units) for (const [key,candidates] of other.objc?.methods || []) {
+      if (send.dynamicId ? key.slice(1) !== send.name : key !== send.key) continue;
+      if (candidates.some(sig => !objcABIEqual(sig.type,send.sig.type)))
+        errors.push({message:`Objective-C ambiguous signature for dynamic receiver selector '${send.name}' across translation units`,locations:[Lexer.Loc.fromTok(send.tok)]});
+    }
+  }
+  for (const unit of units) for (const declaration of unit.objc?.classes.values() || []) {
+    const cls = objcClasses.get(declaration.name);
+    if (!cls?.complete) continue;
+    for (const requirement of [...declaration.declared.values(), ...objcRequirements(declaration)]) {
+      let found=false;
+      const visited=new Set();
+      for(let c=cls;c && !visited.has(c.name);c=c.parent && objcClasses.get(c.parent.name)) {
+        visited.add(c.name);
+        if(c.implemented.has(requirement.key)) {found=true;break;}
+      }
+      if(!found) errors.push({message:`Objective-C ${declaration.declared.has(requirement.key) ? 'method' : 'required protocol method'} '${declaration.name} ${requirement.key}' has no implementation`,locations:[Lexer.Loc.fromTok(declaration.tok)]});
+    }
+  }
+  for (const [name,cls] of objcClasses) {
+    const visited = new Set([name]);
+    for (let base=cls.parent && objcClasses.get(cls.parent.name); base; base=base.parent && objcClasses.get(base.parent.name)) {
+      if (visited.has(base.name)) { errors.push({message:`cyclic Objective-C superclass hierarchy at '${name}'`,locations:[]}); break; }
+      visited.add(base.name);
+      for (const [key,entries] of objcSignatures.get(name) || []) for (const entry of entries) {
+        if (entry.kind !== 'declaration') continue;
+        for (const inherited of objcSignatures.get(base.name)?.get(key) || [])
+          if (!objcMethodSatisfies(entry.sig.type,inherited.sig.type,objcABIEqual,objcClasses,objcProtocols))
+            errors.push({message:`inconsistent Objective-C override '${name} ${key}' of '${base.name}'`,locations:[Lexer.Loc.fromTok(entry.tok),Lexer.Loc.fromTok(inherited.tok)]});
+      }
+    }
+  }
+  for (const [name,contracts] of objcSignatures) {
+    const cls = objcClasses.get(name);
+    if (!cls?.complete) continue;
+    for (const [key,entries] of contracts) {
+      let implementation;
+      const visited = new Set();
+      for (let c=cls; c && !visited.has(c.name) && !implementation; c=c.parent && objcClasses.get(c.parent.name)) {
+        visited.add(c.name); implementation=c.implemented.get(key);
+      }
+      if (implementation) for (const entry of entries)
+        if (!objcMethodSatisfies(implementation.type,entry.sig.type,objcABIEqual,objcClasses,objcProtocols))
+          errors.push({message:`inconsistent Objective-C signature '${name} ${key}' implementation does not satisfy declaration`,locations:[implementation.loc,Lexer.Loc.fromTok(entry.tok)]});
+    }
+  }
+  if (units.some(u => u.objc?.literals.length)) {
+    const provider = objcClasses.get('NSConstantString');
+    if (provider?.complete) {
+      const fields = [];
+      const flatten = (type, base = 0) => {
+        for (const m of type.tagDecl.members) {
+          if (m.name === '__guc_base') flatten(m.type, base + m.byteOffset);
+          else fields.push({type:m.type, offset:base+m.byteOffset});
+        }
+      };
+      flatten(provider.type);
+      let base = provider.parent;
+      while (base && base.name !== 'NSString') base = base.parent;
+      if (!base || provider.type.size !== 24 || provider.type.align !== 4 || fields.length !== 6 ||
+          fields.some((f,i) => f.offset !== i*4 || (i === 0 || i === 5
+            ? !f.type.isPointer() : f.type.removeQualifiers() !== Types.TUINT)))
+        errors.push({message:'NSConstantString provider does not match the NSString constant-string ABI (24 bytes: isa, flags, UTF-16 length, byte size, hash, data)',locations:[Lexer.Loc.fromTok(provider.tok)]});
+    }
+  }
 
   function addError(message, locations) { errors.push({ message, locations: locations || [] }); }
 
@@ -10502,6 +10922,916 @@ class Parser {
     this.warningFlags = { pointerDecay: false, circularDependency: false };
   }
 
+  // #772: Objective-C syntax is parsed here; only compiler-owned runtime
+  // boilerplate is fed back through the C declaration parser. Method bodies,
+  // message arguments and ivars always use the ordinary typed AST builders.
+  objcGenerated(source) {
+    const saved = [this.tokens, this.pos];
+    const result = Lexer.tokenize('<guc-objc-runtime>', source);
+    if (result.errors.length) this.error(this.peek(), result.errors[0].message);
+    this.tokens = result.tokens; this.pos = 0;
+    try { while (!this.atEnd()) this.parseExternalDeclaration(this.objc.unit); }
+    finally { [this.tokens, this.pos] = saved; }
+  }
+
+  objcInit(unit) {
+    this.objc = { unit, classes: new Map(), protocols: new Map(), selectors: new Map(), methods: new Map(), sends: [], helpers: [], literals: [], poolScopes: new WeakMap(), ehScopes: new WeakMap(), ehBarriers: new WeakSet(), catchStack: [], current: null };
+    this.typeScope.set('id', new Types.ObjcObjectPointerType(Types.createTagType(Types.TagKind.STRUCT, '__guc_objc_object'),null,[],'manual',this.objc.protocols));
+    this.objcGenerated(`
+      typedef struct __guc_objc_selector *SEL;
+      struct __guc_objc_selector { unsigned int reserved; };
+      typedef struct __guc_objc_class *Class;
+      typedef void (*__guc_objc_imp)(void);
+      struct __guc_objc_method { SEL selector; __guc_objc_imp imp; };
+      struct __guc_objc_class {
+        Class isa; Class parent; unsigned int size;
+        struct __guc_objc_method *methods; unsigned int count;
+        Class owner; unsigned int initState; unsigned int loadState;
+        Class pendingChildren; Class pendingNext;
+        struct __guc_objc_method cache[16];
+      };
+      struct __guc_objc_constant_string {
+        Class isa; unsigned int flags, length, byteSize, hash; const void *data;
+      };
+      void *calloc(unsigned long, unsigned long);
+      void free(void *);
+      void abort(void);
+      extern void *__guc_objc_immortals[];
+      extern unsigned int __guc_objc_immortal_count;
+      id __guc_objc_pool_push(void);
+      void __guc_objc_pool_pop(id);
+      static int __guc_objc_is_immortal(id object) {
+        if ((unsigned long)object >= __builtin(heap_base)) return 0;
+        for (unsigned int i=0; i<__guc_objc_immortal_count; ++i)
+          if (object == __guc_objc_immortals[i]) return 1;
+        return 0;
+      }
+      static unsigned int *__guc_objc_refcount(id object) {
+        if (!object || __guc_objc_is_immortal(object)) return 0;
+        if ((unsigned long)object < __builtin(heap_base)) abort();
+        return (unsigned int *)object - 2;
+      }
+      static id guc_objc_alloc(Class cls) {
+        if (!cls || cls->size > 0x40000000UL - 8) return 0;
+        unsigned int *base = calloc(1, cls->size + 8);
+        if (!base) return 0;
+        base[0] = 1;
+        id object = (id)(base + 2);
+        *(Class *)object = cls;
+        return object;
+      }
+      static void guc_objc_dispose(id object) {
+        unsigned int *count = __guc_objc_refcount(object);
+        if (count) free(count);
+      }
+      static id __guc_objc_retain(id object) {
+        unsigned int *count = __guc_objc_refcount(object);
+        if (count) {
+          if (!*count || *count == 0xffffffffU) abort();
+          ++*count;
+        }
+        return object;
+      }
+      static int __guc_objc_release(id object) {
+        unsigned int *count = __guc_objc_refcount(object);
+        if (!count) return 0;
+        if (!*count) abort();
+        --*count;
+        return *count == 0;
+      }
+      static unsigned int __guc_objc_retain_count(id object) {
+        if (!object) return 0;
+        unsigned int *count = __guc_objc_refcount(object);
+        return count ? *count : 0xffffffffU;
+      }
+      static __guc_objc_imp __guc_objc_find(Class cls, SEL selector) {
+        while (cls) {
+          for (unsigned int i = 0; i < cls->count; ++i)
+            if (cls->methods[i].selector == selector) return cls->methods[i].imp;
+          cls = cls->parent;
+        }
+        return 0;
+      }
+      static void __guc_objc_complete(Class cls) {
+        cls->initState = 3;
+        Class child = cls->pendingChildren;
+        cls->pendingChildren = 0;
+        while (child) {
+          Class next = child->pendingNext;
+          child->pendingNext = 0;
+          __guc_objc_complete(child);
+          child = next;
+        }
+      }
+      static void __guc_objc_initialize(Class cls, SEL selector) {
+        if (!cls || cls->initState) return;
+        __guc_objc_initialize(cls->parent, selector);
+        if (cls->initState) return;
+        cls->initState = 1;
+        __guc_objc_imp imp = __guc_objc_find(cls->isa, selector);
+        if (imp) ((void (*)(Class, SEL))imp)(cls, selector);
+        cls->initState = 2;
+        if (!cls->parent || cls->parent->initState == 3) __guc_objc_complete(cls);
+        else {
+          cls->pendingNext = cls->parent->pendingChildren;
+          cls->parent->pendingChildren = cls;
+        }
+      }
+      static void __guc_objc_load(Class cls, SEL selector) {
+        if (!cls || cls->loadState) return;
+        __guc_objc_load(cls->parent, selector);
+        cls->loadState = 1;
+        Class meta = cls->isa;
+        for (unsigned int i=0; i<meta->count; ++i)
+          if (meta->methods[i].selector == selector) {
+            ((void (*)(Class,SEL))meta->methods[i].imp)(cls,selector); break;
+          }
+      }
+      static __guc_objc_imp __guc_objc_lookup(id object, SEL selector, Class start, SEL initialize) {
+        Class actual = *(Class *)object;
+        __guc_objc_initialize(actual->owner, initialize);
+        Class cls = start ? start : actual;
+        unsigned int slot = ((unsigned int)selector >> 2) & 15;
+        if (cls->cache[slot].selector == selector) return cls->cache[slot].imp;
+        __guc_objc_imp imp = __guc_objc_find(cls, selector);
+        if (!imp) { abort(); return 0; }
+        cls->cache[slot].selector = selector; cls->cache[slot].imp = imp;
+        return imp;
+      }
+    `);
+    this.requiredSources.add('__stdlib.c');
+    unit.objc = this.objc;
+    this.objc.id = this.typeScope.get('id');
+    this.objc.sel = this.typeScope.get('SEL');
+    this.objc.cls = this.typeScope.get('Class');
+    this.objc.constantType = this.tagScope.get('__guc_objc_constant_string');
+    this.objc.poolDeclarations = ['__guc_objc_pool_push', '__guc_objc_pool_pop'].map(n => this.varScope.get(n));
+    unit.declaredFunctions = unit.declaredFunctions.filter(f => !this.objc.poolDeclarations.includes(f));
+    const registry = this._exceptionTagRegistry;
+    let tag = registry && registry.get('__guc_objc_exception');
+    if (!tag) {
+      tag = new AST.DExceptionTag(Lexer.Loc.generated(), '__guc_objc_exception', [Types.TUINT]);
+      tag.definition = tag;
+      if (registry) registry.set(tag.name, tag);
+    }
+    this.objc.exceptionTag = tag;
+    this.parsedExceptionTags.push(tag); unit.exceptionTags.push(tag);
+    let jumpTag=registry && registry.get('__LongJump');
+    if(!jumpTag) {
+      jumpTag=new AST.DExceptionTag(Lexer.Loc.generated(),'__LongJump',[Types.TINT,Types.TINT]);
+      jumpTag.definition=jumpTag;if(registry) registry.set(jumpTag.name,jumpTag);
+    }
+    this.objc.longJumpTag=jumpTag;
+    this.parsedExceptionTags.push(jumpTag);unit.exceptionTags.push(jumpTag);
+    const retain = this.objcSelector('retain').symbol;
+    const release = this.objcSelector('release').symbol;
+    const initialize = this.objcSelector('initialize').symbol;
+    this.objcGenerated(`
+      struct __guc_objc_eh_record { id object; unsigned int refs; };
+      __import long write(int, const void *, long);
+      __import void __guc_objc_eh_guard(void);
+      __import void __exit(int);
+      static void __guc_objc_eh_longjmp(void) {
+        write(2,"longjmp crosses an Objective-C exception scope\\n",sizeof("longjmp crosses an Objective-C exception scope\\n")-1); __exit(134);
+      }
+      static void __guc_objc_eh_fatal(void) {
+        write(2,"Objective-C exception record allocation failed\\n",sizeof("Objective-C exception record allocation failed\\n")-1); __exit(134);
+      }
+      static unsigned int __guc_objc_eh_new(id object) {
+        struct __guc_objc_eh_record *r=calloc(1,sizeof *r);
+        if (!r) { __guc_objc_eh_fatal(); return 0; }
+        r->object=object; r->refs=1;
+        if (object) ((id (*)(id,SEL))__guc_objc_lookup(object,&${retain},0,&${initialize}))(object,&${retain});
+        return (unsigned int)r;
+      }
+      static void __guc_objc_eh_hold(unsigned int address) {
+        struct __guc_objc_eh_record *r=(struct __guc_objc_eh_record *)address;
+        if (r) { if(r->refs==0xffffffffU) abort(); ++r->refs; }
+      }
+      static void __guc_objc_eh_drop(unsigned int address) {
+        struct __guc_objc_eh_record *r=(struct __guc_objc_eh_record *)address;
+        if (!r || --r->refs) return;
+        id object=r->object; free(r);
+        if (object) ((void (*)(id,SEL))__guc_objc_lookup(object,&${release},0,&${initialize}))(object,&${release});
+      }
+      static void __guc_objc_eh_uncaught(unsigned int address) {
+        write(2,"uncaught Objective-C exception\\n",sizeof("uncaught Objective-C exception\\n")-1);
+        __guc_objc_eh_drop(address); __exit(134);
+      }
+      static id __guc_objc_eh_object(unsigned int address) {
+        return ((struct __guc_objc_eh_record *)address)->object;
+      }
+      static int __guc_objc_eh_match(unsigned int address,Class cls) {
+        id object=__guc_objc_eh_object(address);
+        Class actual=object ? *(Class *)object : 0;
+        while(actual) { if(actual==cls) return 1; actual=actual->parent; }
+        return 0;
+      }
+    `);
+    this.objc.ehFunctions = new Map(['new','hold','drop','object','match','fatal','longjmp','guard','uncaught'].map(
+      name => [name,this.varScope.stack[0].get('__guc_objc_eh_' + name)]));
+    // Retain is user-dispatchable. If it throws, discard the untransferred
+    // record and propagate the original exception without acquiring ownership.
+    const loc=Lexer.Loc.generated(), ref=v=>new AST.EIdent(loc,v.type,v);
+    const seq=a=>new AST.SCompound(loc,a);
+    const call=(name,args)=>new AST.SExpr(loc,this.objcEHCall(name,args,loc));
+    const fresh=this.objc.ehFunctions.get('new');
+    const record=fresh.body.statements.find(s=>s instanceof AST.SDecl && s.declarations.some(v=>v.name==='r')).declarations.find(v=>v.name==='r');
+    fresh.body=seq(fresh.body.statements.map(stmt=>{
+      if (!(stmt instanceof AST.SIf) || !(stmt.condition instanceof AST.EIdent) || stmt.condition.decl.name!=='object') return stmt;
+      const exn=this.objcEHVar(Types.TEXNREF,loc), free=this.varScope.stack[0].get('free');
+      return new AST.STryCatch(loc,stmt,[{tag:null,bindings:[],exnVar:exn,body:seq([
+        new AST.SExpr(loc,AST.makeCall(loc,new AST.EIdent(loc,free.type,free),[ref(record)])),
+        new AST.SThrow(loc,null,[ref(exn)])])}]);
+    }));
+    // Dispose a handler hold while retaining any pending completion. If custom
+    // release throws, its exception replaces the pending one, whose hold must
+    // also be consumed. Recursion represents actual successive user throws,
+    // not a compile-time expansion or a nonthrowing-release assumption.
+    const params=[Types.TUINT,Types.TUINT,Types.TEXNREF,Types.TINT].map(t=>this.objcEHVar(t,loc));
+    const finish=new AST.DFunc(loc,'__guc_objc_eh_finish',Types.functionType(Types.TVOID,params.map(v=>v.type),false,false),params,Types.StorageClass.STATIC,false,null);
+    finish.definition=finish;unit.staticFunctions.push(finish);this.objc.ehFunctions.set('finish',finish);
+    const [old,pending,exn,throwing]=params;
+    const next=this.objcEHVar(Types.TUINT,loc), nextExn=this.objcEHVar(Types.TEXNREF,loc);
+    const resume=(value)=>seq([call('finish',[ref(pending),value,ref(nextExn),new AST.EInt(loc,Types.TINT,1n)]),new AST.SReturn(loc,null)]);
+    finish.body=seq([new AST.STryCatch(loc,call('drop',[ref(old)]),[
+      this.objcEHJumpGuard(loc),
+      {tag:this.objc.exceptionTag,bindings:[next.name],bindingVars:[next],exnVar:nextExn,body:resume(ref(next))},
+      {tag:null,bindings:[],exnVar:nextExn,body:seq([call('guard',[]),resume(new AST.EInt(loc,Types.TUINT,0n))])}
+    ]),new AST.SIf(loc,ref(throwing),new AST.SThrow(loc,null,[ref(exn)]),null)]);
+    const uncaught=this.objc.ehFunctions.get('uncaught');
+    const exit=this.varScope.stack[0].get('__exit');
+    const terminate=new AST.SExpr(loc,AST.makeCall(loc,new AST.EIdent(loc,exit.type,exit),[new AST.EInt(loc,Types.TINT,134n)]));
+    uncaught.body=new AST.STryCatch(loc,uncaught.body,[
+      {tag:this.objc.exceptionTag,bindings:[next.name],bindingVars:[next],body:call('uncaught',[ref(next)])},
+      {tag:null,bindings:[],body:terminate}
+    ]);
+  }
+
+  objcEHVar(type, loc, init = null) {
+    const v = new AST.DVar(loc, '__guc_objc_eh_' + this.anonCounter++, type, Types.StorageClass.AUTO, init);
+    v.definition = v;
+    if (type.isAggregate()) v.allocClass = Types.AllocClass.MEMORY;
+    return v;
+  }
+
+  objcEHCall(name, args, loc) {
+    const f = this.objc.ehFunctions?.get(name) || this.varScope.stack[0].get('__guc_objc_eh_' + name);
+    return AST.makeCall(loc, new AST.EIdent(loc, f.type, f), args);
+  }
+
+  objcEHJumpGuard(loc) {
+    const vars=[this.objcEHVar(Types.TINT,loc),this.objcEHVar(Types.TINT,loc)];
+    return {tag:this.objc.longJumpTag,bindings:vars.map(v=>v.name),bindingVars:vars,
+      body:new AST.SExpr(loc,this.objcEHCall('longjmp',[],loc))};
+  }
+
+  objcParseTry(loc) {
+    this.objc.hasEH = true;
+    const ref = v => new AST.EIdent(loc, v.type, v);
+    const record = this.objcEHVar(Types.TUINT, loc);
+    const exn = this.objcEHVar(Types.TEXNREF, loc);
+    const tryBody = this.parseCompoundStatement();
+    this.objc.ehBarriers.add(tryBody);
+    const handlers = [];
+    while (this.matchText('@catch')) {
+      this.expect('(');
+      this.typeScope.push(); this.tagScope.push(); this.varScope.push();
+      let variable = null, cls = null, all = false;
+      if (this.matchText('...')) all = true;
+      else {
+        const spec = this.parseDeclSpecifiers();
+        if (spec.storageClass !== Types.StorageClass.NONE || spec.isInline) this.error(this.peek(), '@catch binding cannot have a storage class or function specifier');
+        const decl = this.parseDeclarator(spec.type);
+        const type = decl.type.removeQualifiers();
+        if (!(type instanceof Types.ObjcObjectPointerType)) this.error(this.peek(), '@catch requires an Objective-C object pointer');
+        if (!decl.name) this.error(this.peek(), '@catch requires a binding name');
+        variable = new AST.DVar(loc, decl.name, decl.type, Types.StorageClass.AUTO);
+        variable.definition = variable; this.varScope.set(decl.name, variable);
+        if (type.className) cls = this.objc.classes.get(type.className);
+      }
+      this.expect(')');
+      this.objc.catchStack.push({record,exn});
+      const body = this.parseCompoundStatement();
+      this.objc.catchStack.pop();
+      this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
+      this.objc.ehBarriers.add(body);
+      handlers.push({variable,cls,all,body});
+    }
+    let finalizer = null;
+    if (this.matchText('@finally')) {
+      finalizer = this.parseCompoundStatement();
+      this.objc.ehBarriers.add(finalizer);
+    }
+    if (!handlers.length && !finalizer) this.error(this.peek(), '@try requires @catch or @finally');
+    for (let i=0;i<handlers.length-1;i++) if(handlers[i].all) this.error(this.peek(), '@catch(...) must be last');
+    const wrapHandler = h => {
+      const statements = [];
+      if (h.variable) {
+        h.variable.initExpr = new AST.ECast(loc,h.variable.type,h.variable.type,this.objcEHCall('object',[ref(record)],loc));
+        statements.push(new AST.SDecl(loc,[h.variable]));
+      }
+      statements.push(h.body);
+      const body = new AST.SCompound(loc,statements);
+      this.objc.ehScopes.set(body,{cleanup:new AST.SExpr(loc,this.objcEHCall('drop',[ref(record)],loc)),exceptional:true,simple:true});
+      return body;
+    };
+    const all=handlers.find(h=>h.all);
+    const allLabel=all && new AST.SLabel(loc,'__guc_objc_all_'+this.anonCounter++);
+    const endLabel=all && new AST.SLabel(loc,'__guc_objc_end_'+this.anonCounter++);
+    const jump=label=>{const g=new AST.SGoto(loc,label.name);g.target=label;label.hasGotos=true;return g;};
+    const assign=(v,e)=>new AST.SExpr(loc,new AST.EBinary(loc,v.type,'ASSIGN',ref(v),e));
+    let dispatch = all ? jump(allLabel) : new AST.SThrow(loc,null,[ref(exn)]);
+    for(let i=handlers.length-1;i>=0;i--) {
+      const h=handlers[i];if(h.all) continue;
+      const body=wrapHandler(h);
+      if(!h.cls) dispatch=body;
+      else {
+        const clsAddress=this.objcClassAddress(h.cls,false,loc);
+        dispatch=new AST.SIf(loc,this.objcEHCall('match',[ref(record),clsAddress],loc),body,dispatch);
+      }
+    }
+    const catches=[this.objcEHJumpGuard(loc)];
+    if(handlers.length) {
+      const incoming=this.objcEHVar(Types.TUINT,loc),incomingExn=this.objcEHVar(Types.TEXNREF,loc);
+      catches.push({tag:this.objc.exceptionTag,bindings:[incoming.name],bindingVars:[incoming],exnVar:incomingExn,
+        body:new AST.SCompound(loc,[assign(record,ref(incoming)),assign(exn,ref(incomingExn)),dispatch])});
+      if(all) catches.push({tag:null,bindings:[],bindingVars:[],exnVar:incomingExn,body:new AST.SCompound(loc,[
+        new AST.SExpr(loc,this.objcEHCall('guard',[],loc)),
+        assign(record,new AST.EInt(loc,Types.TUINT,0n)),assign(exn,ref(incomingExn)),jump(allLabel)])});
+    }
+    const statements=[new AST.SDecl(loc,[record,exn]),new AST.STryCatch(loc,tryBody,catches)];
+    if(all) statements.push(jump(endLabel),allLabel,wrapHandler(all),endLabel);
+    const body=new AST.SCompound(loc,statements,all?[allLabel,endLabel]:[]);
+    if(all) {allLabel.enclosingBlock=body;endLabel.enclosingBlock=body;}
+    if(finalizer) this.objc.ehScopes.set(body,{cleanup:finalizer,exceptional:true});
+    return body;
+  }
+
+  objcSelector(name) {
+    if (!this.objc.selectors.has(name)) {
+      // One external tentative object per spelling. The existing C linker
+      // coalesces these across TUs: SEL is the canonical object's address.
+      const symbol = '__guc_objc_selector_' + Array.from(name, c => c.codePointAt(0).toString(16)).join('_');
+      const variable = new AST.DVar(null, symbol, this.objc.sel.baseType, Types.StorageClass.NONE);
+      this.varScope.stack[0].set(symbol, variable);
+      this.objc.unit.definedVariables.push(variable);
+      this.objc.selectors.set(name, {symbol, variable, id: this.objc.selectors.size + 1});
+    }
+    return this.objc.selectors.get(name);
+  }
+
+  objcType() {
+    this.expect('(', 'Objective-C experiment requires an explicit method type');
+    const specs = this.parseDeclSpecifiers();
+    const decl = this.parseDeclarator(specs.type);
+    this.expect(')');
+    const type = decl.type;
+    if (!(type.isVoid() || type.isArithmetic() || type.isPointer() ||
+          ((type.isStruct() || type.isUnion()) && type.isComplete)))
+      this.error(this.peek(-1), 'Objective-C method requires a complete value type');
+    return type;
+  }
+
+  objcSelectorWord() {
+    if (this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) return this.advance().text;
+    this.error(this.peek(), 'Expected Objective-C selector name');
+  }
+
+  objcMethodSignature() {
+    const tok = this.advance(), classMethod = tok.text === '+';
+    const returnType = this.objcType();
+    let name = this.objcSelectorWord();
+    const params = [], names = [];
+    if (this.matchText(':')) {
+      name += ':';
+      while (true) {
+        const type = this.objcType();
+        if (type.isVoid()) this.error(this.peek(), 'Objective-C parameter cannot have void type');
+        params.push(type); names.push(this.expectKind(Lexer.TokenKind.IDENT).text);
+        if ((this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) && this.peek(1).text === ':') {
+          name += this.advance().text + ':'; this.advance();
+        } else if (this.matchText(':')) name += ':';
+        else break;
+      }
+    }
+    const variadic = this.matchText(',');
+    if (variadic) this.expect('...');
+    if (names.some(n => n === 'self' || n === '_cmd') || new Set(names).size !== names.length)
+      this.error(tok, 'Objective-C method has duplicate or reserved parameter names');
+    const type = Types.functionType(returnType, [this.objc.id, this.objc.sel, ...params], variadic, false);
+    const key = (classMethod ? '+' : '-') + name;
+    if (classMethod && (name === 'load' || name === 'initialize') && (!returnType.isVoid() || params.length || variadic))
+      this.error(tok, `Objective-C +${name} requires the signature (void)${name}`);
+    const signatures = this.objc.methods.get(key) || [];
+    const existing = signatures.find(sig => sig.type.isCompatibleWith(type));
+    const selectorInfo = this.objcSelector(name), selector = selectorInfo.id;
+    const sig = existing || { name, key, type, selector, selectorSymbol: selectorInfo.symbol, classMethod, helper: `__guc_objc_send_${classMethod ? 'c' : 'i'}${selector}_${signatures.length}` };
+    if (!existing) {
+      signatures.push(sig);
+      this.objc.methods.set(key, signatures);
+      const ftype = Types.functionType(returnType, [this.objc.id, this.objc.cls, ...params], variadic, false);
+      sig.decl = new AST.DFunc(Lexer.Loc.fromTok(tok), sig.helper, ftype, [], Types.StorageClass.STATIC, false, null);
+      this.varScope.set(sig.helper, sig.decl);
+      if (!variadic) this.objc.unit.declaredFunctions.push(sig.decl);
+      if (!variadic) this.objc.helpers.push(sig);
+    }
+    return { sig, names, tok };
+  }
+
+  objcClassReference(variable) {
+    if (variable.storageClass === Types.StorageClass.EXTERN && !this.objc.unit.externVariables.includes(variable))
+      this.objc.unit.externVariables.push(variable);
+  }
+
+  objcClassAddress(cls, meta, loc) {
+    this.objcClassReference(meta ? cls.meta : cls.variable);
+    return AST.makeUnary(loc, 'OP_ADDR', new AST.EIdent(loc, (meta ? cls.meta : cls.variable).type, meta ? cls.meta : cls.variable));
+  }
+
+  objcForwardClass(name, tok) {
+    if (this.objc.classes.has(name)) return this.objc.classes.get(name);
+    if (this.typeScope.has(name) || this.varScope.has(name)) this.error(tok, `duplicate Objective-C class '${name}'`);
+    const type = new Types.ObjcClassType('__guc_objc_object_' + name);
+    const cls = {name, type, parent: null, protocols: [], protocolRegistry:this.objc.protocols, declared: new Map(), implemented: new Map(),
+      complete: false, interfaceComplete: false, tok, ivars: new Map()};
+    this.objc.classes.set(name, cls); this.typeScope.stack[0].set(name, type); objcClassTypes.set(type, cls);
+    for (const [field, prefix] of [['variable','class'], ['meta','meta']]) {
+      const variable = new AST.DVar(Lexer.Loc.fromTok(tok), `__guc_objc_${prefix}_${name}`, this.objc.cls.baseType, Types.StorageClass.EXTERN);
+      this.varScope.stack[0].set(variable.name, variable); cls[field] = variable;
+    }
+    return cls;
+  }
+
+  parseObjcString() {
+    const tok = this.peek(), loc = Lexer.Loc.fromTok(tok), bytes = [];
+    do {
+      this.expect('@');
+      if (!this.atKind(Lexer.TokenKind.STRING)) this.error(this.peek(), 'expected Objective-C string literal');
+      const literal = this.parseStringLiteral();
+      if (literal.type.baseType.size !== 1) this.error(tok, 'Objective-C string literal must contain UTF-8 source');
+      for (let i=0; i<literal.value.length-1; ++i) bytes.push(literal.value[i]);
+    } while (this.atText('@') && this.peek(1).kind === Lexer.TokenKind.STRING);
+    let value;
+    try { value = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true}).decode(new Uint8Array(bytes)); }
+    catch (_) { this.error(tok, 'Objective-C string literal contains invalid UTF-8'); }
+    const ascii = bytes.every(b => b < 128), payload = ascii ? [...bytes,0] : [];
+    if (!ascii) {
+      for (let i=0; i<value.length; ++i) payload.push(value.charCodeAt(i)&255, value.charCodeAt(i)>>8);
+      payload.push(0,0);
+    }
+    const stringClass = this.objcForwardClass('NSString', tok);
+    const provider = this.objcForwardClass('NSConstantString', tok);
+    this.linkHints.push({prefix:'__guc_objc_class_NSConstantString', message:'Objective-C string literals require an NSString-compatible NSConstantString library provider (24-byte constant-string ABI)'});
+    const name = '__guc_objc_literal_' + this.objc.literals.length;
+    const dataType = Types.arrayOf((ascii ? Types.TCHAR : Types.TUSHORT).addConst(), ascii ? payload.length : payload.length/2);
+    const data = new AST.DVar(loc, name + '_data', dataType, Types.StorageClass.STATIC, new AST.EString(loc, dataType, payload));
+    data.allocClass = Types.AllocClass.MEMORY;
+    const type = this.objc.constantType;
+    const fields = [this.objcClassAddress(provider,false,loc),
+      ...[ascii ? 0 : 2, value.length, ascii ? bytes.length : value.length*2, 0].map(n => new AST.EInt(loc,Types.TUINT,BigInt(n))),
+      AST.maybeDecay(new AST.EIdent(loc,dataType,data))];
+    const object = new AST.DVar(loc,name,type,Types.StorageClass.STATIC,new AST.EInitList(loc,type,fields));
+    this.objc.unit.definedVariables.push(data,object); this.objc.literals.push(object);
+    return AST.makeCast(loc,stringClass.type.pointer(),AST.makeUnary(loc,'OP_ADDR',new AST.EIdent(loc,type,object)));
+  }
+
+  objcProtocolList() {
+    const names = [];
+    if (!this.matchText('<')) return names;
+    do {
+      const tok = this.expectKind(Lexer.TokenKind.IDENT), protocol = this.objc.protocols.get(tok.text);
+      if (!protocol) this.error(tok, `unknown Objective-C protocol '${tok.text}'`);
+      names.push(tok.text);
+    } while (this.matchText(','));
+    this.expect('>');
+    return [...new Set(names)].sort();
+  }
+
+  objcProtocolSignatures(protocols, keys) {
+    const result = [], visited = new Set();
+    const visit = name => {
+      if (visited.has(name)) return;
+      visited.add(name);
+      const p = this.objc.protocols.get(name);
+      if (!p) return;
+      for (const key of keys) if (p.declared.has(key)) result.push(p.declared.get(key));
+      for (const parent of p.parents) visit(parent);
+    };
+    for (const name of protocols) visit(name);
+    return result;
+  }
+
+  objcStaticSignature(cls, protocols, key, tok) {
+    const adopted = [...protocols];
+    for (let c=cls; c; c=c.parent) {
+      if (c.declared.has(key)) return c.declared.get(key);
+      pushAll(adopted, c.protocols);
+    }
+    const candidates = this.objcProtocolSignatures(adopted,[key]), sig = candidates[0];
+    if (sig && candidates.some(other => !sig.type.isCompatibleWith(other.type)))
+      this.error(tok, `Objective-C ambiguous protocol signature '${key}'`);
+    if (!sig) this.error(tok, `Objective-C class '${cls.name}' does not declare '${key}'`);
+    return sig;
+  }
+
+  objcQualifiedType(type, protocols, ownership = null) {
+    const uq = type.removeQualifiers();
+    if (uq instanceof Types.ObjcObjectPointerType) {
+      let result = new Types.ObjcObjectPointerType(uq.baseType, uq.className, protocols || uq.protocols, ownership || uq.ownership, this.objc.protocols);
+      if (type.isConst) result = result.addConst();
+      if (type.isVolatile) result = result.addVolatile();
+      return result;
+    }
+    if (objcClassTypes.has(uq)) {
+      const clone = uq._cloneForQualifier();
+      objcClassTypes.set(clone, objcClassTypes.get(uq)); objcClassQualifiers.set(clone, protocols || objcClassQualifiers.get(uq) || []);
+      objcClassOwnership.set(clone,ownership || objcClassOwnership.get(uq) || 'manual');
+      return clone;
+    }
+    this.error(this.peek(), 'Objective-C qualifier requires an object pointer');
+  }
+
+  parseObjcDeclaration(unit) {
+    const tok = this.advance();
+    if (tok.text === '@class') {
+      do { const t = this.expectKind(Lexer.TokenKind.IDENT); this.objcForwardClass(t.text, t); } while (this.matchText(','));
+      this.expect(';'); return;
+    }
+    if (tok.text === '@protocol') {
+      const t = this.expectKind(Lexer.TokenKind.IDENT);
+      if (this.atText(';') || this.atText(',')) {
+        if (!this.objc.protocols.has(t.text)) this.objc.protocols.set(t.text, {name:t.text, parents:[], declared:new Map(), complete:false});
+        while (this.matchText(',')) {
+          const n = this.expectKind(Lexer.TokenKind.IDENT).text;
+          if (!this.objc.protocols.has(n)) this.objc.protocols.set(n,{name:n,parents:[],declared:new Map(),complete:false});
+        }
+        this.expect(';'); return;
+      }
+      if (this.objc.protocols.get(t.text)?.complete) this.error(t, 'duplicate Objective-C protocol');
+      const p = {name:t.text, parents:this.objcProtocolList(), declared:new Map(), complete:true};
+      this.objc.protocols.set(t.text,p);
+      while (this.atText('-') || this.atText('+')) {
+        const {sig} = this.objcMethodSignature(); p.declared.set(sig.key,sig); this.expect(';');
+      }
+      this.expect('@end'); return;
+    }
+    if (tok.text !== '@interface' && tok.text !== '@implementation')
+      this.error(tok, `Objective-C experiment: unsupported directive '${tok.text}'`);
+    const name = this.expectKind(Lexer.TokenKind.IDENT).text;
+    if (this.atText('(')) this.error(this.peek(), 'Objective-C experiment: categories are unsupported');
+    let cls = this.objc.classes.get(name);
+    if (tok.text === '@interface') {
+      if (tok.packValue) this.error(tok, 'Objective-C experiment: packed class layout is unsupported');
+      if (cls?.interfaceComplete) this.error(tok, `duplicate Objective-C class '${name}'`);
+      cls = this.objcForwardClass(name, tok);
+      let parent = null;
+      if (this.matchText(':')) {
+        const p = this.expectKind(Lexer.TokenKind.IDENT);
+        parent = this.objc.classes.get(p.text);
+        if (!parent?.interfaceComplete) this.error(p, 'Objective-C superclass must have a preceding interface');
+      }
+      const loc = Lexer.Loc.fromTok(tok), type = cls.type;
+      cls.parent = parent; cls.protocols = this.objcProtocolList();
+      cls.ivars = new Map(parent ? parent.ivars : []); cls.interfaceComplete = true;
+      // Embed the entire base object (including tail padding), so inherited
+      // offsets cannot change when a subclass adds a more-aligned ivar.
+      const members = [new AST.DVar(loc, parent ? '__guc_base' : '__guc_isa', parent ? parent.type : this.objc.cls)];
+      if (this.matchText('{')) {
+        let visibility = 'protected';
+        while (!this.atText('}') && !this.atEnd()) {
+          if (this.atText('@public') || this.atText('@protected') || this.atText('@private')) {
+            visibility = this.advance().text.slice(1); continue;
+          }
+          const specs = this.parseDeclSpecifiers();
+          if (specs.storageClass !== Types.StorageClass.NONE || specs.requestedAlignment)
+            this.error(this.peek(), 'Objective-C experiment: ivar storage/alignment specifier is unsupported');
+          do {
+            const d = this.parseDeclarator(specs.type);
+            if (!d.name || d.name.startsWith('__guc_') || cls.ivars.has(d.name)) this.error(this.peek(), 'duplicate or reserved Objective-C ivar');
+            if (!d.type.isComplete || d.type.isVoid() || d.type.isFunction() || this.atText(':'))
+              this.error(this.peek(), 'Objective-C experiment: incomplete/function/bitfield ivars are unsupported');
+            const member = new AST.DVar(Lexer.Loc.fromTok(this.peek(-1)), d.name, d.type);
+            members.push(member); cls.ivars.set(d.name, { owner: cls, visibility, member });
+          } while (this.matchText(','));
+          this.expect(';');
+        }
+        this.expect('}');
+      }
+      const layout = Types.computeStructLayout(members, 0);
+      type.size = layout.size; type.align = layout.align; type.isComplete = true;
+      type.tagDecl = new AST.DTag(loc, Types.TagKind.STRUCT, type.tagName, true, members);
+      while (this.atText('-') || this.atText('+')) {
+        const { sig } = this.objcMethodSignature();
+        if (cls.declared.has(sig.key)) this.error(this.peek(), 'duplicate Objective-C method declaration');
+        for (let base = cls.parent; base; base = base.parent) {
+          const inherited = base.declared.get(sig.key);
+          if (inherited && !objcMethodSatisfies(sig.type,inherited.type))
+            this.error(this.peek(), `incompatible Objective-C override '${sig.key}'`);
+        }
+        cls.declared.set(sig.key, sig); this.expect(';');
+      }
+    } else {
+      if (!cls?.interfaceComplete) this.error(tok, 'Objective-C implementation requires a preceding interface');
+      if (cls.complete) this.error(tok, 'duplicate Objective-C implementation');
+      cls.complete = true;
+      while (this.atText('-') || this.atText('+')) {
+        const { sig, names, tok: methodTok } = this.objcMethodSignature();
+        if (!cls.declared.has(sig.key)) {
+          for (let base=cls.parent; base; base=base.parent) {
+            const inherited=base.declared.get(sig.key);
+            if (inherited && !objcMethodSatisfies(sig.type,inherited.type))
+              this.error(methodTok, `incompatible Objective-C override '${sig.key}'`);
+          }
+          cls.declared.set(sig.key,sig);
+        }
+        if (!objcMethodSatisfies(sig.type,cls.declared.get(sig.key).type))
+          this.error(methodTok, `Objective-C implementation signature differs from declaration '${sig.key}'`);
+        if (cls.implemented.has(sig.key)) this.error(methodTok, 'duplicate Objective-C method implementation');
+        const loc = Lexer.Loc.fromTok(methodTok);
+        const fname = `__guc_objc_method_${name}_${sig.classMethod ? 'c' : 'i'}${sig.selector}`;
+        const methodType = Types.functionType(sig.type.returnType, [sig.classMethod ? this.objc.cls : cls.type.pointer(), ...sig.type.paramTypes.slice(1)], sig.type.isVarArg, false);
+        const params = ['self', '_cmd', ...names].map((n, i) => {
+          const p = new AST.DVar(loc, n, methodType.paramTypes[i], Types.StorageClass.AUTO);
+          if (p.type.isAggregate()) p.allocClass = Types.AllocClass.MEMORY;
+          p.definition = p; return p;
+        });
+        const fn = new AST.DFunc(loc, fname, methodType, params, Types.StorageClass.STATIC, false, null);
+        fn.definition = fn;
+        cls.implemented.set(sig.key, fn); this.varScope.set(fname, fn);
+        this.typeScope.push(); this.tagScope.push(); this.varScope.push();
+        for (const p of params) this.varScope.set(p.name, p);
+        const saved = this.currentParsingFunc;
+        this.currentParsingFunc = fn; this.objc.current = { cls, sig };
+        this.parsedLabels.clear(); this.pendingGotos.clear();
+        fn.body = this.parseCompoundStatement();
+        this.objcLowerPools(fn);
+        for (const [label] of this.pendingGotos) this.recoverableError(this.peek(), `Undefined label '${label}'`);
+        this.parsedLabels.clear(); this.pendingGotos.clear();
+        this.currentParsingFunc = saved; this.objc.current = null;
+        this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
+        unit.staticFunctions.push(fn);
+        for (const v of fn.externLocals) unit.localExternVariables.push(v);
+        for (const f of fn.externLocalFuncs) unit.localDeclaredFunctions.push(f);
+      }
+    }
+    this.expect('@end', 'Objective-C experiment: expected @end (unsupported class form)');
+  }
+
+  objcIvar(base, cls, name, loc) {
+    const ivar = cls.ivars.get(name);
+    if (!ivar) this.error(this.peek(), `unknown Objective-C ivar '${name}'`);
+    const context = this.objc.current;
+    let permitted = ivar.visibility === 'public';
+    if (context && !context.sig.classMethod) {
+      for (let c = context.cls; c; c = c.parent) if (c === ivar.owner) permitted = true;
+      if (ivar.visibility === 'private') permitted = context.cls === ivar.owner;
+    }
+    if (!permitted) this.error(this.peek(), `Objective-C ivar '${name}' is ${ivar.visibility}`);
+    while (cls !== ivar.owner) {
+      base = AST.makeUnary(loc, 'OP_ADDR', AST.makeArrow(loc, base, '__guc_base'));
+      cls = cls.parent;
+    }
+    return AST.makeArrow(loc, base, name);
+  }
+
+  parseObjcMessage() {
+    const tok = this.advance(), loc = Lexer.Loc.fromTok(tok);
+    let receiver, start = new AST.EInt(loc, Types.TINT, 0n), cls = null, classMethod = false;
+    if (this.atText('super')) {
+      this.advance();
+      const context = this.objc.current;
+      if (!context || !context.cls.parent) this.error(tok, 'Objective-C super requires a method with a superclass');
+      cls = context.cls.parent; classMethod = context.sig.classMethod;
+      receiver = AST.makeIdent(loc, 'self', this.varScope);
+      start = this.objcClassAddress(cls, classMethod, loc);
+    } else {
+      if (this.objc.classes.has(this.peek().text) && !this.varScope.has(this.peek().text)) {
+        cls = this.objc.classes.get(this.peek().text); classMethod = true;
+      }
+      receiver = this.parseAssignmentExpression();
+      if (!cls && receiver.type.isPointer()) cls = objcClassTypes.get(receiver.type.baseType.removeQualifiers()) || null;
+      if (receiver.type.removeQualifiers() === this.objc.cls) classMethod = true;
+      if (this.objc.current && receiver instanceof AST.EIdent && receiver.decl === this.varScope.get('self')) {
+        cls = this.objc.current.cls; classMethod = this.objc.current.sig.classMethod;
+      }
+    }
+    const receiverType = receiver.type.removeQualifiers();
+    if (!receiverType.isPointer() || !(receiverType instanceof Types.ObjcObjectPointerType || receiverType === this.objc.cls || objcClassTypes.has(receiverType.baseType.removeQualifiers())))
+      this.error(tok, 'Objective-C message receiver must be an object pointer');
+    let name = this.objcSelectorWord();
+    const args = [];
+    if (this.matchText(':')) {
+      name += ':';
+      while (true) {
+        args.push(this.parseAssignmentExpression());
+        if ((this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) && this.peek(1).text === ':') {
+          name += this.advance().text + ':'; this.advance();
+        } else if (this.matchText(':')) name += ':';
+        else break;
+      }
+    }
+    while (this.matchText(',')) args.push(this.parseAssignmentExpression());
+    this.expect(']');
+    return this.objcBuildMessage(tok, receiver, start, cls, classMethod, name, args);
+  }
+
+  objcMessageSignature(tok, receiver, cls, classMethod, name) {
+    const receiverType = receiver.type.removeQualifiers();
+    const key = (classMethod ? '+' : '-') + name;
+    let sig;
+    if (cls) {
+      sig = this.objcStaticSignature(cls,receiverType.protocols || [],key,tok);
+      this.objc.sends.push({tok,name,key,staticClass:cls,protocols:receiverType.protocols || [],sig});
+    } else {
+      const protocolCandidates = this.objcProtocolSignatures(receiverType.protocols || [],['-' + name,'+' + name]);
+      const candidates = protocolCandidates.length ? protocolCandidates : receiverType instanceof Types.ObjcObjectPointerType
+        ? [...(this.objc.methods.get('-' + name) || []), ...(this.objc.methods.get('+' + name) || [])]
+        : (this.objc.methods.get(key) || []);
+      sig = candidates[0];
+      if (sig && candidates.some(other => !sig.type.isCompatibleWith(other.type)))
+        this.error(tok, `Objective-C ambiguous signature for dynamic receiver selector '${name}'`);
+      if (!sig) this.error(tok, `Objective-C method '${key}' has no declared signature`);
+      this.objc.sends.push({tok, name, key, dynamicId: receiverType instanceof Types.ObjcObjectPointerType, protocols: receiverType.protocols || [], sig});
+    }
+    return sig;
+  }
+
+  objcBuildMessage(tok, receiver, start, cls, classMethod, name, args, signature = null) {
+    const loc = Lexer.Loc.fromTok(tok);
+    const sig = signature || this.objcMessageSignature(tok, receiver, cls, classMethod, name);
+    const call = AST.makeCall(loc, new AST.EIdent(loc, sig.decl.type, sig.decl), [receiver, start, ...args]);
+    if (sig.type.isVarArg) {
+      // Specialize the forwarding helper to this promoted argument list. The
+      // inner IMP call remains variadic and uses the ordinary C arg-block ABI;
+      // no va_list forwarding or source-expression re-evaluation is involved.
+      const helper = {...sig, helper: sig.helper + '_call' + this.objc.helpers.length,
+        argumentTypes: call.arguments.slice(2).map(a => a.type)};
+      const type = Types.functionType(sig.type.returnType,
+        [this.objc.id, this.objc.cls, ...helper.argumentTypes], false, false);
+      helper.decl = new AST.DFunc(loc, helper.helper, type, [], Types.StorageClass.STATIC, false, null);
+      this.varScope.stack[0].set(helper.helper, helper.decl);
+      this.objc.unit.declaredFunctions.push(helper.decl);
+      this.objc.helpers.push(helper);
+      return AST.makeCall(loc, new AST.EIdent(loc, type, helper.decl), call.arguments);
+    }
+    return call;
+  }
+
+  // #779: ordinary typed message dispatch and one SFor preserve the existing
+  // break/continue and protected-cleanup semantics. MRC adds no hidden retains.
+  objcParseEnumeration(tok, target, declaration) {
+    const loc = Lexer.Loc.fromTok(tok), O = this.objc;
+    const objectType = type => {
+      const t = type.removeQualifiers();
+      return t instanceof Types.ObjcObjectPointerType ||
+        (t.isPointer() && objcClassTypes.has(t.baseType.removeQualifiers()));
+    };
+    if (!objectType(target.type) || target.type.isConst)
+      this.error(tok, 'Objective-C for-in target must be a modifiable object pointer');
+    const collection = this.parseExpression(); this.expect(')');
+    if (!objectType(collection.type)) this.error(tok, 'Objective-C for-in collection must be an object pointer');
+    const cls = objcClassTypes.get(collection.type.removeQualifiers().baseType?.removeQualifiers()) || null;
+    const name = 'countByEnumeratingWithState:objects:count:';
+    const sig = this.objcMessageSignature(tok, collection, cls, false, name);
+    const params = sig.type.paramTypes.slice(2), uint = t => t === Types.TUINT || t === Types.TULONG;
+    const stateType = params[0]?.isPointer() ? params[0].baseType : null;
+    const fields = stateType?.isStruct() ? getVarMembers(stateType.tagDecl) : [];
+    if (sig.type.isVarArg || params.length !== 3 || !uint(sig.type.returnType) || !uint(params[2]) ||
+        !params[1].isCompatibleWith(O.id.pointer()) || !stateType || stateType.isConst ||
+        stateType.size !== 32 || fields.length !== 4 ||
+        fields.some((f,i) => f.name !== ['state','itemsPtr','mutationsPtr','extra'][i] || f.byteOffset !== [0,4,8,12][i]) ||
+        fields[0].type !== Types.TULONG || !fields[1].type.isCompatibleWith(O.id.pointer()) ||
+        !fields[2].type.isCompatibleWith(Types.TULONG.pointer()) ||
+        !fields[3].type.isArray() || fields[3].type.arraySize !== 5 || fields[3].type.baseType !== Types.TULONG)
+      this.error(tok, 'Objective-C for-in requires the NSFastEnumeration state and method ABI');
+    const ref = v => new AST.EIdent(loc, v.type, v);
+    const integer = n => new AST.EInt(loc, Types.TULONG, BigInt(n));
+    const expr = e => new AST.SExpr(loc, e);
+    const binary = (op,a,b) => AST.makeBinary(loc, op, a, b);
+    const assign = (a,b) => binary('ASSIGN',a,b);
+    const comma = expressions => new AST.EComma(loc, expressions[expressions.length-1].type, expressions);
+    const member = (v,n) => AST.makeMember(loc,ref(v),n);
+    const state = this.objcEHVar(stateType,loc,new AST.EInitList(loc,stateType,[]));
+    const buffer = this.objcEHVar(Types.arrayOf(O.id,16),loc);
+    const receiver = this.objcEHVar(collection.type,loc,collection);
+    const index = this.objcEHVar(Types.TULONG,loc,integer(0));
+    const count = this.objcEHVar(Types.TULONG,loc);
+    const generation = this.objcEHVar(Types.TULONG,loc,integer(0));
+    const fetch = () => this.objcBuildMessage(tok,ref(receiver),integer(0),cls,false,name,
+      [AST.makeUnary(loc,'OP_ADDR',ref(state)),ref(buffer),integer(16)],sig);
+    count.initExpr = fetch();
+    const mutation = () => AST.makeUnary(loc,'OP_DEREF',member(state,'mutationsPtr'));
+    const providerType = Types.functionType(Types.TVOID,[O.id],false,false);
+    let provider = this.varScope.stack[0].get('objc_enumerationMutation');
+    if (provider && (!(provider instanceof AST.DFunc) || !provider.type.isCompatibleWith(providerType)))
+      this.error(tok, 'Objective-C for-in requires void objc_enumerationMutation(id)');
+    if (!provider) {
+      provider = new AST.DFunc(loc,'objc_enumerationMutation',providerType,[],Types.StorageClass.EXTERN,false,null);
+      this.varScope.stack[0].set(provider.name,provider);
+      O.unit.declaredFunctions.push(provider);
+    }
+    const check = new AST.SIf(loc,binary('NE',mutation(),ref(generation)),
+      expr(AST.makeCall(loc,ref(provider),[ref(receiver)])),null);
+    // A zero batch assigns nil even for a nil/empty collection; break never
+    // reaches this expression. Reusing the AST lvalue reevaluates it each time.
+    const condition = new AST.ETernary(loc,Types.TULONG,ref(count),integer(1),
+      comma([assign(target,AST.makeCast(loc,target.type,integer(0))),integer(0)]));
+    const increment = comma([
+      assign(ref(index),binary('ADD',ref(index),integer(1))),
+      new AST.ETernary(loc,Types.TULONG,binary('EQ',ref(index),ref(count)),
+        comma([assign(ref(index),integer(0)),assign(ref(count),fetch())]),integer(0))
+    ]);
+    const userBody = this.parseStatement();
+    const loopBody = new AST.SCompound(loc,[check,
+      expr(assign(target,AST.makeSubscript(loc,member(state,'itemsPtr'),ref(index)))),userBody]);
+    const result = new AST.SCompound(loc,[...(declaration ? [declaration] : []),
+      new AST.SDecl(loc,[receiver,state,buffer,index,count,generation]),
+      new AST.SIf(loc,ref(count),expr(assign(ref(generation),mutation())),null),
+      new AST.SFor(loc,null,condition,increment,loopBody)]);
+    // Entry barrier only: stack locals have no new ownership cleanup.
+    O.ehBarriers.add(result); O.hasEnumeration = true;
+    return result;
+  }
+
+  objcFinish() {
+    const load = this.objcSelector('load'), initialize = this.objcSelector('initialize');
+    for (const send of this.objc.sends) {
+      if (send.staticClass) {
+        const final = this.objcStaticSignature(send.staticClass,send.protocols,send.key,send.tok);
+        if (!objcMethodSatisfies(final.type,send.sig.type))
+          this.error(send.tok, `incompatible Objective-C signature '${send.key}' declared after this send`);
+        continue;
+      }
+      const protocolCandidates = this.objcProtocolSignatures(send.protocols,['-' + send.name,'+' + send.name]);
+      const candidates = protocolCandidates.length ? protocolCandidates : send.dynamicId
+        ? [...(this.objc.methods.get('-' + send.name) || []), ...(this.objc.methods.get('+' + send.name) || [])]
+        : (this.objc.methods.get(send.key) || []);
+      if (candidates.some(other => !send.sig.type.isCompatibleWith(other.type)))
+        this.error(send.tok, `Objective-C ambiguous signature for dynamic receiver selector '${send.name}'`);
+    }
+    for (const cls of this.objc.classes.values()) {
+      const adopted=[];
+      for(let c=cls;c;c=c.parent) pushAll(adopted, c.protocols);
+      const keys=[...this.objc.methods.keys()];
+      cls.requirements = this.objcProtocolSignatures(adopted,keys);
+      if (!cls.complete) continue;
+      for(const requirement of cls.requirements) {
+        let actual;
+        for(let c=cls;c && !actual;c=c.parent) actual=c.declared.get(requirement.key);
+        if (!actual || !objcMethodSatisfies(actual.type,requirement.type))
+          this.error(cls.tok, `incompatible Objective-C protocol method signature '${requirement.key}' in '${cls.name}'`);
+      }
+      for (const key of cls.declared.keys()) if (!cls.implemented.has(key))
+        this.error(cls.tok, `Objective-C method '${key}' has no implementation`);
+      for (const meta of [false, true]) {
+        const entries = [...cls.implemented].filter(([key]) => key.startsWith(meta ? '+' : '-'));
+        const table = `__guc_objc_table_${cls.name}_${meta ? 'c' : 'i'}`;
+        if (entries.length) this.objcGenerated(`static struct __guc_objc_method ${table}[] = { ${entries.map(([key, fn]) => `{ &${cls.declared.get(key).selectorSymbol}, (__guc_objc_imp)${fn.name} }`).join(',')} };`);
+        const variable = meta ? cls.meta : cls.variable;
+        let root = cls; while (root.parent) root = root.parent;
+        this.objcClassReference(meta ? root.meta : cls.meta);
+        if (cls.parent) this.objcClassReference(meta ? cls.parent.meta : cls.parent.variable);
+        const isa = meta ? root.meta.name : cls.meta.name;
+        const parent = cls.parent ? '&' + (meta ? cls.parent.meta.name : cls.parent.variable.name) : '0';
+        // Parse an initializer with the normal static-initializer machinery;
+        // retain the original declaration identity used by message ASTs.
+        const temp = '__guc_objc_init_' + variable.name;
+        this.objcGenerated(`static struct __guc_objc_class ${temp} = { &${isa}, ${parent}, ${meta ? 0 : cls.type.size}, ${entries.length ? table : '0'}, ${entries.length}, &${cls.variable.name} };`);
+        variable.initExpr = this.varScope.get(temp).initExpr;
+        variable.storageClass = Types.StorageClass.NONE;
+        this.objc.unit.externVariables = this.objc.unit.externVariables.filter(v => v !== variable);
+        this.objc.unit.definedVariables.push(variable);
+        this.objc.unit.definedVariables = this.objc.unit.definedVariables.filter(v => v.name !== temp);
+      }
+    }
+    const implemented = [...this.objc.classes.values()].filter(cls => cls.complete);
+    if (implemented.length) {
+      this.objcGenerated(`static void __guc_objc_startup(void) {
+        ${implemented.map(cls => `__guc_objc_load(&${cls.variable.name}, &${load.symbol});`).join('\n')}
+      }`);
+      this.objc.unit.startupFunctions.push(this.varScope.get('__guc_objc_startup'));
+    }
+    for (const sig of this.objc.helpers) {
+      const stem = sig.helper;
+      this.typeScope.set(stem + '_ret', sig.type.returnType);
+      const types = sig.argumentTypes || sig.type.paramTypes.slice(2);
+      types.forEach((t, i) => this.typeScope.set(stem + '_p' + i, t));
+      const args = types.map((t, i) => `${stem}_p${i} a${i}`);
+      const tail = types.map((t, i) => `a${i}`);
+      const voidReturn = sig.type.returnType.isVoid();
+      const nilReturn = sig.type.returnType.isAggregate()
+        ? `{ ${stem}_ret zero; unsigned char *p = (unsigned char *)&zero;
+             for (unsigned int i = 0; i < sizeof zero; ++i) p[i] = 0; return zero; }`
+        : (voidReturn ? 'return;' : 'return 0;');
+      this.objcGenerated(`static ${stem}_ret ${stem}(id object, Class start${args.length ? ',' + args.join(',') : ''}) {
+        if (!object) ${nilReturn}
+        ${voidReturn ? '' : 'return '} ((${stem}_ret (*)(id, SEL${sig.type.paramTypes.slice(2).map((t, i) => ',' + stem + '_p' + i).join('')}${sig.type.isVarArg ? ',...' : ''}))
+          __guc_objc_lookup(object, &${sig.selectorSymbol}, start, &${initialize.symbol}))(object, &${sig.selectorSymbol}${tail.length ? ',' + tail.join(',') : ''});
+      }`);
+    }
+  }
+
   // --- Lexer.Token helpers ---
   atEnd() { return this.pos >= this.tokens.length || this.tokens[this.pos].kind === Lexer.TokenKind.EOS; }
   peek(offset) {
@@ -10564,6 +11894,7 @@ class Parser {
   // --- isTypeName ---
   isTypeName() {
     const t = this.peek();
+    if (this.objc && ['__unsafe_unretained','__weak','__strong','__autoreleasing'].includes(t.text)) return true;
     if (t.kind === Lexer.TokenKind.KEYWORD) {
       switch (t.keyword) {
         case Lexer.Keyword.VOID: case Lexer.Keyword.BOOL: case Lexer.Keyword.CHAR:
@@ -10828,10 +12159,14 @@ class Parser {
     let hasChar = false, hasInt = false, hasFloat = false, hasDouble = false;
     let hasVoid = false, hasBool = false;
     let sawAuto = false;
+    let objcOwnership = null;
 
     while (!this.atEnd()) {
       const t = this.peek();
 
+      if (this.objc && this.matchText('__unsafe_unretained')) { objcOwnership = 'unsafe_unretained'; continue; }
+      if (this.objc && ['__weak','__strong','__autoreleasing'].includes(t.text))
+        this.error(t, 'Objective-C owning qualifiers require unsupported ARC/weak runtime support');
       // Storage class specifiers
       if (this.matchKW(Lexer.Keyword.TYPEDEF)) { storageClass = Types.StorageClass.TYPEDEF; continue; }
       if (this.matchKW(Lexer.Keyword.STATIC)) { storageClass = Types.StorageClass.STATIC; continue; }
@@ -11006,6 +12341,7 @@ class Parser {
       if (t.kind === Lexer.TokenKind.IDENT && this.typeScope.has(t.text) && type === null && !hasBase) {
         this.advance();
         type = this.typeScope.get(t.text);
+        if (this.objc && this.atText('<')) type = this.objcQualifiedType(type, this.objcProtocolList());
         continue;
       }
 
@@ -11072,6 +12408,7 @@ class Parser {
     const enumType = type.isEnum() ? type : null;
     if (type.isEnum()) type = Types.TINT;
 
+    if (objcOwnership) type = this.objcQualifiedType(type, null, objcOwnership);
     if (isConst) type = type.addConst();
     if (isVolatile) type = type.addVolatile();
 
@@ -11603,6 +12940,35 @@ class Parser {
 
   parsePrimaryExpression() {
     const t = this.peek();
+    if (this.objc) {
+      const loc = Lexer.Loc.fromTok(t);
+      if (this.atText('[')) return this.parseObjcMessage();
+      if (this.atText('@') && this.peek(1).kind === Lexer.TokenKind.STRING) return this.parseObjcString();
+      if (this.matchText('@selector')) {
+        this.expect('(');
+        let name = this.objcSelectorWord();
+        while (this.matchText(':')) {
+          name += ':';
+          if (this.atKind(Lexer.TokenKind.IDENT) || this.atKind(Lexer.TokenKind.KEYWORD)) name += this.advance().text;
+        }
+        this.expect(')');
+        const selector = this.objcSelector(name).variable;
+        return AST.makeUnary(loc, 'OP_ADDR', new AST.EIdent(loc, selector.type, selector));
+      }
+      if (t.text.startsWith('@')) this.error(t, `Objective-C experiment: unsupported expression '${t.text}'`);
+      if (t.text === 'nil' || t.text === 'Nil') {
+        this.advance(); return AST.makeCast(loc, t.text === 'nil' ? this.objc.id : this.objc.cls, new AST.EInt(loc, Types.TINT, 0n));
+      }
+      if (this.objc.classes.has(t.text) && !this.varScope.has(t.text)) {
+        this.advance(); return this.objcClassAddress(this.objc.classes.get(t.text), false, loc);
+      }
+      const context = this.objc.current;
+      if (context && !context.sig.classMethod && context.cls.ivars.has(t.text) && this.varScope.getLevel(t.text) <= 0) {
+        this.advance();
+        const self = AST.makeCast(loc, context.cls.type.pointer(), AST.makeIdent(loc, 'self', this.varScope));
+        return this.objcIvar(self, context.cls, t.text, loc);
+      }
+    }
 
     // Integer literal (includes char literals converted by Lexer.postProcess)
     if (t.kind === Lexer.TokenKind.INT) {
@@ -12728,7 +14094,8 @@ class Parser {
       if (this.matchText("->")) {
         const arrowLoc = Lexer.Loc.fromTok(this.peek(-1));
         const name = this.expectKind(Lexer.TokenKind.IDENT).text;
-        expr = AST.makeArrow(arrowLoc, expr, name);
+        const objcClass = this.objc && expr.type.isPointer() && objcClassTypes.get(expr.type.baseType.removeQualifiers());
+        expr = objcClass ? this.objcIvar(expr, objcClass, name, arrowLoc) : AST.makeArrow(arrowLoc, expr, name);
         continue;
       }
       if (this.matchText("++")) {
@@ -12812,6 +14179,20 @@ class Parser {
         return Types.usualArithmeticConversions(thenType, elseType);
       }
       return thenType;
+    }
+    const to = thenType.removeQualifiers(), eo = elseType.removeQualifiers();
+    if (to instanceof Types.ObjcObjectPointerType && eo instanceof Types.ObjcObjectPointerType) {
+      if (to.isCompatibleWith(eo)) return to;
+      let common = null;
+      if (to.className && eo.className) {
+        const ancestors = new Map();
+        for (let c=objcClassTypes.get(to.baseType.removeQualifiers()); c; c=c.parent) ancestors.set(c.name,c);
+        for (let c=objcClassTypes.get(eo.baseType.removeQualifiers()); c; c=c.parent)
+          if (ancestors.has(c.name)) {common=ancestors.get(c.name); break;}
+      }
+      const tp=to.protocolNames(), ep=eo.protocolNames(), protocols=[...tp].filter(p=>ep.has(p));
+      return new Types.ObjcObjectPointerType(common ? common.type : this.objc.id.baseType,
+        common ? common.name : null, protocols, to.ownership === eo.ownership ? to.ownership : 'manual', this.objc.protocols);
     }
     const tIsRef = thenType.removeQualifiers().isRef();
     const eIsRef = elseType.removeQualifiers().isRef();
@@ -12974,6 +14355,217 @@ class Parser {
     return new AST.EInitList(Lexer.Loc.fromTok(startTok), type, elements, hasDesignators ? designators : null);
   }
 
+  // #777: preserve lexical pool boundaries until labels are resolved, then
+  // lower normal exits to ordinary typed AST before goto/optimizer passes.
+  // A synthetic loop would steal break/continue; an end-of-block call would
+  // miss directed exits. No exception or longjmp unwinding is implied here.
+  objcLowerPools(fn) {
+    if (this.objc.hasEH || this.objc.hasEnumeration) { this.objcLowerEHScopes(fn); return; }
+    const scopes = this.objc.poolScopes, labels = new Map();
+    let hasPools = false;
+    const collect = (node, stack, switchStack) => {
+      if (!(node instanceof AST.Stmt)) return;
+      const pool = scopes.get(node);
+      if (pool) { hasPools = true; stack = [...stack, pool]; }
+      if (node instanceof AST.SLabel) labels.set(node, stack);
+      if (node instanceof AST.SCase && switchStack && stack.length !== switchStack.length)
+        this.error(this.peek(), 'case dispatch cannot enter an @autoreleasepool scope');
+      const target = node instanceof AST.SSwitch ? stack : switchStack;
+      for (const child of node.children) collect(child, stack, target);
+    };
+    collect(fn.body, [], null);
+    if (!hasPools) return;
+    const call = (name, args, loc) => {
+      const f = this.varScope.stack[0].get(name);
+      return AST.makeCall(loc, new AST.EIdent(loc, f.type, f), args);
+    };
+    const pops = (stack, depth, loc) => stack.slice(depth).reverse().map(v =>
+      new AST.SExpr(loc, call('__guc_objc_pool_pop', [new AST.EIdent(loc, v.type, v)], loc)));
+    const rewrite = (node, stack, breakDepth, continueDepth) => {
+      if (!(node instanceof AST.Stmt)) return node;
+      const loc = node.loc, pool = scopes.get(node);
+      if (pool) stack = [...stack, pool];
+      if (node instanceof AST.SReturn) {
+        if (!stack.length) return node;
+        const statements = [];
+        let value = node.expr;
+        if (value) {
+          if (value.type.isVoid()) { statements.push(new AST.SExpr(loc, value)); value = null; }
+          else {
+            const v = new AST.DVar(loc, '__guc_objc_return_' + this.anonCounter++, value.type, Types.StorageClass.AUTO, value);
+            v.definition = v;
+            if (v.type.isAggregate()) v.allocClass = Types.AllocClass.MEMORY;
+            statements.push(new AST.SDecl(loc, [v])); value = new AST.EIdent(loc, v.type, v);
+          }
+        }
+        pushAll(statements, pops(stack, 0, loc)); statements.push(new AST.SReturn(loc, value));
+        return new AST.SCompound(loc, statements);
+      }
+      let depth;
+      if (node instanceof AST.SBreak) depth = breakDepth;
+      if (node instanceof AST.SContinue) depth = continueDepth;
+      if (node instanceof AST.SGoto && node.target) {
+        const target = labels.get(node.target) || [];
+        let common = 0;
+        while (common < stack.length && common < target.length && stack[common] === target[common]) common++;
+        if (common !== target.length)
+          this.error(this.peek(), 'goto cannot enter an @autoreleasepool scope');
+        depth = common;
+      }
+      if (depth !== undefined) {
+        const cleanup = pops(stack, depth, loc);
+        return cleanup.length ? new AST.SCompound(loc, [...cleanup, node]) : node;
+      }
+      if (node instanceof AST.SCompound) {
+        const statements = node.statements.map(n => rewrite(n, stack, breakDepth, continueDepth));
+        if (pool) {
+          pool.initExpr = call('__guc_objc_pool_push', [], loc);
+          statements.unshift(new AST.SDecl(loc, [pool]));
+          pushAll(statements, pops(stack, stack.length - 1, loc));
+        }
+        const result = new AST.SCompound(loc, statements, node.labels);
+        for (const label of node.labels) label.enclosingBlock = result;
+        return result;
+      }
+      if (node instanceof AST.SFor)
+        return new AST.SFor(loc, node.init, node.condition, node.increment,
+          rewrite(node.body, stack, stack.length, stack.length));
+      if (node instanceof AST.SWhile)
+        return new AST.SWhile(loc, node.condition, rewrite(node.body, stack, stack.length, stack.length));
+      if (node instanceof AST.SDoWhile)
+        return new AST.SDoWhile(loc, rewrite(node.body, stack, stack.length, stack.length), node.condition);
+      if (node instanceof AST.SSwitch)
+        return new AST.SSwitch(loc, node.expr, rewrite(node.body, stack, stack.length, continueDepth));
+      const children = node.children.map(n => rewrite(n, stack, breakDepth, continueDepth));
+      return children.some((n,i) => n !== node.children[i]) ? node._withChildren(children) : node;
+    };
+    fn.body = rewrite(fn.body, [], undefined, undefined);
+  }
+
+  // One normal-exit ladder for pools, exception handlers and finalizers.
+  // Completion branches leave the protected try_table before cleanup runs.
+  objcLowerEHScopes(fn) {
+    const loc=fn.loc, O=this.objc, descriptors=new WeakMap(), labels=new Map(), returnTemps=[];
+    const ref=v=>new AST.EIdent(loc,v.type,v);
+    const int=n=>new AST.EInt(loc,Types.TINT,BigInt(n));
+    const seq=statements=>new AST.SCompound(loc,statements);
+    const assign=(v,e)=>new AST.SExpr(loc,new AST.EBinary(loc,v.type,'ASSIGN',ref(v),e));
+    const call=(name,args)=>new AST.SExpr(loc,this.objcEHCall(name,args,loc));
+    const poolCall=(name,args)=>{
+      const f=this.varScope.stack[0].get(name);
+      return AST.makeCall(loc,new AST.EIdent(loc,f.type,f),args);
+    };
+    const descriptor=node=>{
+      if(descriptors.has(node)) return descriptors.get(node);
+      const pool=O.poolScopes.get(node), eh=O.ehScopes.get(node);
+      let d=null;
+      if(pool) d={pool,cleanup:new AST.SExpr(loc,poolCall('__guc_objc_pool_pop',[ref(pool)])),exceptional:false,simple:true};
+      else if(eh) d={...eh};
+      else if(O.ehBarriers.has(node)) d={barrier:true};
+      if(d) descriptors.set(node,d);
+      return d;
+    };
+    const collect=(node,stack,switchStack)=>{
+      if(!(node instanceof AST.Stmt)) return;
+      const d=descriptor(node), outer=stack;
+      if(d) stack=[...stack,d];
+      if(node instanceof AST.SLabel) labels.set(node,stack);
+      if(node instanceof AST.SCase && switchStack &&
+        (stack.length!==switchStack.length || stack.some((s,i)=>s!==switchStack[i])))
+        this.error(this.peek(),'case dispatch cannot enter an Objective-C protected scope');
+      for(const c of node.children) collect(c,stack,node instanceof AST.SSwitch ? stack : switchStack);
+      if(d && d.cleanup && !d.simple) collect(d.cleanup,outer,switchStack);
+    };
+    collect(fn.body,[],null);
+    const jump=label=>{const g=new AST.SGoto(loc,label.name);g.target=label;label.hasGotos=true;return g;};
+    const capture=(body,record,exn,action,jumpRecord)=>{
+      const r=this.objcEHVar(Types.TUINT,loc), e=this.objcEHVar(Types.TEXNREF,loc);
+      const common=[assign(exn,ref(e)),assign(action,int(-1))];
+      const jumpGuard=this.objcEHJumpGuard(loc);
+      if(jumpRecord) {
+        jumpGuard.exnVar=this.objcEHVar(Types.TEXNREF,loc);
+        jumpGuard.body=new AST.SIf(loc,ref(jumpRecord),jumpGuard.body,new AST.SThrow(loc,null,[ref(jumpGuard.exnVar)]));
+      }
+      return new AST.STryCatch(loc,body,[
+        jumpGuard,
+        {tag:O.exceptionTag,bindings:[r.name],bindingVars:[r],exnVar:e,body:seq([assign(record,ref(r)),...common])},
+        {tag:null,bindings:[],bindingVars:[],exnVar:e,body:seq([call('guard',[]),assign(record,int(0)),...common])}
+      ]);
+    };
+    const route=(terminal,stack,depth)=>{
+      for(let i=stack.length-1;i>=depth;i--) {
+        const d=stack[i]; if(d.barrier) continue;
+        const id=d.routes.length+1; d.routes.push({terminal,depth});
+        return seq([assign(d.action,int(id)),jump(d.label)]);
+      }
+      return terminal;
+    };
+    const rewrite=(node,stack,breakDepth,continueDepth,skipOwn=false)=>{
+      if(!(node instanceof AST.Stmt)) return node;
+      const d=skipOwn ? null : descriptor(node);
+      if(d) {
+        if(d.barrier) return rewrite(node,[...stack,d],breakDepth,continueDepth,true);
+        d.action=this.objcEHVar(Types.TINT,loc,int(0)); d.routes=[];
+        d.label=new AST.SLabel(loc,'__guc_objc_cleanup_'+this.anonCounter++);
+        const r=this.objcEHVar(Types.TUINT,loc,int(0)), e=this.objcEHVar(Types.TEXNREF,loc);
+        let body=rewrite(node,[...stack,d],breakDepth,continueDepth,true);
+        const declarations=[d.action];
+        if(d.exceptional) { declarations.push(r,e);body=capture(body,r,e,d.action,d.jumpRecord); }
+        let cleanup=d.cleanup;
+        if(d.exceptional && !d.simple) {
+          // The pending exception is owned during finally. Normal completion
+          // transfers its hold back to propagation; overrides consume it.
+          const guarded=seq([cleanup,call('hold',[ref(r)])]);
+          descriptors.set(guarded,{cleanup:call('drop',[ref(r)]),exceptional:true,simple:true});
+          collect(guarded,stack,null);
+          cleanup=rewrite(guarded,stack,breakDepth,continueDepth);
+        } else if(d.exceptional && d.simple) {
+          cleanup=call('finish',[d.cleanup.expr.arguments[0],ref(r),ref(e),new AST.EBinary(loc,Types.TINT,'EQ',ref(d.action),int(-1))]);
+        } else if(!d.simple) cleanup=rewrite(cleanup,stack,breakDepth,continueDepth);
+        const statements=[new AST.SDecl(loc,declarations)];
+        if(d.pool) {d.pool.initExpr=poolCall('__guc_objc_pool_push',[]);statements.push(new AST.SDecl(loc,[d.pool]));}
+        statements.push(body,d.label,cleanup);
+        if(d.exceptional) statements.push(new AST.SIf(loc,
+          new AST.EBinary(loc,Types.TINT,'EQ',ref(d.action),int(-1)),new AST.SThrow(loc,null,[ref(e)]),null));
+        for(let i=0;i<d.routes.length;i++) {
+          const entry=d.routes[i];
+          statements.push(new AST.SIf(loc,new AST.EBinary(loc,Types.TINT,'EQ',ref(d.action),int(i+1)),route(entry.terminal,stack,entry.depth),null));
+        }
+        const result=new AST.SCompound(loc,statements,[d.label]);d.label.enclosingBlock=result;
+        return result;
+      }
+      if(node instanceof AST.SReturn) {
+        if(!stack.some(d=>!d.barrier)) return node;
+        let value=node.expr;const statements=[];
+        if(value) {
+          if(value.type.isVoid()) {statements.push(new AST.SExpr(loc,value));value=null;}
+          else {const v=this.objcEHVar(value.type,loc);returnTemps.push(v);statements.push(assign(v,value));value=ref(v);}
+        }
+        statements.push(route(new AST.SReturn(loc,value),stack,0));return seq(statements);
+      }
+      let depth;
+      if(node instanceof AST.SBreak) depth=breakDepth;
+      if(node instanceof AST.SContinue) depth=continueDepth;
+      if(node instanceof AST.SGoto && node.target) {
+        const target=labels.get(node.target)||[];let common=0;
+        while(common<stack.length && common<target.length && stack[common]===target[common]) common++;
+        if(common!==target.length) this.error(this.peek(),'goto cannot enter an Objective-C protected scope');
+        depth=common;
+      }
+      if(depth!==undefined) return route(node,stack,depth);
+      if(node instanceof AST.SFor) return new AST.SFor(node.loc,node.init,node.condition,node.increment,rewrite(node.body,stack,stack.length,stack.length));
+      if(node instanceof AST.SWhile) return new AST.SWhile(node.loc,node.condition,rewrite(node.body,stack,stack.length,stack.length));
+      if(node instanceof AST.SDoWhile) return new AST.SDoWhile(node.loc,rewrite(node.body,stack,stack.length,stack.length),node.condition);
+      if(node instanceof AST.SSwitch) return new AST.SSwitch(node.loc,node.expr,rewrite(node.body,stack,stack.length,continueDepth));
+      const children=node.children.map(n=>rewrite(n,stack,breakDepth,continueDepth));
+      const result=children.some((n,i)=>n!==node.children[i]) ? node._withChildren(children) : node;
+      if(result instanceof AST.SCompound) for(const label of result.labels) label.enclosingBlock=result;
+      return result;
+    };
+    const body=rewrite(fn.body,[],undefined,undefined);
+    fn.body=returnTemps.length ? seq([new AST.SDecl(loc,returnTemps),body]) : body;
+  }
+
   // --- Statement parsing ---
 
   parseStatement() {
@@ -12981,6 +14573,30 @@ class Parser {
   }
 
   _parseStatement(loc) {
+    if (this.objc && this.matchText('@try')) return this.objcParseTry(loc);
+    if (this.objc && this.matchText('@throw')) {
+      this.objc.hasEH = true;
+      if (this.matchText(';')) {
+        const binding=this.objc.catchStack[this.objc.catchStack.length-1];
+        if(!binding) this.error(this.peek(),'@throw rethrow requires a lexical @catch');
+        const ref=v=>new AST.EIdent(loc,v.type,v);
+        return new AST.SCompound(loc,[new AST.SExpr(loc,this.objcEHCall('hold',[ref(binding.record)],loc)),
+          new AST.SThrow(loc,null,[ref(binding.exn)])]);
+      }
+      const value=this.parseExpression(); this.expect(';');
+      if(!(value.type.removeQualifiers() instanceof Types.ObjcObjectPointerType) && value.type.removeQualifiers()!==this.objc.cls) this.error(this.peek(),'@throw requires an Objective-C object pointer');
+      return new AST.SThrow(loc,this.objc.exceptionTag,[this.objcEHCall('new',[AST.makeCast(loc,this.typeScope.get('id'),value)],loc)]);
+    }
+    if (this.objc && this.matchText('@autoreleasepool')) {
+      for (const f of this.objc.poolDeclarations)
+        if (!this.objc.unit.declaredFunctions.includes(f)) this.objc.unit.declaredFunctions.push(f);
+      const body = this.parseCompoundStatement();
+      const pool = new AST.DVar(loc, '__guc_objc_pool_' + this.anonCounter++, this.objc.id, Types.StorageClass.AUTO);
+      pool.definition = pool;
+      this.objc.poolScopes.set(body, pool);
+      this.requiredSources.add('foundation/NSAutoreleasePool.m');
+      return body;
+    }
     // Empty statement
     if (this.matchText(";")) return new AST.SEmpty(loc);
 
@@ -13031,10 +14647,24 @@ class Parser {
       let init = null, cond = null, incr = null;
       if (!this.matchText(";")) {
         if (this.isTypeName()) {
-          init = this.parseDeclarationStatement();
+          init = this.parseDeclarationStatement(true);
+          if (this.objc && this.matchText('in')) {
+            if (init.declarations.length !== 1 || init.declarations[0].initExpr ||
+                ![Types.StorageClass.AUTO, Types.StorageClass.NONE, Types.StorageClass.REGISTER].includes(init.declarations[0].storageClass))
+              this.error(kwTok, 'Objective-C for-in requires one uninitialized object declaration');
+            const v = init.declarations[0];
+            const result = this.objcParseEnumeration(kwTok, new AST.EIdent(loc, v.type, v), init);
+            this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
+            return result;
+          }
         } else {
           const eTok = this.peek();
           const e = this.parseExpression();
+          if (this.objc && this.matchText('in')) {
+            const result = this.objcParseEnumeration(kwTok, e, null);
+            this.typeScope.pop(); this.tagScope.pop(); this.varScope.pop();
+            return result;
+          }
           this.expect(";");
           init = new AST.SExpr(Lexer.Loc.fromTok(eTok), e);
         }
@@ -13233,7 +14863,7 @@ class Parser {
         if (this.atText("{")) {
           // catch_all
           const body = this.parseCompoundStatement();
-          catches.push({ tag: null, bindings: [], body });
+          catches.push({ tag: null, bindings: [], body, sourceCatchAll: true });
         } else {
           // __catch TagName(binding1, binding2) { ... }
           const tagName = this.expectKind(Lexer.TokenKind.IDENT).text;
@@ -13383,7 +15013,7 @@ class Parser {
     return compound;
   }
 
-  parseDeclarationStatement() {
+  parseDeclarationStatement(forHeader = false) {
     const startTok = this.peek();
     const startLoc = Lexer.Loc.fromTok(startTok);
     const declarations = [];
@@ -13604,13 +15234,14 @@ class Parser {
         declarations.push(dvar);
       }
     }
-    this.expect(";");
+    if (!(forHeader && this.objc && this.atText('in'))) this.expect(";");
     return new AST.SDecl(startLoc, declarations);
   }
 
   // --- External declaration parsing ---
 
   parseExternalDeclaration(unit) {
+    if (this.objc && this.peek().text.startsWith('@')) return this.parseObjcDeclaration(unit);
     const loc = Lexer.Loc.fromTok(this.peek());
     // GNU __extension__ before an external declaration
     // (`__extension__ typedef struct {...} x;`): semantic no-op.
@@ -13798,6 +15429,7 @@ class Parser {
         this.pendingGotos.clear();
 
         funcDecl.body = this.parseCompoundStatement();
+        if (this.objc) this.objcLowerPools(funcDecl);
 
         // Check for unresolved gotos
         for (const [name] of this.pendingGotos) {
@@ -14058,6 +15690,17 @@ class Parser {
   }
 
   // Override parseDeclarator to capture param names for functions
+  objcCheckValueType(type) {
+    if (!this.objc) return;
+    const t = type.removeQualifiers();
+    if (objcClassTypes.has(t)) this.error(this.peek(), 'Objective-C objects must be used through pointers');
+    if (t.isArray()) this.objcCheckValueType(t.baseType);
+    if (t.isFunction()) {
+      this.objcCheckValueType(t.returnType);
+      for (const p of t.paramTypes || []) this.objcCheckValueType(p);
+    }
+  }
+
   parseDeclarator(baseType, isTypedef) {
     let type = baseType;
     let ptrCount = 0;
@@ -14079,6 +15722,7 @@ class Parser {
         if (this.matchKW(Lexer.Keyword.CONST)) { type = type.addConst(); continue; }
         if (this.matchKW(Lexer.Keyword.VOLATILE)) { type = type.addVolatile(); continue; }
         if (this.matchKW(Lexer.Keyword.RESTRICT)) continue;
+        if (this.objc && this.matchText('__unsafe_unretained')) { type = this.objcQualifiedType(type, null, 'unsafe_unretained'); continue; }
         break;
       }
     }
@@ -14093,6 +15737,7 @@ class Parser {
       this.expect(")");
       type = this.parseDeclaratorSuffixWithNames(saved);
       const combined = this.combineDeclaratorTypes(inner.type, saved, type.type, inner._ptrCount);
+      if (!isTypedef) this.objcCheckValueType(combined);
       return { type: combined, name: inner.name, _paramNames: inner._paramNames || type._paramNames, _isKnR: inner._isKnR || type._isKnR, _ptrCount: ptrCount };
     }
 
@@ -14101,6 +15746,7 @@ class Parser {
     }
 
     const suffix = this.parseDeclaratorSuffixWithNames(type);
+    if (!isTypedef) this.objcCheckValueType(suffix.type);
     return { type: suffix.type, name, _paramNames: suffix._paramNames, _isKnR: suffix._isKnR, _ptrCount: ptrCount };
   }
 
@@ -14192,6 +15838,7 @@ class Parser {
                   if (this.matchKW(Lexer.Keyword.CONST)) pType = pType.addConst();
                   else if (this.matchKW(Lexer.Keyword.VOLATILE)) pType = pType.toggleVolatile();
                   else if (this.matchKW(Lexer.Keyword.RESTRICT)) { /* restrict is a hint; we don't model it */ }
+                  else if (this.objc && this.matchText('__unsafe_unretained')) pType = this.objcQualifiedType(pType,null,'unsafe_unretained');
                   else break;
                 }
               }
@@ -14327,6 +15974,7 @@ function parseTokens(tokens, options) {
 
   withDiag(sink, () => {
   try {
+    if (String(options?.filename || tokens[0].filename).endsWith(".m")) parser.objcInit(unit);
     while (!parser.atEnd()) {
       // __require_source
       if (parser.atKW(Lexer.Keyword.X_REQUIRE_SOURCE)) {
@@ -14427,6 +16075,7 @@ function parseTokens(tokens, options) {
       if (parser.atKW(Lexer.Keyword.X_EXCEPTION)) {
         parser.advance();
         const tagName = parser.expectKind(Lexer.TokenKind.IDENT).text;
+        if (tagName.startsWith('__guc_objc_')) parser.error(parser.peek(-1), 'reserved Objective-C exception tag');
         parser.expect("(");
         const paramTypes = [];
         if (!parser.atText(")")) {
@@ -14474,6 +16123,7 @@ function parseTokens(tokens, options) {
       }
       parser.parseExternalDeclaration(unit);
     }
+    if (parser.objc) parser.objcFinish();
   } catch (e) {
     // FatalDiag: error is already in the sink, just stop parsing.
     if (e instanceof FatalDiag) return;
@@ -17459,6 +19109,7 @@ function isStructOrUnion(type) {
 
 function cToWasmType(type, wmod) {
   type = type.removeQualifiers();
+  if (type === Types.TEXNREF) return WT_EXNREF;
   if (type === Types.TEXTERNREF) return WT_EXTERNREF;
   if (type === Types.TREFEXTERN) return WT_REFEXTERN;
   if (type === Types.TEQREF) return WT_EQREF;
@@ -19693,6 +21344,12 @@ class CodeGenerator {
       case AST.SEmpty: break;
       case AST.SThrow: {
         if (!stmt.tag) {
+          if (stmt.args.length) {
+            this.emitExpr(stmt.args[0]);
+            this.body.throwRef();
+            this.body.unreachable();
+            break;
+          }
           // Tag-less rethrow, synthesized only by the irreducible
           // catch-all dispatcher: re-raise the exnref captured by the
           // enclosing catch_all_ref clause.
@@ -19721,7 +21378,11 @@ class CodeGenerator {
         const catchBlockDepths = [];
         for (let i = numCatches - 1; i >= 0; i--) {
           const cc = tc.catches[i];
-          if (cc.catchAllRethrow) this.body.block(WT_EXNREF);
+          if (cc.exnVar && cc.tag) {
+            const results = [...cc.tag.paramTypes.map(pt => cToWasmType(pt, this.wmod)), WT_EXNREF];
+            this.body.block({ tag: "typeidx", idx: this.wmod.addFunctionTypeId([], results) });
+          }
+          else if (cc.catchAllRethrow || cc.exnVar) this.body.block(WT_EXNREF);
           else if (!cc.tag || cc.tag.paramTypes.length === 0) this.body.block();
           else if (cc.tag.paramTypes.length === 1) this.body.block(cToWasmType(cc.tag.paramTypes[0], this.wmod));
           else {
@@ -19739,7 +21400,8 @@ class CodeGenerator {
         for (let i = 0; i < numCatches; i++) {
           const cc = tc.catches[i];
           const labelIdx = this.blockDepth - catchBlockDepths[i];
-          if (cc.catchAllRethrow) catches.push([0x03, 0, labelIdx]);       // catch_all_ref
+          if (cc.exnVar && cc.tag) catches.push([0x01, this.exceptionToWasmTagIdx.get(cc.tag), labelIdx]);
+          else if (cc.catchAllRethrow || cc.exnVar) catches.push([0x03, 0, labelIdx]); // catch_all_ref
           else if (!cc.tag) catches.push([0x02, 0, labelIdx]);             // catch_all
           else catches.push([0x00, this.exceptionToWasmTagIdx.get(cc.tag), labelIdx]);
         }
@@ -19753,12 +21415,13 @@ class CodeGenerator {
           const cc = tc.catches[i];
           this.pushLocalScope();
           let savedExnrefLocal;
-          if (cc.catchAllRethrow) {
+          if (cc.catchAllRethrow || cc.exnVar) {
             // catch_all_ref delivered the in-flight exception as an
             // exnref on the stack — but BEFORE the stack-pointer
             // restore below can run, so capture it first.
             const exnLocal = this.allocLocal(WT_EXNREF);
             this.body.localSet(exnLocal);
+            if (cc.exnVar) this.localVarToWasmLocalIdx.set(cc.exnVar, exnLocal);
             savedExnrefLocal = this._catchAllExnrefLocal;
             this._catchAllExnrefLocal = exnLocal;
           }
@@ -19775,7 +21438,7 @@ class CodeGenerator {
             for (let j = bindLocals.length - 1; j >= 0; j--) this.body.localSet(bindLocals[j]);
           }
           this.emitStmt(cc.body);
-          if (cc.catchAllRethrow) this._catchAllExnrefLocal = savedExnrefLocal;
+          if (cc.catchAllRethrow || cc.exnVar) this._catchAllExnrefLocal = savedExnrefLocal;
           this.popLocalScope();
           if (i + 1 < numCatches) this.body.br(this.blockDepth - endDepth);
         }
@@ -19790,6 +21453,7 @@ class CodeGenerator {
   // --- Type helpers ---
   getBinaryWasmType(type) {
     type = type.removeQualifiers();
+    if (type === Types.TEXNREF) return WT_EXNREF;
     if (type === Types.TEXTERNREF) return WT_EXTERNREF;
     if (type === Types.TREFEXTERN) return WT_REFEXTERN;
     if (type === Types.TEQREF) return WT_EQREF;
@@ -21972,6 +23636,44 @@ function generateCode(units, outputFile, options) {
       writeErr(`${err.filename}:${err.line}: error: ${err.message}\n`);
     }
     fatalExit(1);
+  }
+
+  // Only crossings from the host are uncaught boundaries. Internal direct and
+  // indirect C calls retain the original indices so callers can still catch.
+  // Forward the physical Wasm ABI verbatim (including vararg/aggregate ABI).
+  const objcRuntime = units.find(u => u.objc)?.objc;
+  if (objcRuntime) {
+    const fatal = objcRuntime.ehFunctions.get('uncaught');
+    const fatalIdx = cg.funcDefToWasmFuncIdx.get(fatal.definition || fatal);
+    const tagIdx = cg.exceptionToWasmTagIdx.get(objcRuntime.exceptionTag);
+    // Host callback entrypoints use the same guarded ABI while the C table
+    // retains its original function identities for internal call_indirect.
+    for (const index of wmod.addrTakenFuncs) wmod.addExport('__guc_objc_callback_' + (index+1),0,index);
+    const wrappers = new Map();
+    for (const entry of wmod.exports) if (entry.kind === 0) {
+      const target = entry.index;
+      if (!wrappers.has(target)) {
+        const targetDef = target < wmod.funcImports.length ? wmod.funcImports[target] : wmod.funcDefs[target-wmod.funcImports.length];
+        const type = wmod.typeDefs[targetDef.typeId];
+        const index = wmod.addFunctionDefinition(targetDef.typeId);
+        const def = wmod.funcDefs[index-wmod.funcImports.length];
+        const body = new WAST.WastBuilder();
+        const sp = type.params.length, record = sp+1;
+        def.locals = [{type:WT_I32,count:2}];
+        body.globalGet(cg.stackPointerGlobalIdx);body.localSet(sp);
+        body.block(WT_I32);
+        body.tryTable(WT_EMPTY,[[0x00,tagIdx,0]]);
+        for (let i=0;i<type.params.length;i++) body.localGet(i);
+        body.call(target);body.ret();body.end();body.unreachable();body.end();
+        body.localSet(record);
+        body.localGet(sp);body.globalSet(cg.stackPointerGlobalIdx);
+        body.localGet(record);body.call(fatalIdx);body.unreachable();
+        def.wast = body.nodes;
+        wrappers.set(target,index);
+        if (options.compilerOptions.emitNames) wmod.funcNames.push({idx:index,name:'__objc_boundary_'+entry.name});
+      }
+      entry.index=wrappers.get(target);
+    }
   }
 
   // Finalize memory
