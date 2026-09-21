@@ -239,8 +239,7 @@ so a bytes-path binary re-runs its init interpreted-cold on EVERY spawn
     Module per `cc -o`.
   - **synthetic volume** (ProcFS): no `moduleKey` hook → null → never
     cached.
-- **Exclusions**: ss-flavored modules (they recompile from bytes with
-  `importedStringConstants` in `runSsModule`), engine-rejected bytes (the
+- **Exclusions**: engine-rejected bytes (the
   worker owns the error report), tiers where Modules don't structured-clone
   (one-shot `structuredClone` probe), and kernels without an fs.
 - **Transport**: `procSpec.module` (exactly one of `image`/`module` is
@@ -1176,7 +1175,7 @@ a wasm start section can have side effects before instantiation throws.
 The MountFS owner assigns checked device IDs in 1..0xffffffff for its live
 mounted namespace. Raw private BlockFS/ProcFS metadata explicitly uses dev=0;
 MountFS copies successful stat/lstat results with the final resolved volume's
-dev, and fstat uses the opened fd's retained volume. Inodes and C/WASI layouts
+dev, and fstat uses the opened fd's retained volume. Inodes and C layouts
 are unchanged. Filesystem-backed device opens retain their existing file OFD
 and inode; the backend fd's dev field remains rdev for device I/O.
 
@@ -1200,6 +1199,6 @@ Manual RemoteFS embedders must explicitly attest leaf coverage with roLeaf:true;
 false or absent coverage stays brokered. Non-boolean explicit coverage throws.
 Explicit invalid configuration throws TypeError;
 out-of-range mounted IDs throw RangeError. Supplied contradictory dev is refused.
-C/WASI adapters validate dev and ino as uint32 before writing any stat output;
+C adapters validate dev and ino as uint32 before writing any stat output;
 invalid backend metadata returns EIO. This is separate from native identity
 (#787) and anonymous resource identity (#788), retained in the liability register.

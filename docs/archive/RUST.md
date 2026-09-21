@@ -1,3 +1,6 @@
+> Retired 2026-09-21 by user direction: Rust/WASI and ss support removed.
+> Historical design record; not current support policy.
+
 # docs/RUST.md — Rust on gucOS
 
 The program document for Rust as a first-class gucOS language. The scheduled units

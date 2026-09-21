@@ -80,10 +80,8 @@
 //                                            # both files
 //   node tools/mkpkg.js --pool=DIR           # SHARED payload store (below)
 //   node tools/mkpkg.js --clang [--clang-root=DIR] [--clang-unpackaged=FILE]
-//   node tools/mkpkg.js --rust  [--rust-root=DIR]  [--rust-unpackaged=FILE]
 //                                            # SUPERSET index over the enabled
-//                                            # producers (independent booleans:
-//                                            # neither, one, or both); the
+//                                            # producer; the
 //                                            # drift gate (below) reads each
 //                                            # producer's exemption list
 //
@@ -174,25 +172,23 @@ let allowDowngrade = false;
 let baselineFile = null;
 let baselineUrl = null;
 let noBaseline = false;
-// ---- native siblings (docs/archive/0416; RUST.md §3 rule 4) ----------------------
+// ---- native siblings (docs/archive/0416) ----------------------
 // A NATIVE SIBLING is an out-of-repo producer of prebuilt payloads: one
 // repository builds the binaries and publishes an `out-image/overlay.json`
 // (overlay@1) manifest with a per-file sha256; this repository CONSUMES it
 // and never invokes the producer's toolchain. `--<producer>` builds the
 // SUPERSET index: it additionally includes the gated
-// `requires:"native-sibling:<producer>"` package definitions (the *-clang /
-// *-rust variants), whose `nativeApp`/`nativeFile` payloads are copied —
+// `requires:"native-sibling:<producer>"` package definitions (the *-clang variants), whose `nativeApp`/`nativeFile` payloads are copied —
 // sha256-verified — from that sibling's published overlay (for clang the
 // same artifact the bake overlay consumes, CLANG-CPP-EPIC Part II §7).
 // Plain mkpkg builds the BASE index — no gated name anywhere, by
 // construction of listPackages' default filter. The producer flags are
-// INDEPENDENT booleans: neither, one, or both, and the index is a superset
-// over whatever was asked. `--<producer>-root=PATH` points at the sibling
+// explicit opt-ins; the index is a superset over what was asked. `--<producer>-root=PATH` points at the sibling
 // (default ../<repo>, the same relative convention as os/image.json's
 // overlay manifest); a missing sibling/overlay under an EXPLICIT flag is a
 // LOUD hard failure (exit 1 with the fix command), never a silent skip —
 // an UNrequested absent sibling is a normal state and prints nothing
-// (CLANG-CPP-EPIC §4 rule 2, RUST.md §3 rule 6).
+// (CLANG-CPP-EPIC §4 rule 2).
 // `--<producer>-unpackaged=FILE` overrides the drift gate's exemption list
 // (see driftCheck) for the same reason --packages-dir exists: a test needs
 // the allow-list branch without editing the shipped file.
@@ -204,14 +200,6 @@ const SIBLINGS = {
     overlayProducer: (root) => path.join(root, 'wasm', 'tools', 'mk-overlay.mjs'),
     unpackaged: path.join(__dirname, 'clang-unpackaged.json'),
     what: 'the *-clang packages need the clang toolchain repo',
-  },
-  rust: {
-    repo: 'gucos-rust',
-    root: path.resolve(ROOT, '..', 'gucos-rust'),
-    overlayId: 'rust-apps',
-    overlayProducer: (root) => path.join(root, 'tools', 'mk-overlay.mjs'),
-    unpackaged: path.join(__dirname, 'rust-unpackaged.json'),
-    what: 'the *-rust packages need the Rust producer repo',
   },
 };
 const enabled = new Set();   // producers opted in on this run
@@ -501,8 +489,7 @@ for (const n of names) {
  * in the producer's tools/<producer>-unpackaged.json giving the reason.
  * Silence is never an allowed answer; an unexplained gap is the failure
  * mode this gate exists to kill. An ABSENT exemption file means "no
- * exemptions" (tools/rust-unpackaged.json does not exist today because the
- * rust overlay has none).
+ * exemptions".
  *
  * Scoped to /usr/bin/*: non-executable overlay payloads (assets like
  * /usr/share/tinyrenderer/*.obj, menu links) belong to whichever package
@@ -542,7 +529,7 @@ function driftCheck(producer) {
       `  every ${producer} app we build must be installable through gucman.\n` +
       `  fix: add packages/<name>.json with {"requires":"native-sibling:${producer}",\n` +
       `       "files":{"<name>":{"nativeApp":"${orphans[0]}"}}, "bin":{...}} —\n` +
-      `       see packages/box2d-clang.json (clang, windowed) or packages/wc-rust.json (rust, tty)\n` +
+      `       see packages/box2d-clang.json (clang, windowed)\n` +
       `  or, if a payload is deliberately not a package, record it WITH A REASON in\n` +
       `  ${path.relative(ROOT, S.unpackaged)}\n`);
     process.exit(1);

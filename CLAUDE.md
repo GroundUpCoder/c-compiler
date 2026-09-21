@@ -2,6 +2,12 @@
 
 `compiler.js` is the primary compiler in this repo — a C → WebAssembly compiler in a single file. All other files (host.js, serve.js, tools/, vendor/) are auxiliary.
 
+**Runtime scope (user ruling, 2026-09-21):** Rust/WASI and self-service (`ss`)
+execution support are retired. The runtime serves the C ABI; it does not
+provide `wasi_snapshot_preview1` or `ss` imports, and the Rust package producer
+is removed. C's Wasm-GC/reference-type extensions remain supported. Retired
+designs are historical records under `docs/archive/`.
+
 **North star** (see `docs/OS.md`): a WebAssembly-native, almost-POSIX OS in a
 browser tab — every binary a real wasm module from this compiler, with
 persistence (BlockFS), a shell, and eventually a compositor/window manager.
@@ -744,7 +750,7 @@ message (`procSpec.module`, bytes dropped), keyed by the fs `moduleKey`
 after symlink resolution — immutable prefix:ino on a read-only volume,
 VALIDATED prefix:ino:size:mtime on a writable one (a rewrite, e.g.
 `cc -o a.out` or a gucman upgrade, moves the key and REPLACES that
-path's entry — a stale Module can never be hit); ss modules, /proc, and
+path's entry — a stale Module can never be hit); /proc and
 no-fs kernels keep the bytes path — `kernel.moduleCacheStats()` counts.
 Spawn honours `#!` (docs/archive/0065, `_spawnShebang`): a text image starting
 `#!` re-dispatches to its interpreter line (execve(2) semantics — one

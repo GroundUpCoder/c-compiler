@@ -729,20 +729,19 @@ function plantOverlays(mfs, loaded, log) {
 /* opts (all optional):
  *   packagesDir : the directory to enumerate (default rootDir/packages) — a
  *                 test seam; the shipping callers always pass rootDir.
- *   producers   : an array of native-sibling producer names ('clang',
- *                 'rust', …) whose GATED definitions to include. A gated
+ *   producers   : an array of native-sibling producer names ('clang') whose GATED definitions to include. A gated
  *                 def carries `requires: "native-sibling:<producer>"` (the
- *                 *-clang / *-rust packages; docs/archive/0416) and is included
+ *                 *-clang packages; docs/archive/0416) and is included
  *                 iff its producer is in this list. DEFAULT []: gated defs
  *                 are EXCLUDED from every default enumeration. This one
  *                 choke point is what keeps "base gucOS ships with NO
- *                 clang and NO Rust" true by CONSTRUCTION rather than by
- *                 convention (CLANG-CPP-EPIC Part II §7, RUST.md §3 rule
- *                 5): mkpkg-no-flag, foldPackages('all') (→ serve.js's fat
+ *                 native-sibling payloads" true by CONSTRUCTION rather than by
+ *                 convention (CLANG-CPP-EPIC Part II §7): mkpkg-no-flag,
+ *                 foldPackages('all') (→ serve.js's fat
  *                 image, boot.js --packages=all,
  *                 tests/lib/image-fixture.js) all go through the default
  *                 path and never see a gated package; only an explicit
- *                 mkpkg --clang / --rust / producers opt-in includes them.
+ *                 mkpkg --clang / producers opt-in includes them.
  * A def is "gated" iff it declares a non-empty `requires` — determined by
  * parsing each json (cheap; packages/ is a handful of small files). A
  * malformed def is NOT excluded (its breakage must surface loudly downstream
@@ -828,8 +827,8 @@ function findPackageDef(fsMod, pathMod, rootDir, name, opts) {
 
 /* The ONE parser of the gate value (docs/archive/0416): `requires:
  * "native-sibling:<producer>"` names the sibling repository that produces
- * the package's prebuilt payloads — "clang" (clang-simplified) or "rust"
- * (gucos-rust). One field carries both the gate and the routing: a
+ * the package's prebuilt payloads — currently "clang" (clang-simplified).
+ * One field carries both the gate and the routing: a
  * separate `producer` field could disagree with `requires`, and every
  * reader would have to check both. Returns the producer name, or null when
  * the value is not a native-sibling gate. */
@@ -1259,7 +1258,7 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
 
   // A -sources name colliding with a DECLARED package is a repo bug — the
   // synthesis must never silently shadow (or be shadowed by) a real def.
-  listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir, defs: opts.defs, producers: ['clang', 'rust'] })
+  listPackages(fsMod, pathMod, rootDir, { packagesDir: pkgDir, defs: opts.defs, producers: ['clang'] })
     .forEach(function (p) {
       if (units[p])
         throw new Error("sources synthesis: derived package '" + p +

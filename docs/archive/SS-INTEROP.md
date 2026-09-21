@@ -1,3 +1,6 @@
+> Retired 2026-09-21 by user direction: Rust/WASI and ss support removed.
+> Historical design record; not current support policy.
+
 # Self-service (.ss) interop — ss as a first-class OS language, and ss as a loadable library
 
 Status: proposed 2026-07-09, **revised same day after design review** (round 2:

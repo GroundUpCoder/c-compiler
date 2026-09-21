@@ -15,7 +15,7 @@ require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/r
 
 var tests = [
   ['test_language_retirement.js', []], // #796 retired inputs and archive integrity
-  ['test_stat_identity.js', []], // #785: mounted identity, RO ownership, C/WASI metadata contract (pure Node)
+  ['test_stat_identity.js', []], // #785: mounted identity, RO ownership, C metadata contract (pure Node)
   ['test_epipe_listeners.js', []],       // runModule must not stack stream 'error' listeners
   ['test_stdout_flush.js', []],          // exit drains piped stdout; queued chunks survive memory.grow
   ['test_console_ring.js', []],          // console SAB ring blocks (pty backpressure), never overruns
@@ -84,10 +84,9 @@ var tests = [
   ['../spawn/test_spawn_host.js', []],   // 0006 Layer A+B: the posix_spawn struct ABI + host-side marshalling (path/argv/envp/cwd/file_actions/flags/pgid) round-trips byte-for-byte through runModule with fake spawnHooks. Registered by #167/#431: tests/spawn/ was in no suite AND had no RULES row, so it reported UNMAPPED and ran nowhere
   ['../serve/test_first_run.js', []],    // `node serve.js .` prints a URL that 200s (COOP/COEP)
   ['../serve/test_clang_overlay.js', []],// `serve.js --clang` overlay on-ramp: fold-in vs sibling-absent (0141)
-  ['../serve/test_native_base_purity.js', []], // CLANG-CPP-EPIC II guardrail (a), 0416-generalized: NO gated (-clang/-rust) name in the base set
+  ['../serve/test_native_base_purity.js', []], // CLANG-CPP-EPIC II guardrail (a), 0416-generalized: NO gated (-clang) name in the base set
   ['../serve/test_serve_with_clang.js', []],  // guardrail (b): serve-with-clang preflight → loud exit 1, never base fallback
   ['../serve/test_mkpkg_clang.js', []],       // guardrail (c): mkpkg --clang nativeApp sha256 round-trip
-  ['../serve/test_mkpkg_rust.js', []],        // 0416: mkpkg --rust — purity + POSITIVE control in one run, sha256 refusal, absent-sibling exit 1, rust drift gate, unknown-gate validation
   ['../serve/test_mkpkg_isolation.js', []],   // guardrail (d): repo isolation (0388) — a differing build must not prune another repo's payloads; --pool shares the warm cache; one writer per out dir
   ['../serve/test_mkpkg_minbase.js', []],     // #518: declared minBase rides the index verbatim (0 included), undeclared defaults to the image version, garbage refuses; pure-data packages/ defs must declare an explicit floor
   ['../serve/test_mkpkg_version_guard.js', []], // #595: a version DOWNGRADE over a published entry refuses loudly naming both versions ("0.10" > "0.9" numerically, equal republish is routine); --allow-downgrade is the stated-rollback override

@@ -5,7 +5,7 @@
 // WebAssembly.Module in the spawn message; process workers instantiate it
 // instead of re-parsing multi-MB bytes per spawn. A rewritten rw binary
 // derives a new key and REPLACES its path's entry, so a stale Module can
-// never be hit. ss-flavored modules, engine-rejected bytes, and no-fs
+// never be hit. Engine-rejected bytes and no-fs
 // kernels keep the bytes path.
 //
 // Part 1 drives the kernel with fake workers (no threads — procSpec is
@@ -62,15 +62,7 @@ function readFileBytes(kfs, p) {
 }
 
 // ---- wasm fixtures (hand-crafted; no compiler needed for part 1) ----
-// A minimal valid C-flavored module (empty) and an ss-flavored one (imports
-// module "ss" — runModule dispatches those to runSsModule, which recompiles
-// from bytes with importedStringConstants, so the kernel must NOT cache it).
 const EMPTY_WASM = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
-const SS_WASM = new Uint8Array([
-  0, 97, 115, 109, 1, 0, 0, 0,          // magic + version
-  1, 4, 1, 0x60, 0, 0,                   // type: () -> ()
-  2, 8, 1, 2, 0x73, 0x73, 1, 0x66, 0, 0, // import "ss" "f" (func 0)
-]);
 const BAD_WASM = new Uint8Array([1, 2, 3, 4]);
 
 // ---- part 1: fake workers over MountFS with a readonly /usr ----
@@ -80,7 +72,6 @@ async function part1() {
   const bake = BLOCK_FS.createV4(sysStore, { noDevNodes: true });
   bake.mkdir('/bin', 0o755);
   writeBytes(bake, '/bin/x', EMPTY_WASM);
-  writeBytes(bake, '/bin/ssmod', SS_WASM);
   writeBytes(bake, '/bin/bad', BAD_WASM);
   const sys = BLOCK_FS.createV4(sysStore, { readonly: true });
   const root = BLOCK_FS.createV4(new BLOCK_FS.MemoryByteStore(4 << 20));
@@ -150,18 +141,6 @@ async function part1() {
   st = kernel.moduleCacheStats();
   check('rewrite REPLACES the entry (no leak per recompile)',
     st.entries === 2 && st.misses === 3, JSON.stringify(st));
-
-  // ss flavor: compiles kernel-side but is excluded (bytes path), and the
-  // exclusion is itself cached (no re-probe per spawn).
-  const pid5 = await kernel.service({ path: '/bin/ssmod', argv: ['ssmod'] });
-  const s5 = workers.get(pid5).procSpec;
-  check('ss module ships bytes, no Module', s5.module === null && s5.image !== null);
-  const pid6 = await kernel.service({ path: '/bin/ssmod', argv: ['ssmod'] });
-  const s6 = workers.get(pid6).procSpec;
-  check('ss exclusion is cached (hit resolving null)', s6.module === null && s6.image !== null);
-  st = kernel.moduleCacheStats();
-  check('ss pair adds one miss then one cached-null hit',
-    st.misses === 4 && st.hits === 3 && st.entries === 3, JSON.stringify(st));
 
   // Engine-rejected bytes: spawn still ships them (the worker owns the error).
   const pid7 = await kernel.service({ path: '/bin/bad', argv: ['bad'] });

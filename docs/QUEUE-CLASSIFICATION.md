@@ -1,6 +1,7 @@
 # Queue classification — OS-proper vs package-side (#567, PKGDEV-EPIC ladder 6b)
 
-Snapshot: 2026-08-07. **This file is the at-a-glance snapshot; the ticket
+Snapshot: 2026-08-07. Rust/WASI and ss entries below are historical;
+those support paths were retired by user direction on 2026-09-21. **This file is the at-a-glance snapshot; the ticket
 DB is the live truth.** Every open ticket (statuses open + in_progress +
 deferred; done/dropped excluded) carries exactly one classification in its
 cc `design` field, machine-greppable by leading token:

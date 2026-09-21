@@ -10,15 +10,15 @@ const path = require('path');
 const positionals = [];
 const requestedOverlays = new Set();
 // `--packages-index=<producer>[,<producer>]` (clang is set by
-// serve-with-clang.js; rust is the docs/archive/0416 twin) asserts the served
+// serve-with-clang.js) asserts the served
 // /packages repo is the SUPERSET index over the named native-sibling
 // producers — dist/packages/index.json must exist and list at least one
-// package of each producer's suffix (*-clang / *-rust, built by an
+// package of each producer's suffix (*-clang, built by an
 // `mkpkg --<producer>` prebake). It never MUTATES anything (serve.js serves
 // dist/packages verbatim, as today); it's a guard so a producer-mandatory
 // serve can't silently serve a stale base index. Flagless serve.js is
 // byte-identical to today.
-const KNOWN_PRODUCERS = ['clang', 'rust'];
+const KNOWN_PRODUCERS = ['clang'];
 const assertProducers = [];
 // Sibling definition sources (#614, design §7): the dev origin resolves the
 // gucos-packages sibling checkout by default (GUCOS_PACKAGES= override →
@@ -238,7 +238,7 @@ if (!singleFile) {
 
 // --packages-index guard: the served /packages repo must be the superset over
 // every asserted producer (serve-with-clang.js prebakes the clang one via
-// `mkpkg --clang`; a rust origin prebakes via `mkpkg --rust`). A base index
+// `mkpkg --clang`). A base index
 // here means the prebake was bypassed — fail loud rather than serve a
 // producer-mandatory origin without its gated cards.
 if (assertProducers.length && !singleFile) {

@@ -103,7 +103,7 @@ function ensurePackages(need, opts) {
 }
 
 /* A producer SUPERSET repo (`mkpkg --<producer>` over a sibling root —
- * docs/archive/0416: 'clang' and 'rust' are peers under one rule). Same isolation;
+ * the native-sibling package seam). Same isolation;
  * the only difference is the definition set, which is exactly what used to
  * collide with the base one. */
 function ensureProducerPackages(producer, need, siblingRoot, opts) {
