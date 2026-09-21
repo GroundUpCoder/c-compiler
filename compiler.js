@@ -28545,10 +28545,10 @@ __externref __jss(const char *s) {
 #include <sys/stat.h>
 
 /* Opaque to user code (only the forward declaration is in SDL.h).
-   'handle' is a 1-based index into the host's sdlWindows array.
+   'handle' is a positive integer owned by the selected host backend.
    We reuse it as the SDL window ID (SDL_GetWindowID returns it,
    and event windowID fields carry it). This is fine because we
-   control the entire stack — the real @kmamal/sdl window ID
+   control the entire stack — the platform SDL window ID
    never leaks to C code. The struct + registry decl live in
    __SDL_internal.h since docs/archive/0256 (shared with __SDL_popup.c). */
 #include <__SDL_internal.h>
@@ -28605,6 +28605,8 @@ static bool __sdl_texture_live(SDL_Texture *t) {
 /* Low-level host imports — all operate on primitive values only.
    The host (host.js) knows nothing about C struct layouts. */
 __import int __sdl_init(int flags);
+__import int __sdl_init_subsystem(int flags);
+__import void __sdl_quit_subsystem(int flags);
 __import void __sdl_quit(void);
 __import int __sdl_set_window_visible(int handle, int visible);
 __import int __sdl_raise_window(int handle);
@@ -28769,7 +28771,9 @@ static bool __sdl_do_init(SDL_InitFlags flags) {
     /* SDL implicitly brings up EVENTS alongside VIDEO/AUDIO/GAMEPAD. */
     if (flags & (SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) flags |= SDL_INIT_EVENTS;
     /* Baseline the tick clock exactly once per init cycle. */
-    if (!__sdl_host_inited) { __sdl_init((int)flags); __sdl_host_inited = 1; }
+    int status = __sdl_host_inited ? __sdl_init_subsystem((int)flags) : __sdl_init((int)flags);
+    if (status < 0) return SDL_SetError("SDL_Init: requested subsystem is unavailable on this host (Node: install/build native SDL support)");
+    __sdl_host_inited = 1;
     bool gamepadNew = (flags & SDL_INIT_GAMEPAD) && !(__sdl_initted & SDL_INIT_GAMEPAD);
     __sdl_initted |= flags;
     /* Upstream contract: pads already connected at gamepad-subsystem init
@@ -28788,6 +28792,7 @@ bool SDL_InitSubSystem(SDL_InitFlags flags) {
 }
 
 void SDL_QuitSubSystem(SDL_InitFlags flags) {
+    __sdl_quit_subsystem((int)flags);
     __sdl_initted &= ~flags;
 }
 
@@ -48085,7 +48090,7 @@ return { generate };
 
 const JsOutput = (() => {
 
-function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName }) {
+function generate({ wasmBinary, hostJsSource, opfsFiles, runArgs, programName, sdlBackend = "auto" }) {
   const hostBody = prepareEmbeddedHostJs(hostJsSource);
   const wasmBase64 = Buffer.from(wasmBinary).toString('base64');
   const opfsEntries = opfsFiles.map(f => ({
@@ -48141,7 +48146,7 @@ runModule({
   bytes: __wasmBytes,
   args: __args,
   fs: __require("fs"),
-  getSDL: function () { return __require("@kmamal/sdl"); },
+  sdlBackend: ${JSON.stringify(sdlBackend)},
 }).then(function (exitCode) {
   process.exit(exitCode);
 }).catch(function (e) {
@@ -48243,6 +48248,7 @@ function main() {
   const help = usage +
     "Inputs may also be bin.json projects (dependencies are expanded).\n" +
     "  --help                 Show this help\n" +
+    "  --sdl=auto|native|null  Backend selection for generated Node .js output\n" +
     "  -g, -g1                Embed function names and source locations\n" +
     "  -g2                    Also embed source text\n" +
     "  -fno-inline            Disable inlining; independent of -g\n" +
@@ -48261,6 +48267,7 @@ function main() {
   let showHelp = false;
   let action = "compile";
   let outputFile = "a.wasm";
+  let sdlBackend = "auto";
   const inputFiles = [];
   const opfsFiles = [];
   const runArgs = [];
@@ -48440,6 +48447,12 @@ function main() {
         process.exit(1);
       }
       runArgs.push(args[++i]);
+    } else if (args[i].startsWith("--sdl=")) {
+      sdlBackend = args[i].slice(6);
+      if (!["auto", "native", "null"].includes(sdlBackend)) {
+        process.stderr.write("Error: --sdl must be auto, native, or null\n");
+        process.exit(1);
+      }
     } else if (args[i] === "--no-xterm") {
       noXterm = true;
     } else if (args[i] === "--block-fs") {
@@ -48630,7 +48643,7 @@ function main() {
           fs.writeFileSync(outputFile, htmlBinary);
         } else {
           const programName = path.basename(outputFile, ".js");
-          const jsBinary = JsOutput.generate({ wasmBinary, hostJsSource, opfsFiles: resolvedOpfsFiles, runArgs, programName });
+          const jsBinary = JsOutput.generate({ wasmBinary, hostJsSource, opfsFiles: resolvedOpfsFiles, runArgs, programName, sdlBackend });
           fs.writeFileSync(outputFile, jsBinary);
           fs.chmodSync(outputFile, 0o755);
         }

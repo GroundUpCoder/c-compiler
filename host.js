@@ -7399,6 +7399,395 @@ function sdlGetClip(view, field) {
   return field === 0 ? (c ? 1 : 0) : (c && field >= 1 && field <= 4 ? c[field - 1] : 0);
 }
 
+/* Native SDL3 adapter. All C pointers stay in Wasm memory; the addon receives
+ * copied strings, bounded byte views, and its own typed native handles.
+ * No npm packages are used. SDL/window work stays on Node's main thread.
+ */
+function loadNativeSDL(required = false) {
+  if (typeof process === 'undefined' || typeof require !== 'function') return null;
+  if (!require('node:worker_threads').isMainThread) {
+    if (required) throw new Error('Native SDL3 must run on the Node main thread');
+    return null;
+  }
+  const fs = require('node:fs'), path = require('node:path');
+  const dir = typeof __dirname === 'string' ? __dirname : path.dirname(process.argv[1]);
+  // Generated programs may live in apps/ or build/. Search their ancestors
+  // for this repo's addon, and allow a directly adjacent distributed addon.
+  for (let base = dir;; base = path.dirname(base)) {
+    const candidates = [path.join(base, 'sdl3.node'), path.join(base, 'build/native/sdl3.node'), path.join(base, 'native/sdl3.node')];
+    for (const file of candidates) if (fs.existsSync(file)) return require(file);
+    if (path.dirname(base) === base) break;
+  }
+  if (required) throw new Error('Native SDL3 addon missing. Run node native/build.js, or pass --sdl=null for explicit headless execution.');
+  return null;
+}
+
+function createNativeSDL(ctx, native) {
+  const lease = Symbol.for('c-compiler.nativeSDL.owner');
+  if (native[lease]) throw new Error('Native SDL3 supports one active program per Node process');
+  native[lease] = true;
+  const { getMemory, getExports, readString } = ctx;
+  let animationFrameFunc = null;
+  let initialized = false;
+  let subsystems = 0;
+  let tickBase = null;
+  const windows = new Map(), textures = new Map(), renderers = new Map(), padNames = new Map();
+  let captureRequested = false, lastFrame = null;
+  const quadVertices = new Float32Array(48);
+  const quadBytes = Buffer.from(quadVertices.buffer);
+  const encoder = new TextEncoder();
+  const check = (ok, name) => { if (!ok) throw new Error(name + ': ' + native.SDL_GetError()); };
+  const bytes = (ptr, length) => {
+    ptr >>>= 0;
+    if (!Number.isSafeInteger(length) || length < 0 || ptr + length > getMemory().buffer.byteLength) throw new RangeError('SDL memory access outside Wasm memory');
+    return Buffer.from(getMemory().buffer, ptr, length);
+  };
+  const pixels = (ptr,w,h,pitch) => {
+    if (w<=0 || h<=0 || pitch<w*4) throw new RangeError('Invalid SDL pixel dimensions');
+    return bytes(ptr,(h-1)*pitch+w*4);
+  };
+  const emit = (name,...args) => { const fn=getExports()[name];if(fn)fn(...args); };
+  function init(flags) {
+    if (!(initialized ? native.SDL_InitSubSystem(flags >>> 0) : native.SDL_Init(flags >>> 0))) return -1;
+    initialized = true;
+    subsystems |= flags;
+    if (tickBase === null) tickBase = performance.now();
+    if (flags & 0x2000) for(const id of native.SDL_GetGamepads()) padNames.set(id,native.SDL_GetGamepadNameForID(id));
+    return 0;
+  }
+  function pump(timeout=0) {
+    if (!initialized) return 0;
+    const events = native.SDL_PollEvents(timeout);
+    for(const e of events) {
+      switch(e.type) {
+        case 0x100: emit('__sdl_push_quit_event',0); break;
+        case 0x210: emit('__sdl_push_quit_event',e.window); break;
+        case 0x300: case 0x301: emit('__sdl_push_key_event',e.window,e.type,e.scancode,e.key,e.mod,e.repeat); break;
+        case 0x400: emit(e.relative?'__sdl_push_mouse_motion_rel_event':'__sdl_push_mouse_motion_event',e.window,e.relative?e.dx:e.x,e.relative?e.dy:e.y,e.state); break;
+        case 0x401: case 0x402: emit('__sdl_push_mouse_button_event',e.window,e.type,e.button,e.x,e.y); break;
+        case 0x403: emit('__sdl_push_mouse_wheel_event',e.window,e.x,e.y,e.direction); break;
+        case 0x653: padNames.set(e.id,native.SDL_GetGamepadNameForID(e.id));emit('__sdl_push_gamepad_added',e.id);break;
+        case 0x654: emit('__sdl_push_gamepad_removed',e.id);break;
+        case 0x650: emit('__sdl_push_gamepad_axis',e.id,e.axis,e.value);break;
+        case 0x651: case 0x652: emit('__sdl_push_gamepad_button',e.id,e.button,e.type===0x651?1:0);break;
+        default:
+          if(e.window && [0x202,0x203,0x206,0x20e,0x20f].includes(e.type)) {
+            if(e.type===0x206){const w=windows.get(e.window);if(w){w.w=e.data1;w.h=e.data2;}}
+            emit('__sdl_push_window_event',e.window,e.type,e.data1||0,e.data2||0);
+          }
+      }
+    }
+    return events.length;
+  }
+  function createWindow(title,x,y,w,h,flags,parent=0) {
+    const f = flags >>> 0, nativeFlags = f;
+    const id = parent ? native.SDL_CreatePopupWindow(parent,x,y,w,h,nativeFlags) : native.SDL_CreateWindow(title?readString(title):'',w,h,nativeFlags);
+    if(id) {
+      // SDL_CreateWindow can initialize video implicitly. Keep event pumping
+      // and cleanup live even for callers that did not call SDL_Init first.
+      initialized = true;
+      subsystems |= 0x20 | 0x4000;
+      windows.set(id,{w,h,parent,hidden:!!(f&8)});
+    }
+    return id;
+  }
+  function discardWindow(handle) {
+    for(const [id,w] of windows)if(w.parent===handle)discardWindow(id);
+    for(const [id,r] of renderers)if(r.window===handle){for(const [t,tx]of textures)if(tx.renderer===id)textures.delete(t);renderers.delete(id);}
+    windows.delete(handle);
+  }
+  const env = {
+    __sdl_init: init,
+    __sdl_init_subsystem: init,
+    __sdl_quit_subsystem: flags => { native.SDL_QuitSubSystem(flags>>>0);subsystems &= ~flags;if(flags&0x20){windows.clear();renderers.clear();textures.clear();} },
+    __sdl_quit: () => { animationFrameFunc=null;native.SDL_Quit();initialized=false;subsystems=0;tickBase=null;windows.clear();textures.clear();renderers.clear(); },
+    __sdl_create_window: createWindow,
+    __sdl_create_popup_window: (parent,x,y,w,h,flags)=>createWindow(0,x,y,w,h,flags,parent),
+    __sdl_destroy_window: handle => { native.SDL_DestroyWindow(handle);discardWindow(handle); },
+    __sdl_set_window_title: (h,p)=>check(native.SDL_SetWindowTitle(h,readString(p)),'SDL_SetWindowTitle'),
+    __sdl_set_relative_mouse_mode: (h,on)=>check(native.SDL_SetWindowRelativeMouseMode(h,on),'SDL_SetWindowRelativeMouseMode'),
+    __sdl_set_cursor: (h,shape)=>{ if(!windows.has(h))throw new Error('Invalid SDL window');check(native.SDL_SetSystemCursor(shape),'SDL_SetCursor'); },
+    __sdl_set_window_visible: (h,on)=>{const ok=on?native.SDL_ShowWindow(h):native.SDL_HideWindow(h);if(ok)windows.get(h).hidden=!on;return ok?0:-1;},
+    __sdl_raise_window: h=>native.SDL_RaiseWindow(h)?0:-1,
+    __sdl_get_window_state: h=>(native.SDL_GetWindowFlags(h)&(0x40|0x200)) | (windows.get(h).hidden?8:0),
+    __sdl_set_window_parent: (h,p)=>{const ok=native.SDL_SetWindowParent(h,p);if(ok)windows.get(h).parent=p;return ok?0:-1;},
+    __sdl_get_window_viewable: h=>{for(let id=h;id;id=windows.get(id)?.parent||0)if(native.SDL_GetWindowFlags(id)&(8|0x40))return 0;return 1;},
+    __sdl_set_window_size: (h,w,height)=>native.SDL_SetWindowSize(h,w,height)?0:-1,
+    __sdl_set_window_position: (h,x,y)=>native.SDL_SetWindowPosition(h,x,y)?0:-1,
+    __sdl_get_window_display_scale: h=>native.SDL_GetWindowDisplayScale(h),
+    __sdl_set_window_icon: (h,p,w,height,pitch)=>native.SDL_SetWindowIconPixels(h,pixels(p,w,height,pitch),w,height,pitch)?0:-1,
+    __sdl_get_display_bounds: ()=>{const [x,y,w,h]=native.SDL_GetDisplayBounds();if(w>32767||h>65535)throw new Error('Display exceeds compiler packed display bounds');return (w<<16)|h;},
+    __sdl_update_window_surface: (h,p,w,height,pitch)=>{
+      const data=pixels(p,w,height,pitch);
+      const ok=native.SDL_UpdateWindowPixels(h,data,w,height,pitch);
+      if(captureRequested&&ok){lastFrame={width:w,height,pitch,pixels:Uint8Array.from(data)};captureRequested=false;}
+      return ok?0:-1;
+    },
+    __sdl_create_renderer: (h,software)=>{const id=native.SDL_CreateRenderer(h,software);if(id){renderers.set(id,{window:h,color:[0,0,0,0],blend:0});check(native.SDL_SetRenderVSync(id,0),'SDL_SetRenderVSync');}return id;},
+    __sdl_destroy_renderer: r=>{native.SDL_DestroyRenderer(r);renderers.delete(r);for(const[t,tx]of textures)if(tx.renderer===r)textures.delete(t);},
+    __sdl_set_render_vsync: (r,n)=>native.SDL_SetRenderVSync(r,n)?1:0,
+    __sdl_set_render_clip_rect: (r,on,x,y,w,h)=>check(native.SDL_SetRenderClipRect(r,on,x,y,w,h),'SDL_SetRenderClipRect'),
+    __sdl_get_render_clip: (r,field)=>native.SDL_GetRenderClipRect(r)[field]??0,
+    __sdl_create_texture: (r,access,w,h)=>{const t=native.SDL_CreateTexture(r,access,w,h);if(t){textures.set(t,{renderer:r,w,h,color:[1,1,1,1]});check(native.SDL_SetTextureBlendMode(t,0),'SDL_SetTextureBlendMode');check(native.SDL_SetTextureScaleMode(t,1),'SDL_SetTextureScaleMode');}return t;},
+    __sdl_destroy_texture: t=>{native.SDL_DestroyTexture(t);textures.delete(t);},
+    __sdl_update_texture: (t,p,pitch,x,y,w,h)=>check(native.SDL_UpdateTexture(t,pixels(p,w,h,pitch),pitch,x,y,w,h),'SDL_UpdateTexture'),
+    __sdl_set_texture_color_mod: (t,r,g,b)=>{check(native.SDL_SetTextureColorModFloat(t,r,g,b),'SDL_SetTextureColorModFloat');textures.get(t).color.splice(0,3,r,g,b);},
+    __sdl_set_texture_alpha_mod: (t,a)=>{check(native.SDL_SetTextureAlphaModFloat(t,a),'SDL_SetTextureAlphaModFloat');textures.get(t).color[3]=a;},
+    __sdl_set_texture_blend_mode: (t,mode)=>check(native.SDL_SetTextureBlendMode(t,mode),'SDL_SetTextureBlendMode'),
+    __sdl_get_texture_blend_mode: t=>native.SDL_GetTextureBlendMode(t),
+    __sdl_set_texture_scale_mode: (t,mode)=>check(native.SDL_SetTextureScaleMode(t,mode),'SDL_SetTextureScaleMode'),
+    __sdl_get_texture_scale_mode: t=>native.SDL_GetTextureScaleMode(t),
+    __sdl_set_draw_color: (r,red,g,b,a)=>{check(native.SDL_SetRenderDrawColorFloat(r,red,g,b,a),'SDL_SetRenderDrawColorFloat');renderers.get(r).color=[red,g,b,a];},
+    __sdl_set_draw_blend_mode: (r,mode)=>check(native.SDL_SetRenderDrawBlendMode(r,mode),'SDL_SetRenderDrawBlendMode'),
+    __sdl_render_clear: r=>check(native.SDL_RenderClear(r),'SDL_RenderClear'),
+    __sdl_set_render_target: (r,t)=>check(native.SDL_SetRenderTarget(r,t),'SDL_SetRenderTarget'),
+    __sdl_render_quad: (r,t,x0,y0,x1,y1,x2,y2,x3,y3,sx,sy,sw,sh)=>{
+      const tx=t?textures.get(t):null;
+      const color=tx?tx.color:renderers.get(r).color;
+      const tw=tx?tx.w:1,th=tx?tx.h:1;
+      const v=quadVertices,u0=sx/tw,v0=sy/th,u1=(sx+sw)/tw,v1=(sy+sh)/th;
+      v[0]=v[24]=x0;v[1]=v[25]=y0;v[2]=v[26]=u0;v[3]=v[27]=v0;
+      v[8]=x1;v[9]=y1;v[10]=u1;v[11]=v0;
+      v[16]=v[32]=x2;v[17]=v[33]=y2;v[18]=v[34]=u1;v[19]=v[35]=v1;
+      v[40]=x3;v[41]=y3;v[42]=u0;v[43]=v1;
+      for(let i=0;i<48;i+=8){v[i+4]=color[0];v[i+5]=color[1];v[i+6]=color[2];v[i+7]=color[3];}
+      check(native.SDL_RenderGeometry(r,t,quadBytes,6),'SDL_RenderGeometry');
+    },
+    __sdl_render_geometry: (r,t,p,count)=>check(native.SDL_RenderGeometry(r,t,bytes(p,count*32),count),'SDL_RenderGeometry'),
+    __sdl_render_present: r=>{
+      if(captureRequested){lastFrame=native.SDL_RenderReadPixels(r);captureRequested=false;}
+      check(native.SDL_RenderPresent(r),'SDL_RenderPresent');
+    },
+    __sdl_open_audio_device: (freq,format,channels)=>{
+      const d=native.SDL_OpenAudioDeviceStream(freq,format,channels);
+      if(!d)return 0;
+      try {
+        // The C veneer converts PCM to the sink format it queries below.
+        // Make that the native stream's INPUT format too, so those bytes are
+        // not decoded again using the application's original source spec.
+        const [fmt,ch,hz]=native.SDL_GetAudioDeviceFormat(d);
+        check(native.SDL_SetAudioStreamFormat(d,hz,fmt,ch),'SDL_SetAudioStreamFormat');
+        return d;
+      } catch(error) { native.SDL_DestroyAudioStream(d);throw error; }
+    },
+    __sdl_audio_dst_query: (d,field)=>native.SDL_GetAudioStreamFormat(d)[field]??-1,
+    __sdl_queue_audio: (d,p,len)=>native.SDL_PutAudioStreamData(d,bytes(p,len))?len:0,
+    __sdl_get_queued_audio_size: d=>native.SDL_GetAudioStreamQueued(d),
+    __sdl_clear_queued_audio: d=>check(native.SDL_ClearAudioStream(d),'SDL_ClearAudioStream'),
+    __sdl_pause_audio_device: (d,pause)=>check(native.SDL_PauseAudioStreamDevice(d,pause),'SDL_PauseAudioStreamDevice'),
+    __sdl_close_audio_device: d=>native.SDL_DestroyAudioStream(d),
+    __sdl_get_ticks: ()=>{if(tickBase===null)tickBase=performance.now();return performance.now()-tickBase;},
+    __sdl_delay: ms=>native.SDL_Delay(Math.max(0,Math.ceil(ms))>>>0),
+    __sdl_global_mouse_state: (x,y)=>{
+      const [mask,mx,my]=native.SDL_GetGlobalMouseState();
+      if(x)bytes(x,4).writeFloatLE(mx);
+      if(y)bytes(y,4).writeFloatLE(my);
+      return mask;
+    },
+    __sdl_native_path: (kind,org,app,p,cap)=>{
+      const path=kind===0?native.SDL_GetBasePath():native.SDL_GetPrefPath(org?readString(org):'',readString(app));
+      if(path===null)return -1;
+      const text=encoder.encode(path);
+      if(cap>0){const out=bytes(p,cap);const n=Math.min(text.length,cap-1);out.set(text.subarray(0,n));out[n]=0;}
+      return text.length;
+    },
+    __sdl_pump: ()=>pump(0),
+    __sdl_pump_wait: ms=>{pump(ms);return 1;},
+    __sdl_gamepad_name: (id,p,cap)=>{
+      const name=padNames.get(id);if(name===undefined)return -1;
+      const text=encoder.encode(name);if(cap>0){const out=bytes(p,cap);const n=Math.min(text.length,cap-1);out.set(text.subarray(0,n));out[n]=0;}return text.length;
+    },
+    __sdl_set_animation_frame_func: ptr=>{animationFrameFunc=captureTableCallback(ctx,ptr,true);},
+    __sdl_set_animation_frame_func_ref: callback=>{animationFrameFunc=captureWasmCallback(callback,true);},
+    // __wait multiplexes OS fds, not just SDL events. -2 explicitly delegates
+    // to libc's existing poll fallback rather than claiming fd readiness.
+    __wait: ()=>-2,
+  };
+  const clipboard = {
+    __clip_has: fmt => clipboard.__clip_get(fmt,0,0),
+    __clip_set: (fmt,p,len)=>{
+      if(!(subsystems&0x20))init(0x20);
+      if(fmt===0||len===0)return native.SDL_ClearClipboardData()?0:-1;
+      if(fmt!==1)return -1;
+      return native.SDL_SetClipboardText(new TextDecoder().decode(bytes(p,len)))?0:-1;
+    },
+    __clip_get: (fmt,p,cap)=>{
+      if(!(subsystems&0x20))init(0x20);
+      if(fmt!==1||!native.SDL_HasClipboardText())return -1;
+      const text=encoder.encode(native.SDL_GetClipboardText());if(cap>0)bytes(p,cap).set(text.subarray(0,cap));return text.length;
+    },
+  };
+  return {
+    isNative:true, c:env, clipboard, drainInput:()=>pump(0),
+    getAnimationFrameFunc:()=>animationFrameFunc,
+    getLastFrame:()=>{captureRequested=true;return lastFrame;},
+    close:()=>{try { if(initialized)env.__sdl_quit(); } finally { native[lease]=false; }},
+    pushKeyEvent:(...a)=>emit('__sdl_push_key_event',...a),
+    pushQuitEvent:h=>emit('__sdl_push_quit_event',h),
+    pushMouseButtonEvent:(...a)=>emit('__sdl_push_mouse_button_event',...a),
+    pushMouseMotionEvent:(...a)=>emit('__sdl_push_mouse_motion_event',...a),
+    pushMouseMotionRelEvent:(...a)=>emit('__sdl_push_mouse_motion_rel_event',...a),
+    pushMouseWheelEvent:(...a)=>emit('__sdl_push_mouse_wheel_event',...a),
+  };
+}
+
+/* Native WebGPU (Node): the __wgpu_* host imports on the addon's wgpu-native
+ * translation layer (native/webgpu.c). The C veneer already flattens every
+ * descriptor into primitives and packed int arrays; this adapter only
+ * bounds-checks Wasm memory, hands the addon views of it, and delivers the
+ * addon's queued async completions (adapter, device, map, error scope) to the
+ * wasm callback trampolines. pump() runs from the runtime's frame loop and,
+ * while completions are outstanding, from an unref'd timer, so a program
+ * that waits inside its main-loop callback sees them the same way it would
+ * see a settled browser promise. Handles are the addon's shared handle table,
+ * so SDL_GetWGPUSurface binds a surface to the window it names. */
+function createNativeWebGPU(ctx, native) {
+  const { getMemory, getExports, readString } = ctx;
+  const bytes = (ptr, length) => {
+    ptr >>>= 0;
+    if (!Number.isSafeInteger(length) || length < 0 || ptr + length > getMemory().buffer.byteLength) throw new RangeError('WebGPU memory access outside Wasm memory');
+    return Buffer.from(getMemory().buffer, ptr, length);
+  };
+  const empty = Buffer.alloc(0);
+  const ints = (ptr, count) => count > 0 ? bytes(ptr, count * 4) : empty;
+  const doubles = (ptr, count) => count > 0 ? bytes(ptr, count * 8) : empty;
+  const text = (ptr, len) => !ptr || len === 0 ? '' : len < 0 ? readString(ptr) : new TextDecoder().decode(bytes(ptr, len));
+  const code = (ptr, len) => len < 0 ? Buffer.from(readString(ptr)) : bytes(ptr, len >>> 0);
+  /* Packed constants [ count, per entry: keyPtr, keyLen ] + f64 values ->
+   * NUL-separated keys + raw doubles (the addon decodes both). */
+  const constants = (intsPtr, intsLen, valsPtr) => {
+    if (!intsPtr || intsLen <= 0) return [empty, empty];
+    const a = new Int32Array(getMemory().buffer, intsPtr >>> 0, intsLen);
+    const count = a[0];
+    if (!count) return [empty, empty];
+    const keys = [];
+    for (let k = 0; k < count; k++) keys.push(text(a[1 + k * 2], a[2 + k * 2]));
+    return [Buffer.from(keys.join('\0') + '\0'), Buffer.from(doubles(valsPtr, count))];
+  };
+  const ranges = new Map();     // buffer handle -> staged mapped ranges to flush on unmap
+  const writable = new Set();   // buffers mapped for writing (MAP_WRITE / mappedAtCreation)
+  let closed = false, outstanding = 0, timer = null;
+  const emit = (name, ...args) => { const fn = getExports()[name]; if (fn) fn(...args); };
+  function pump() {
+    if (closed) return 0;
+    const events = native.WGPU_ProcessEvents();
+    outstanding = Math.max(0, outstanding - events.length);
+    for (const e of events) {
+      if (e.message && e.status !== 1) console.error('WebGPU: ' + e.message);
+      switch (e.kind) {
+        case 0: emit('__wgpu_call_adapter_cb', e.cb, e.status, e.handle, 0, 0, e.ud1, e.ud2); break;
+        case 1: emit('__wgpu_call_device_cb', e.cb, e.status, e.handle, 0, 0, e.ud1, e.ud2); break;
+        case 2: emit('__wgpu_call_buffer_map_cb', e.cb, e.status, e.ud1, e.ud2); break;
+        case 3: if (e.message) console.error('WebGPU error scope captured: ' + e.message);
+                emit('__wgpu_call_pop_error_cb', e.cb, e.status, e.type, e.ud1, e.ud2); break;
+      }
+    }
+    if (outstanding > 0 && !timer) {
+      timer = setTimeout(() => { timer = null; try { pump(); } catch (e) { console.error(e); } }, 4);
+      if (timer.unref) timer.unref();
+    }
+    return events.length;
+  }
+  const expect = () => { outstanding++; if (!timer) { timer = setTimeout(() => { timer = null; try { pump(); } catch (e) { console.error(e); } }, 0); if (timer.unref) timer.unref(); } };
+  const env = {
+    __wgpu_create_instance: () => native.WGPU_CreateInstance(),
+    __wgpu_instance_create_surface: instance => native.WGPU_InstanceCreateSurface(instance, 0),
+    __wgpu_instance_create_surface_for_window: (instance, window) => native.WGPU_InstanceCreateSurface(instance, window >>> 0),
+    __wgpu_instance_request_adapter: (instance, cb, ud1, ud2) => { native.WGPU_InstanceRequestAdapter(instance, cb, ud1, ud2); expect(); },
+    __wgpu_adapter_request_device: (adapter, cb, ud1, ud2) => { native.WGPU_AdapterRequestDevice(adapter, cb, ud1, ud2); expect(); },
+    __wgpu_device_get_queue: device => native.WGPU_DeviceGetQueue(device),
+    __wgpu_surface_get_preferred_format: surface => native.WGPU_SurfaceGetPreferredFormat(surface),
+    __wgpu_surface_configure: (surface, device, format, usage, width, height, alphaMode, presentMode, vfPtr, vfLen) =>
+      native.WGPU_SurfaceConfigure(surface, device, format, usage >>> 0, width, height, alphaMode, presentMode, ints(vfPtr, vfLen)),
+    __wgpu_surface_get_current_texture: surface => native.WGPU_SurfaceGetCurrentTexture(surface),
+    __wgpu_surface_present: surface => { native.WGPU_SurfacePresent(surface); },
+    __wgpu_texture_create_view: (texture, format, dimension, baseMip, mipCount, baseLayer, layerCount, aspect) =>
+      native.WGPU_TextureCreateView(texture, format, dimension, baseMip >>> 0, mipCount >>> 0, baseLayer >>> 0, layerCount >>> 0, aspect),
+    __wgpu_device_create_shader_module_wgsl: (device, ptr, len) => native.WGPU_DeviceCreateShaderModuleWGSL(device, code(ptr, len)),
+    __wgpu_device_create_render_pipeline: (device, vsModule, vsEntry, vsEntryLen, fsModule, fsEntry, fsEntryLen, targetsPacked, targetsLen, topology, stripIndexFormat, cullMode, frontFace, vbLayout, vbLayoutLen, layout, depthEnabled, depthFormat, depthWriteEnabled, depthCompare, depthBias, depthBiasSlopeScale, depthBiasClamp, stencilPacked, sampleCount, sampleMask, alphaToCoverage, vsConstInts, vsConstIntsLen, vsConstVals, fsConstInts, fsConstIntsLen, fsConstVals) => {
+      const [vk, vv] = constants(vsConstInts, vsConstIntsLen, vsConstVals);
+      const [fk, fv] = fsModule ? constants(fsConstInts, fsConstIntsLen, fsConstVals) : [empty, empty];
+      return native.WGPU_DeviceCreateRenderPipeline(device, vsModule, text(vsEntry, vsEntryLen), fsModule, text(fsEntry, fsEntryLen),
+        ints(targetsPacked, targetsLen), topology, stripIndexFormat, cullMode, frontFace, ints(vbLayout, vbLayoutLen), layout,
+        depthEnabled, depthFormat, depthWriteEnabled, depthCompare, depthBias | 0, depthBiasSlopeScale, depthBiasClamp,
+        stencilPacked ? ints(stencilPacked, 10) : empty, sampleCount, sampleMask >>> 0, alphaToCoverage, vk, vv, fk, fv);
+    },
+    __wgpu_device_create_buffer: (device, size, usage, mappedAtCreation) => {
+      const h = native.WGPU_DeviceCreateBuffer(device, size >>> 0, usage >>> 0, mappedAtCreation ? 1 : 0);
+      if (h && mappedAtCreation) writable.add(h);
+      return h;
+    },
+    __wgpu_queue_write_buffer: (queue, buffer, offset, ptr, size) => native.WGPU_QueueWriteBuffer(queue, buffer, offset >>> 0, bytes(ptr, size >>> 0)),
+    __wgpu_render_pass_set_vertex_buffer: (pass, slot, buffer, offset, size) => native.WGPU_RenderPassSetVertexBuffer(pass, slot >>> 0, buffer, offset >>> 0, size | 0),
+    __wgpu_render_pass_set_index_buffer: (pass, buffer, format, offset, size) => native.WGPU_RenderPassSetIndexBuffer(pass, buffer, format, offset >>> 0, size | 0),
+    __wgpu_render_pass_draw_indexed: (pass, ic, inst, fi, bv, fInst) => native.WGPU_RenderPassDrawIndexed(pass, ic >>> 0, inst >>> 0, fi >>> 0, bv | 0, fInst >>> 0),
+    __wgpu_device_create_bind_group_layout: (device, ptr, len) => native.WGPU_DeviceCreateBindGroupLayout(device, ints(ptr, len)),
+    __wgpu_device_create_pipeline_layout: (device, ptr, count) => native.WGPU_DeviceCreatePipelineLayout(device, ints(ptr, count)),
+    __wgpu_device_create_bind_group: (device, layout, ptr, len) => native.WGPU_DeviceCreateBindGroup(device, layout, ints(ptr, len)),
+    __wgpu_render_pass_set_bind_group: (pass, index, group, ptr, count) => native.WGPU_RenderPassSetBindGroup(pass, index >>> 0, group, ints(ptr, count >>> 0)),
+    __wgpu_device_create_texture: (device, w, h, depth, format, usage, dimension, mips, samples) =>
+      native.WGPU_DeviceCreateTexture(device, w >>> 0, h >>> 0, depth >>> 0, format, usage >>> 0, dimension, mips >>> 0, samples >>> 0),
+    __wgpu_device_create_sampler: (device, au, av, aw, mag, min, mip, lodMin, lodMax, aniso, compare) =>
+      native.WGPU_DeviceCreateSampler(device, au, av, aw, mag, min, mip, lodMin, lodMax, aniso >>> 0, compare),
+    __wgpu_queue_write_texture: (queue, texture, mip, ox, oy, oz, aspect, ptr, size, offset, bpr, rpi, w, h, depth) =>
+      native.WGPU_QueueWriteTexture(queue, texture, mip >>> 0, ox >>> 0, oy >>> 0, oz >>> 0, aspect, bytes(ptr, size >>> 0), offset >>> 0, bpr >>> 0, rpi >>> 0, w >>> 0, h >>> 0, depth >>> 0),
+    __wgpu_cmd_copy_texture_to_buffer: (enc, tex, mip, ox, oy, oz, buf, offset, bpr, rpi, w, h, depth) =>
+      native.WGPU_CommandEncoderCopyTextureToBuffer(enc, tex, mip >>> 0, ox >>> 0, oy >>> 0, oz >>> 0, buf, offset >>> 0, bpr >>> 0, rpi >>> 0, w >>> 0, h >>> 0, depth >>> 0),
+    __wgpu_buffer_map_async: (buffer, mode, offset, size, cb, ud1, ud2) => {
+      if (mode & 2) writable.add(buffer); else writable.delete(buffer);
+      native.WGPU_BufferMapAsync(buffer, mode >>> 0, offset >>> 0, size | 0, cb, ud1, ud2);
+      expect();
+    },
+    __wgpu_buffer_get_size: buffer => native.WGPU_BufferGetSize(buffer),
+    __wgpu_buffer_get_mapped_range: (buffer, offset, size, dstPtr) => {
+      native.WGPU_BufferReadMappedRange(buffer, offset >>> 0, bytes(dstPtr, size >>> 0));
+      if (!writable.has(buffer)) return;
+      let list = ranges.get(buffer);
+      if (!list) { list = []; ranges.set(buffer, list); }
+      list.push({ offset: offset >>> 0, dstPtr: dstPtr >>> 0, size: size >>> 0 });
+    },
+    __wgpu_buffer_unmap: buffer => {
+      const list = ranges.get(buffer);
+      if (list) {
+        for (const m of list) native.WGPU_BufferWriteMappedRange(buffer, m.offset, bytes(m.dstPtr, m.size));
+        ranges.delete(buffer);
+      }
+      writable.delete(buffer);
+      native.WGPU_BufferUnmap(buffer);
+    },
+    __wgpu_cmd_copy_buffer_to_buffer: (enc, src, srcOffset, dst, dstOffset, size) =>
+      native.WGPU_CommandEncoderCopyBufferToBuffer(enc, src, srcOffset >>> 0, dst, dstOffset >>> 0, size >>> 0),
+    __wgpu_device_create_compute_pipeline: (device, module, entry, entryLen, layout, constInts, constIntsLen, constVals) => {
+      const [k, v] = constants(constInts, constIntsLen, constVals);
+      return native.WGPU_DeviceCreateComputePipeline(device, module, text(entry, entryLen), layout, k, v);
+    },
+    __wgpu_command_encoder_begin_compute_pass: enc => native.WGPU_CommandEncoderBeginComputePass(enc),
+    __wgpu_compute_pass_set_pipeline: (pass, pipeline) => native.WGPU_ComputePassSetPipeline(pass, pipeline),
+    __wgpu_compute_pass_set_bind_group: (pass, index, group, ptr, count) => native.WGPU_ComputePassSetBindGroup(pass, index >>> 0, group, ints(ptr, count >>> 0)),
+    __wgpu_compute_pass_dispatch: (pass, x, y, z) => native.WGPU_ComputePassDispatch(pass, x >>> 0, y >>> 0, z >>> 0),
+    __wgpu_compute_pass_end: pass => native.WGPU_ComputePassEnd(pass),
+    __wgpu_device_push_error_scope: (device, filter) => native.WGPU_DevicePushErrorScope(device, filter),
+    __wgpu_device_pop_error_scope: (device, cb, ud1, ud2) => { native.WGPU_DevicePopErrorScope(device, cb, ud1, ud2); expect(); },
+    __wgpu_device_create_command_encoder: device => native.WGPU_DeviceCreateCommandEncoder(device),
+    __wgpu_command_encoder_begin_render_pass: (enc, colorPacked, colorLen, clearPacked, depthView, depthLoadOp, depthStoreOp, depthClearValue, depthReadOnly, stencilLoadOp, stencilStoreOp, stencilClearValue, stencilReadOnly) => {
+      const count = colorPacked && colorLen > 0 ? new Int32Array(getMemory().buffer, colorPacked >>> 0, 1)[0] : 0;
+      return native.WGPU_CommandEncoderBeginRenderPass(enc, ints(colorPacked, colorLen), doubles(clearPacked, count * 4), depthView,
+        depthLoadOp, depthStoreOp, depthClearValue, depthReadOnly, stencilLoadOp, stencilStoreOp, stencilClearValue >>> 0, stencilReadOnly);
+    },
+    __wgpu_render_pass_set_stencil_reference: (pass, ref) => native.WGPU_RenderPassSetStencilReference(pass, ref >>> 0),
+    __wgpu_render_pass_set_pipeline: (pass, pipeline) => native.WGPU_RenderPassSetPipeline(pass, pipeline),
+    __wgpu_render_pass_draw: (pass, vc, ic, fv, fi) => native.WGPU_RenderPassDraw(pass, vc >>> 0, ic >>> 0, fv >>> 0, fi >>> 0),
+    __wgpu_render_pass_end: pass => native.WGPU_RenderPassEnd(pass),
+    __wgpu_command_encoder_finish: enc => native.WGPU_CommandEncoderFinish(enc),
+    __wgpu_queue_submit_one: (queue, cmd) => native.WGPU_QueueSubmit(queue, cmd),
+    __wgpu_release: handle => { ranges.delete(handle); writable.delete(handle); native.WGPU_Release(handle >>> 0); },
+  };
+  return {
+    isNative: true, [ENV_KEY]: env, pump,
+    close: () => { if (closed) return; closed = true; if (timer) { clearTimeout(timer); timer = null; } native.WGPU_Shutdown(); },
+  };
+}
+
 function createNullSDL(ctx) {
   let animationFrameFunc = null;
   let sdlTicksBase = null;   // ms baseline captured at SDL_Init (see __sdl_get_ticks)
@@ -7518,6 +7907,23 @@ function createNullSDL(ctx) {
       __sdl_gamepad_name: function () { return -1; },   // no kernel — no pads (#607)
     },
   };
+}
+
+// Standalone auto mode without the addon: local helpers/timers still work,
+// but unavailable devices must never look like successfully created resources.
+function createUnavailableSDL(ctx) {
+  const sdl = createNullSDL(ctx);
+  const initLocal = sdl[ENV_KEY].__sdl_init;
+  Object.assign(sdl[ENV_KEY], {
+    __sdl_init: flags => (flags & (0x10 | 0x20 | 0x2000)) ? -1 : initLocal(flags),
+    __sdl_init_subsystem: flags => (flags & (0x10 | 0x20 | 0x2000)) ? -1 : 0,
+    __sdl_create_window: () => 0,
+    __sdl_create_popup_window: () => 0,
+    __sdl_create_renderer: () => 0,
+    __sdl_create_texture: () => 0,
+    __sdl_open_audio_device: () => 0,
+  });
+  return sdl;
 }
 
 /* ==========================================================================
@@ -12090,7 +12496,23 @@ function deliverTrapReport(text, ctx, writeErr) {
   emit();
 }
 
-async function runModule({
+async function runModule(options) {
+  let ownedSDL, ownedGPU;
+  if (options.sdlBackend && !['auto', 'native', 'null'].includes(options.sdlBackend))
+    throw new Error('Invalid SDL backend: ' + options.sdlBackend);
+  try {
+    return await runModuleImpl({ ...options, onSdl(sdl) {
+      if (sdl.isNative && sdl !== options.sdl) ownedSDL = sdl;
+      if (options.onSdl) options.onSdl(sdl);
+    }, onWebGPU(gpu) { ownedGPU = gpu; } });
+  } finally {
+    // GPU objects first: a surface must go before the SDL window it presents into.
+    try { if (ownedGPU) ownedGPU.close(); }
+    finally { if (ownedSDL) ownedSDL.close(); }
+  }
+}
+
+async function runModuleImpl({
   bytes,
   // Pre-compiled Module (docs/archive/0037): skips the parse+compile below. The
   // kernel ships one for read-only-volume binaries — compiled once
@@ -12108,6 +12530,9 @@ async function runModule({
   requestStdinReady,
   requestStdinNotify,
   sdl: sdlOverride,
+  sdlBackend = "auto",
+  nativeSDL,
+  onWebGPU,
   getBrowserSDL,
   onSdl,
   // Process model: { spawn, wait, kill } hooks (the c/ owner worker's process
@@ -13609,10 +14034,27 @@ async function runModule({
       pid: pid || 0,
     } });
   }
-  // No canvas, no override → null stubs so __sdl_* imports still resolve
-  // (Node CLI, headless tests). Browser host always sets getBrowserSDL.
-  if (!sdl) sdl = createNullSDL(ctx);
-  Object.assign(imports[ENV_KEY], sdl[ENV_KEY]);
+  // Only standalone Node programs probe the optional native backend. Existing
+  // browser and kernel surface adapters above own their own presentation.
+  let nativeAddon = null;
+  const nodeStandalone = !sdl && !spawnHooks && typeof process !== 'undefined' && typeof require === 'function';
+  const usesNative = WebAssembly.Module.imports(module).some(imp =>
+    imp.module === ENV_KEY && /^__(sdl_|clip_|wgpu_)/.test(imp.name));
+  if (nodeStandalone && sdlBackend !== 'null' && usesNative) {
+    try { nativeAddon = nativeSDL || loadNativeSDL(sdlBackend === 'native'); }
+    catch (error) {
+      if (sdlBackend === 'native') throw error;
+      writeErr('Native SDL/WebGPU unavailable: ' + error.message + '\n');
+    }
+    if (nativeAddon) sdl = createNativeSDL(ctx, nativeAddon);
+  }
+  if (!sdl) sdl = nodeStandalone && sdlBackend !== 'null' ? createUnavailableSDL(ctx) : createNullSDL(ctx);
+  Object.assign(imports[ENV_KEY], {
+    // Browser/kernel hosts track subsystem state in the C veneer. Native
+    // hosts also initialize/quit the corresponding operating-system devices.
+    __sdl_init_subsystem: () => 0,
+    __sdl_quit_subsystem: () => {},
+  }, sdl[ENV_KEY]);
   // Expose the live SDL object to the host so an embedder can push input events
   // into it (sdl.pushKeyEvent / pushMouseButtonEvent / …). Used when the canvas
   // and event source live on the main thread but the run executes in a (possibly
@@ -13635,13 +14077,16 @@ async function runModule({
   // browser flavor shares the worker-local canvas + ImageBitmap present tail;
   // headless flavor gets the lazy Dawn probe + shm readback tail (docs/archive/0016).
   const wCfg = (sdl && sdl.webgpuConfig) || null;
+  const usesGpu = WebAssembly.Module.imports(module).some(imp => imp.module === ENV_KEY && imp.name.startsWith('__wgpu_'));
+  const nativeGpu = nativeAddon && usesGpu && typeof nativeAddon.WGPU_CreateInstance === 'function';
   const webgpu = wCfg
     ? createBrowserWebGPU({ canvas: wCfg.canvas || null, ctx: ctx, notifyWindow: notifyWindow,
                             resolveGpu: wCfg.resolveGpu, shmSurface: wCfg.shmSurface, onPresent: wCfg.onPresent,
                             bindWindow: wCfg.bindWindow })
     : (getBrowserSDL || hasGpu)
       ? createBrowserWebGPU({ canvas: getBrowserSDL || null, ctx: ctx, notifyWindow: notifyWindow })
-      : createNullWebGPU(ctx);
+      : nativeGpu ? createNativeWebGPU(ctx, nativeAddon) : createNullWebGPU(ctx);
+  if (webgpu.isNative && onWebGPU) onWebGPU(webgpu);
   Object.assign(imports[ENV_KEY], webgpu[ENV_KEY]);
 
   /* ---- Process model: __spawn / __spawn_wait / __spawn_kill ----
@@ -13652,7 +14097,7 @@ async function runModule({
 
   /* ---- System clipboard (docs/archive/0090): kernel slot via spawnHooks, or a
      process-local slot with the same semantics when there's no kernel. */
-  Object.assign(imports[ENV_KEY], createClipboard(ctx, spawnHooks || null)[ENV_KEY]);
+  Object.assign(imports[ENV_KEY], sdl.clipboard || createClipboard(ctx, spawnHooks || null)[ENV_KEY]);
 
   /* ---- Egress (docs/archive/0398): gucOS -> host file transfer via the kernel's
      EGRESS RPC; ENOSYS (fail-loud, no local fallback) with no kernel. */
@@ -14193,8 +14638,10 @@ async function runModule({
               if (!animFunc) { resolve(); return; }
               // Pull kernel input into the wasm queue before running the frame.
               if (sdl.drainInput) {
-                try { sdl.drainInput(); } catch (e) { /* exports gone mid-teardown */ }
+                if (sdl.isNative) sdl.drainInput();
+                else { try { sdl.drainInput(); } catch (e) { /* exports gone mid-teardown */ } }
               }
+              if (webgpu.pump) webgpu.pump();
               await animFunc();
               if (sdl.getAnimationFrameFunc()) scheduleFrame();
               else resolve();
@@ -14318,6 +14765,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   // --block-fs: use the synchronous block filesystem instead of the
   // real Node.js filesystem.  Pass --block-fs=<path> to back it with a
   // real file; bare --block-fs uses an ephemeral in-memory store.
+  var sdlBackend = "auto";
   var useBlockFS = false;
   var blockFSPath = null;
   // --max-seconds=N (#184): wall-clock ceiling for the module. Defaults ON
@@ -14328,7 +14776,18 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   var maxSeconds = (typeof process.stdin.isTTY !== 'undefined' && process.stdin.isTTY) ? 0 : 3600;
   var args = process.argv.slice(2);
   for (var ai = 0; ai < args.length; ai++) {
-    if (args[ai] === '--block-fs') { useBlockFS = true; args.splice(ai, 1); ai--; }
+    // Preserve the application's delimiter (e.g. git checkout -- file).
+    // Host options are no longer interpreted after it.
+    if (args[ai] === '--') break;
+    if (args[ai].startsWith('--sdl=')) {
+      sdlBackend = args[ai].slice(6);
+      if (!['auto', 'native', 'null'].includes(sdlBackend)) {
+        process.stderr.write('host.js: --sdl must be auto, native, or null\n');
+        process.exit(2);
+      }
+      args.splice(ai, 1); ai--;
+    }
+    else if (args[ai] === '--block-fs') { useBlockFS = true; args.splice(ai, 1); ai--; }
     else if (args[ai].startsWith('--block-fs=')) {
       useBlockFS = true; blockFSPath = args[ai].substring('--block-fs='.length);
       args.splice(ai, 1); ai--;
@@ -14423,6 +14882,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
       args: args,
       env: process.env,
       maxWallMs: maxWallMs,
+      sdlBackend,
       blockFsFactory: async function (ctx) {
         return { c: blockFS.toWasmEnv(ctx) };
       },
@@ -14455,6 +14915,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
       args: args,
       env: process.env,
       maxWallMs: maxWallMs,
+      sdlBackend,
       fs: fs,
     }).then(function (exitCode) {
       flushAndExit(exitCode);
@@ -14481,6 +14942,9 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   module.exports.createSharedAudioBuffer = createSharedAudioBuffer;
   module.exports.createBrowserSDL = createBrowserSDL;
   module.exports.createNullSDL = createNullSDL;
+  module.exports.createNativeSDL = createNativeSDL;
+  module.exports.createNativeWebGPU = createNativeWebGPU;
+  module.exports.loadNativeSDL = loadNativeSDL;
   module.exports.createFontBridge = createFontBridge;
   // Test export: the OS kernel-surface SDL flavor (per-window GPU present, A4)
   module.exports.createSurfaceSDL = createSurfaceSDL;

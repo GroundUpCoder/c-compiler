@@ -346,6 +346,7 @@ function workerMain() {
       captureStderr = stderrBuf;
       try {
         const runOpts = {
+          sdlBackend: 'null', // deterministic headless unit fixtures; native is tested separately
           bytes: wasmBinary,
           args: [fakeArgv0, ...(td.config.args || [])],
           writeOut: (b) => stdoutBuf.push(toBuf(b)),

@@ -148,7 +148,7 @@ check('the pruned binary still runs (host smoke)', () => {
   const w = path.join(tmp, 'runsmoke.wasm');
   fs.writeFileSync(c, NO_AUDIO_SDL);
   cp.execFileSync('node', [path.join(ROOT, 'compiler.js'), c, '-o', w], { stdio: 'pipe' });
-  const out = cp.execFileSync('node', [path.join(ROOT, 'host.js'), w], { encoding: 'utf8' });
+  const out = cp.execFileSync('node', [path.join(ROOT, 'host.js'), w, '--sdl=null'], { encoding: 'utf8' });
   assert(out.includes('ticks='), 'program output missing: ' + out);
 });
 

@@ -392,7 +392,7 @@ def run_single_test(test_dir, compiler_cmd):
         if compiler_errors:
             return (name, False, "\n".join(compiler_errors))
 
-        run_cmd = ["node", "--experimental-wasm-exnref", HOST_JS, wasm_path] + config.get("args", [])
+        run_cmd = ["node", "--experimental-wasm-exnref", HOST_JS, wasm_path, "--sdl=null"] + config.get("args", [])
         events = config.get("events", [])
         if events:
             run_result = run_with_events(run_cmd, events, timeout=30)
@@ -618,7 +618,7 @@ def run_projects(results, filter_str=None):
             results.record(test_name, False, f"Build failed:\n{err}")
         else:
             r = subprocess.run(
-                ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null"],
                 capture_output=True, text=True, timeout=30)
             ok = r.returncode == 0 and r.stdout == "diamond: 63\n"
             results.record(test_name, ok, "" if ok else
@@ -651,7 +651,7 @@ def run_zlib_tests(results, filter_str=None):
             results.record(demo_name, False, f"Build failed:\n{err}")
         else:
             r = subprocess.run(
-                ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null"],
                 capture_output=True, text=True, timeout=15,
             )
             if r.returncode != 0:
@@ -678,7 +678,7 @@ def run_zlib_tests(results, filter_str=None):
             try:
                 zip_path = os.path.join(work, "output.zip")
                 r = subprocess.run(
-                    ["node", "--experimental-wasm-exnref", HOST_JS, tool_wasm,
+                    ["node", "--experimental-wasm-exnref", HOST_JS, tool_wasm, "--sdl=null",
                      "create", os.path.abspath(zip_path)] + ZLIB_GOLDEN_FILES,
                     capture_output=True, text=True, timeout=15, cwd=ZLIB_GOLDEN_DIR,
                 )
@@ -706,7 +706,7 @@ def run_zlib_tests(results, filter_str=None):
             try:
                 golden_zip = os.path.join(ZLIB_GOLDEN_DIR, "expected.zip")
                 r = subprocess.run(
-                    ["node", "--experimental-wasm-exnref", HOST_JS, tool_wasm,
+                    ["node", "--experimental-wasm-exnref", HOST_JS, tool_wasm, "--sdl=null",
                      "extract", os.path.abspath(golden_zip)],
                     capture_output=True, text=True, timeout=15, cwd=work,
                 )
@@ -786,7 +786,7 @@ def run_lua_tests(results, filter_str=None):
         test_path = os.path.join(LUA_TEST_DIR, f)
         try:
             r = subprocess.run(
-                ["node", "--experimental-wasm-exnref", HOST_JS, wasm,
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null",
                  "-e", f"_port=true;package.path='{LUA_TEST_DIR}/?.lua;'..package.path",
                  test_path],
                 capture_output=True, timeout=15, cwd=LUA_TEST_DIR
@@ -826,7 +826,7 @@ def run_freetype_tests(results, filter_str=None):
     try:
         bmp_path = os.path.join(work, "output.bmp")
         r = subprocess.run(
-            ["node", "--experimental-wasm-exnref", HOST_JS, wasm,
+            ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null",
              FREETYPE_FONT, "Hello", bmp_path],
             capture_output=True, text=True, timeout=30,
         )
@@ -873,7 +873,7 @@ def run_cairo_tests(results, filter_str=None):
             results.record(test_name, False, f"Build failed:\n{err}")
             continue
         r = subprocess.run(
-            ["node", "--experimental-wasm-exnref", HOST_JS, wasm, *args],
+            ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null", *args],
             capture_output=True, text=True, timeout=120, cwd=ROOT_DIR,
         )
         if r.returncode != 0:
@@ -916,7 +916,7 @@ def run_libpng_tests(results, filter_str=None):
             return
         try:
             r = subprocess.run(
-                ["node", "--experimental-wasm-exnref", HOST_JS, wasm] + args,
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null"] + args,
                 capture_output=True, text=True, timeout=30,
             )
         except subprocess.TimeoutExpired:
@@ -985,7 +985,7 @@ def run_libjpeg_tests(results, filter_str=None):
             return
         try:
             r = subprocess.run(
-                ["node", "--experimental-wasm-exnref", HOST_JS, wasm] + args,
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null"] + args,
                 capture_output=True, text=True, timeout=30,
             )
         except subprocess.TimeoutExpired:
@@ -1100,7 +1100,7 @@ def run_micropython_tests(results, filter_str=None):
             script_bytes = sf.read()
         try:
             r = subprocess.run(
-                ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null"],
                 input=script_bytes,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30
             )
@@ -1237,7 +1237,7 @@ def run_micropython_upstream_tests(results, filter_str=None):
             with open(script_path, "rb") as sf:
                 script_bytes = sf.read()
             r = subprocess.run(
-                ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null"],
                 input=script_bytes,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15
             )
@@ -1312,7 +1312,7 @@ def run_sqlite_tests(results, filter_str=None):
 
         try:
             r = subprocess.run(
-                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, *shell_args],
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null", *shell_args],
                 input=stdin_bytes,
                 capture_output=True, timeout=60,
             )
@@ -1499,7 +1499,7 @@ def run_tcc_tests(results, filter_str=None):
 
     def run_wasm_tcc(args, timeout=30):
         return subprocess.run(
-            ["node", "--experimental-wasm-exnref", HOST_JS, wasm] + args,
+            ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null"] + args,
             capture_output=True, text=True, timeout=timeout, cwd=ROOT_DIR)
 
     def run_native_tcc(args, timeout=30):
@@ -1647,7 +1647,7 @@ def run_libc_tests(results, filter_str=None):
             results.record(test_name, False, f"compile failed:\n{r.stderr[:800]}")
             continue
         r = subprocess.run(
-            ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+            ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null"],
             capture_output=True, text=True, timeout=60, cwd=ROOT_DIR)
         if r.returncode == 0 and r.stdout.strip() == "":
             results.record(test_name, True)
@@ -1738,7 +1738,7 @@ def run_fuzz_tests(results, filter_str=None):
             return None, f"compile failed:\n{r.stderr[:600]}"
         try:
             r = subprocess.run(
-                ["node", "--experimental-wasm-exnref", HOST_JS, wasm],
+                ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null"],
                 capture_output=True, text=True, timeout=60, cwd=ROOT_DIR)
         except subprocess.TimeoutExpired:
             return None, "run timeout"
@@ -2027,7 +2027,7 @@ def run_fakegit_steps_test(results, test_name, tdir, wasm, steps_file, expected_
                     rest = line
                 args = shlex.split(rest)
                 r = subprocess.run(
-                    ["node", "--experimental-wasm-exnref", HOST_JS, wasm,
+                    ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null",
                      "-C", scratch] + args,
                     env=env, capture_output=True, timeout=60)
                 out += r.stdout
@@ -2142,10 +2142,10 @@ def run_fakegit_tests(results, filter_str=None):
             if not os.path.isdir(run_cwd):
                 results.record(test_name, False, f"cwd.txt names no directory: {rel}")
                 continue
-            argv = ["node", "--experimental-wasm-exnref", HOST_JS, wasm] + args
+            argv = ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null"] + args
         else:
             run_cwd = None
-            argv = ["node", "--experimental-wasm-exnref", HOST_JS, wasm,
+            argv = ["node", "--experimental-wasm-exnref", HOST_JS, wasm, "--sdl=null",
                     "-C", test_repo] + args
 
         try:

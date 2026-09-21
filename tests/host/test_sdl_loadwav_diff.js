@@ -194,7 +194,7 @@ check('positive control: the referencing dumper really carries that literal', ()
 // VARIABLES exactly like functions, and every reference route the bag walk
 // claims is proven behaviorally against the real builtin TU.
 function run(wasmPath, args) {
-  return cp.execFileSync('node', [path.join(ROOT, 'host.js'), wasmPath].concat(args || []),
+  return cp.execFileSync('node', [path.join(ROOT, 'host.js'), wasmPath, '--sdl=null'].concat(args || []),
                          { cwd: ROOT, encoding: 'utf8' });
 }
 check('a VARIABLE-keyed directive fires on an extern read (symbol-general)', () => {

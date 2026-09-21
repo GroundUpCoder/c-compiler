@@ -32,6 +32,16 @@ node compiler.js hello.c -o hello.js
 node hello.js
 ```
 
+### Optional native graphics and audio on Node
+
+Console programs need only the compiler/runtime and Node; no npm installation.
+Build native SDL3 and WebGPU support with `node native/build.js`. The runtime
+loads it automatically when available. Without it, SDL device initialization
+and GPU adapter requests report unavailable, while console programs still run.
+Use `node host.js game.wasm --sdl=native` to require the addon, or `--sdl=null`
+for explicit headless simulation. See [native/README.md](native/README.md) for
+build requirements, copying the optional native libraries, and tests.
+
 ### HTML files (`.html`) — run in a browser
 
 Compile to a self-contained `.html` file with everything embedded (WASM binary, runtime, xterm.js terminal, data files). Runs in any modern browser with support for graphics (SDL/canvas), audio (SharedArrayBuffer), and interactive terminal programs:
@@ -91,6 +101,7 @@ Libraries (`"type": "lib"`) cannot be compiled directly — they must be referen
 | `--allow-knr-definitions` | Allow K&R-style function definitions |
 | `--allow-implicit-function-decl` | Allow implicit function declarations |
 | `--allow-undefined` | Allow undefined symbols |
+| `--sdl=auto\|native\|null` | Backend selection embedded in generated Node `.js` output |
 | `--no-xterm` | Disable xterm.js terminal in HTML output |
 | `--time-report` | Print compilation timing breakdown |
 | `-W<name>` | Enable warning (`pointer-decay`, `circular-dependency`) |

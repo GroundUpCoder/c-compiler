@@ -33,6 +33,12 @@ not done. The "Known strays" section below tracks current violations of either.
 
 ## Architecture (how SDL3 maps onto this runtime)
 
+Standalone Node also supports optional native SDL3/WebGPU (#797), through the
+plain C addon documented in `native/README.md`. Browser/kernel behavior below
+continues to use its existing adapters. Without the addon, standalone auto mode
+reports unavailable SDL devices; `--sdl=null` explicitly selects the headless
+simulation used by tests.
+
 - **Single `env` import model**, same as WebGPU: `__SDL.c` (in `compiler.js`,
   ~424 lines) flattens SDL structs to primitives and forwards to `__sdl_*`
   imports satisfied by `createBrowserSDL` in `host.js` (~550 lines). `SDL.h` is
@@ -449,7 +455,8 @@ hard-requires pthreads). Ticket 0006 itself was removed from the queue on
 `SDL_ClearClipboardData` (+ `SDL_free`) over the kernel's one clipboard
 slot (CLIP_SET/CLIP_GET RPCs; host.js `createClipboard`) — synchronous,
 cross-process, usable without SDL_Init; standalone runs get a
-process-local slot. Host-browser `navigator.clipboard` integration
+process-local slot when the native addon is absent; the native Node backend
+uses SDL's system clipboard. Host-browser `navigator.clipboard` integration
 (paste from OUTSIDE the OS) deliberately not wired — async + permission
 needs the callback model; revisit on demand.
 

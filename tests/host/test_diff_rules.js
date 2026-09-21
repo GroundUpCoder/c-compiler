@@ -44,6 +44,10 @@ check('PY_CATEGORIES is the run.py corpus (18+ categories, upstream corpus prese
       PY_CATEGORIES.includes('micropython-upstream'),
       (PY_CATEGORIES || []).length + ' categories');
 
+for (const file of ['native/sdl3.c', 'native/webgpu.c', 'native/build.js', 'tests/native/sdl.js', 'tests/native/fixtures/gpu-compute.c']) {
+  check('#797 native integration is gated: ' + file, planFromDiff([file]).suites.has('host'));
+}
+
 // ---- compiler.js: the whole estate ----
 var cc = planFromDiff(['compiler.js']).suites;
 check('compiler.js is not ignored/unmapped', cc.size > 0, [...cc].join(', '));

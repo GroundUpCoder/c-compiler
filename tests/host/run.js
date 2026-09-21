@@ -14,6 +14,8 @@ var { assertMemberRegistry } = require('../lib/suite-runner.js');
 require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/run.js' });
 
 var tests = [
+  ['test_native_optional.js', []],
+  ['../native/run.js', []],
   ['test_language_retirement.js', []], // #796 retired inputs and archive integrity
   ['test_stat_identity.js', []], // #785: mounted identity, RO ownership, C/WASI metadata contract (pure Node)
   ['test_epipe_listeners.js', []],       // runModule must not stack stream 'error' listeners
