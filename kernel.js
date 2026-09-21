@@ -2358,7 +2358,7 @@ function Kernel(opts) {
   // is deleted — recompiles REPLACE their entry instead of leaking a dead
   // Module per `cc -o`. Values are Promises (racing spawns of the same
   // binary share one compile); a Promise resolving null marks "uncacheable
-  // after all" (ss-flavored, compile error, Modules don't clone on this
+  // after all" (compile error, Modules don't clone on this
   // tier).
   this._moduleCache = new Map();   // moduleKey -> Promise<Module|null>
   this._modulePathKey = new Map(); // spawn path -> its last moduleKey
@@ -2743,7 +2743,7 @@ Kernel.prototype._spawn = function (parent, spec, depth) {
   if (cached) {
     this._moduleCacheHits++;
     return cached.then(function (module) {
-      // Cached null = "uncacheable after all" (ss flavor / engine-rejected
+      // Cached null = "uncacheable after all" (engine-rejected
       // bytes / no clone support): fall through to the bytes path.
       return module ? self._spawnImage(parent, spec, null, module)
         : self._spawnBytes(parent, spec, null, depth);
@@ -2825,9 +2825,8 @@ Kernel.prototype._imageCacheKey = function (path) {
 
 /* Resolve a spawn image to a shippable pre-compiled Module, or null (keep
  * the bytes path). Cache-hit or compile-once per moduleKey; the cached
- * Promise dedupes racing spawns of the same binary. ss-flavored modules are
- * excluded (runModule recompiles them from bytes with importedStringConstants
- * — see runSsModule), as are tiers where Modules don't structured-clone. */
+ * Promise dedupes racing spawns of the same binary. Tiers where Modules don't
+ * structured-clone retain the bytes path. */
 Kernel.prototype._moduleFor = function (mkey, image) {
   if (!mkey) return Promise.resolve(null);
   var cached = this._moduleCache.get(mkey);
@@ -2837,9 +2836,6 @@ Kernel.prototype._moduleFor = function (mkey, image) {
   var bytes = image instanceof Uint8Array ? image : new Uint8Array(image);
   // Compile options MUST MATCH host.js runModule's.
   var p = WebAssembly.compile(bytes, { builtins: ['js-string'], importedStringConstants: '#' }).then(function (mod) {
-    if (WebAssembly.Module.imports(mod).some(function (i) { return i.module === 'ss'; })) {
-      return null;   // ss flavor: bytes path (cached null — no re-probing)
-    }
     if (self._moduleCloneOk === undefined) {
       if (typeof structuredClone === 'function') {
         try { structuredClone(mod); self._moduleCloneOk = true; }

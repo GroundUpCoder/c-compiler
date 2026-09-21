@@ -63,7 +63,7 @@ don't duplicate them. Current map:
 - `EMULATORS.md`, `MGBA.md` — the Game Boy emulator pair and the mGBA port.
 - `CONFORMANCE-REMAINING.md` — verified-but-unfixed compiler/host findings.
 - `INLINER-WAST-PIPELINE-DESIGN.md`, `GOTO-LABELS-AST-REFACTOR.md`,
-  `WASM_GC.md`, `EXTERNREF.md`, `SS-INTEROP.md` — compiler pipeline and
+  `WASM_GC.md`, `EXTERNREF.md` — compiler pipeline and
   wasm feature designs.
 - `DOM.md`, `EXPOSE-MISSION-CONTROL.md`, `WINE-CONFORMANCE-SCOPE-335.md`,
   `BAKED-BINARY-AUDIT-2026-08-08.md`, `BLOCK_FS.md`, `MISC.md` — smaller

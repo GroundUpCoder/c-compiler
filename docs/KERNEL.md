@@ -239,8 +239,7 @@ so a bytes-path binary re-runs its init interpreted-cold on EVERY spawn
     Module per `cc -o`.
   - **synthetic volume** (ProcFS): no `moduleKey` hook → null → never
     cached.
-- **Exclusions**: ss-flavored modules (they recompile from bytes with
-  `importedStringConstants` in `runSsModule`), engine-rejected bytes (the
+- **Exclusions**: engine-rejected bytes (the
   worker owns the error report), tiers where Modules don't structured-clone
   (one-shot `structuredClone` probe), and kernels without an fs.
 - **Transport**: `procSpec.module` (exactly one of `image`/`module` is

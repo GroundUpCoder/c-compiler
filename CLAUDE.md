@@ -744,7 +744,7 @@ message (`procSpec.module`, bytes dropped), keyed by the fs `moduleKey`
 after symlink resolution — immutable prefix:ino on a read-only volume,
 VALIDATED prefix:ino:size:mtime on a writable one (a rewrite, e.g.
 `cc -o a.out` or a gucman upgrade, moves the key and REPLACES that
-path's entry — a stale Module can never be hit); ss modules, /proc, and
+path's entry — a stale Module can never be hit); /proc and
 no-fs kernels keep the bytes path — `kernel.moduleCacheStats()` counts.
 Spawn honours `#!` (docs/archive/0065, `_spawnShebang`): a text image starting
 `#!` re-dispatches to its interpreter line (execve(2) semantics — one
