@@ -2,16 +2,15 @@
 
 `/usr/lib/fontbridge.wasm` is built with this compiler from the existing FreeType
 and fontcore code. Each calling process lazily loads its own instance. Its memory
-contains no Small GC objects. The host reads font bytes through the application's
+is separate from the caller's memory. The host reads font bytes through the application's
 filesystem once per face, then opens memory-backed FreeType faces. Glyph and run
 operations execute locally, with no kernel RPC, browser font API or Canvas2D.
 The memory-only module traps attempted filesystem/process imports.
 
 `<gucos/fontbridge.h>` declares the C imports. It is a compiler builtin header
 (compiler.js standardHeaders), baked to `/usr/include/gucos/fontbridge.h` by the
-same fold as every other builtin. Small can declare the same names using
-`@import("c", "__font_open") int openFont(int path, int pixels, int flags);` and
-ordinary scalar signatures. `path`/UTF-8/pixel pointers address the caller's linear
+same fold as every other builtin. Other Wasm producers can declare the same
+`c` imports with ordinary scalar signatures. `path`/UTF-8/pixel pointers address the caller's linear
 memory. Fonts and results are opaque positive handles. No module pointer crosses
 into caller memory. `__font_abi()` returns 1; a missing installed module fails
 loudly when opening a font, and a mismatched module ABI throws before use.
@@ -64,6 +63,5 @@ cache before insertion. Old external bitmap results remain valid.
 
 Focused acceptance is `node tests/host/test_fontbridge.js`: real compiled module,
 bitmap ink/metrics, cache and result bounds, malformed text, stale handles,
-memory growth and teardown, plus an installed Small snapshot when the optional
-sibling is present. It explicitly reports when that Small leg did not run.
+memory growth and teardown.
 Graphical acceptance and CPU/GPU performance are separately recorded under #791.

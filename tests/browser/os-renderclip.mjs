@@ -30,7 +30,7 @@ try{
  await page.keyboard.type('pbpaste > /root/clip.c && cc /root/clip.c -o /root/cliptest && echo CLIP-C""OMPILED\r');
  await waitOut('CLIP-COMPILED',180000);
  const identityStart=await page.evaluate(()=>window.__osOut.length);
- await page.keyboard.type('sha256sum /root/cliptest /usr/lib/small/runtime.js /usr/lib/fontbridge.wasm; cat /usr/share/os-release; cat /usr/lib/small/snapshot.json; echo CLIP-I""DENTIFIED\r');
+ await page.keyboard.type('sha256sum /root/cliptest /usr/lib/fontbridge.wasm; cat /usr/share/os-release; echo CLIP-I""DENTIFIED\r');
  await waitOut('CLIP-IDENTIFIED',30000);
  evidence.installed=await page.evaluate(start=>window.__osOut.slice(start),identityStart);
  for(const mode of ['CPU','GPU']){

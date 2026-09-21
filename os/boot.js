@@ -363,8 +363,7 @@ async function mountAndBoot() {
     (inputScan = COMMON.newestBakeInput(fs, path, ROOT, manifest));
   let sysMode = null;   // 'reused' | 'installed' | 'baked'
   const wantPkgKey = wantPkgs.join(',');
-  const pkgsMatch = (st) => COMMON.bakedPackages(BLOCK_FS, st).join(',') === wantPkgKey &&
-    COMMON.bakedSmallSnapshot(BLOCK_FS, st) === (manifest.smallSnapshot || null);
+  const pkgsMatch = (st) => COMMON.bakedPackages(BLOCK_FS, st).join(',') === wantPkgKey;
   const bv = COMMON.bakedVersion(BLOCK_FS, store);
   if (bv > mfVersion) sysMode = 'reused';           // an upgrade blob is kept
   else if (bv === mfVersion) {
@@ -389,9 +388,8 @@ async function mountAndBoot() {
       const fxStore = new COMMON.NodeFileStore(fs, fixturePath, false);
       const fv = COMMON.bakedVersion(BLOCK_FS, fxStore);
       const fxPkgs = COMMON.bakedPackages(BLOCK_FS, fxStore);
-      const fxSmall = COMMON.bakedSmallSnapshot(BLOCK_FS, fxStore) === (manifest.smallSnapshot || null);
       fxStore.close();
-      if (fv >= mfVersion && (!fxSmall || fxPkgs.join(',') !== wantPkgKey)) {
+      if (fv >= mfVersion && fxPkgs.join(',') !== wantPkgKey) {
         bootLog('prebaked ' + fixturePath + ' package set [' +
           fxPkgs.join(',') + '] != wanted [' +
           wantPkgKey + '] — baking instead');

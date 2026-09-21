@@ -4,8 +4,6 @@
 // registration and invocation; observe explicit re-registration separately.
 const assert = require('node:assert/strict');
 const cp = require('node:child_process');
-const fs = require('node:fs');
-const path = require('node:path');
 const mode = process.argv[2];
 if (!mode) {
   for (const backend of ['jspi', 'sync']) {
@@ -28,7 +26,6 @@ if (!mode) {
       result = await host({bytes, args: ['callbacks'], onSdl(value) { sdl = value; },
         onReady({instance}) {
           const table = instance.exports.__indirect_function_table;
-          if (options.noTable) assert.equal(table, undefined, 'Small uses direct refs, no table');
           if (table) {
             const get = table.get.bind(table);
             table.get = index => { tableReads++; return get(index); };
@@ -117,54 +114,5 @@ if (!mode) {
     assert.deepEqual(backendSeen,[11,12,12,11,11,12,12,11,11,12,12,11]);
     console.log('PASS callback capture C table mutation, re-registration, zero cancellation:', mode);
 
-    // The sibling is an optional producer, as in the gucOS image build. The
-    // C cases above never depend on it; report its absence explicitly.
-    const smallRoot = path.resolve(__dirname, '../../../small');
-    const smallPath = path.join(smallRoot, 'small.js');
-    if (!fs.existsSync(smallPath)) { console.log('SKIP Small callback consumer: no sibling small'); return; }
-    const Small = require(smallPath);
-    assert.equal(typeof Small.compileGucosProgram, 'function', 'present Small producer must support gucOS');
-    async function small(source) {
-      const entry = path.join(smallRoot, 'callback-capture-test.wc');
-      const loader = Small.fileLoader([path.join(smallRoot, 'root')]);
-      const load = loader.load;
-      loader.load = async p => p === entry ? source : load(p);
-      const r = await Small.compileGucosProgram(entry, loader);
-      assert.deepEqual(r.errors, []);
-      return Small.emit(r.module, {exportMemory: true});
-    }
-    const prelude = `
-      @import("c", "observe") void observe(int value);
-      @import("c", "fail") void fail();
-      @import("c", "__sdl_set_animation_frame_func_ref") void frame(func<void()> callback);
-      @import("c", "__emscripten_async_call_ref") void later(func<void(int)> callback, int context, int delay);
-      @import("c", "__exit") void exit(int status);
-    `;
-    await run(await small(prelude + `
-      void second() { observe(2); frame(null); }
-      void first() { observe(1); frame(second); }
-      int main() { frame(first); return 0; }
-    `), [1,2], 0, {noTable:true});
-    await run(await small(prelude + `
-      void never() { observe(99); }
-      int main() { frame(never); frame(null); return 0; }
-    `), [], 0, {noTable:true});
-    for (const failure of [false,true]) {
-      await run(await small(prelude + `
-        @export("__no_exit_runtime") void keep() {}
-        void done(int context) { observe(context); ${failure ? 'fail();' : 'exit(19);'} }
-        void never(int context) { observe(99); }
-        int main() { later(done,7,0); later(never,0,10000); return 0; }
-      `), [7], 19, {noTable:true, failure});
-    }
-    await run(await small(prelude + `void tick() { fail(); } int main() { frame(tick); return 0; }`), [], 0,
-      {noTable:true,failure:true});
-    await run(await small(prelude + `
-      class Hooks { @import("c", "observe") static void imported(int context); }
-      @export("__no_exit_runtime") void keep() {}
-      void done(int context) { exit(21); }
-      int main() { later(Hooks.imported,8,0); later(done,0,0); return 0; }
-    `), [8], 21, {noTable:true});
-    console.log('PASS Small direct refs: frames, replacement, null, timers, exit, errors, teardown:', mode);
   })().catch(e => {console.error(e);process.exitCode=1;}).finally(() => clearTimeout(deadline));
 }

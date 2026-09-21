@@ -8,7 +8,7 @@ const COMMON=require('../../../os/os-common.js'),B=require('../../../host.js').B
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 export async function imageIdentity(s,root) {
  const files={};
- for(const f of ['host.js','compiler.js','kernel.js','os/kernel-worker.js','os/process-worker.js','os/image.json','os/os-system.img','os/os-system.img.small.json']) {
+ for(const f of ['host.js','compiler.js','kernel.js','os/kernel-worker.js','os/process-worker.js','os/image.json','os/os-system.img']) {
   const local=fs.readFileSync(path.join(root,f)),res=await s.page.request.get(new URL('/'+f,s.url).href);
   if(!res.ok())throw new Error('identity fetch failed: '+f);
   const served=hash(await res.body());files[f]={local:hash(local),served};
@@ -19,21 +19,19 @@ export async function imageIdentity(s,root) {
  try {
   const kfs=B.createV4(store,{readonly:true});
   expected={};
-  for(const p of ['/usr/share/os-release','/usr/lib/small/snapshot.json','/usr/lib/small/runtime.js','/usr/lib/fontbridge.wasm']) {
+  for(const p of ['/usr/share/os-release','/usr/lib/fontbridge.wasm']) {
    const bytes=COMMON.readFileBytes(kfs,p.slice(4));if(!bytes)throw new Error('baked identity file missing: '+p);
    expected[p]={sha256:hash(bytes)};
-   if(p.endsWith('os-release')||p.endsWith('snapshot.json'))expected[p].text=Buffer.from(bytes).toString();
+   if(p.endsWith('os-release'))expected[p].text=Buffer.from(bytes).toString();
   }
  } finally {store.close();}
  const start=await s.page.evaluate(()=>window.__osOut.length);
  await s.setVt(1);
- await s.page.keyboard.type('sha256sum /usr/share/os-release /usr/lib/small/snapshot.json /usr/lib/small/runtime.js /usr/lib/fontbridge.wasm && echo IMAGE-V""ERIFIED\r');
+ await s.page.keyboard.type('sha256sum /usr/share/os-release /usr/lib/fontbridge.wasm && echo IMAGE-V""ERIFIED\r');
  await s.page.waitForFunction(start=>window.__osOut.slice(start).includes('IMAGE-VERIFIED'),start,{timeout:30000});
  const installed=await s.page.evaluate(start=>window.__osOut.slice(start),start);
  for(const [p,v] of Object.entries(expected))if(!installed.includes(v.sha256+'  '+p))throw new Error('installed identity mismatch: '+p+'\n'+installed);
- const small=JSON.parse(expected['/usr/lib/small/snapshot.json'].text).sha256;
- if(small!==JSON.parse(fs.readFileSync(path.join(root,'os/os-system.img.small.json'),'utf8')).smallSnapshot)throw new Error('Small sidecar mismatch');
- return {files,expected,installed,smallSnapshot:small,scope:'Local/served image byte hashes; installed selected-file hashes match baked files. No independent whole-OPFS byte hash.'};
+ return {files,expected,installed,scope:'Local/served image byte hashes; installed selected-file hashes match baked files. No independent whole-OPFS byte hash.'};
 }
 export async function surfaceTransport(s,title,mode) {
  const worker=s.page.workers().find(w=>w.url().includes('kernel-worker.js'));

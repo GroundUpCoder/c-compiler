@@ -19,8 +19,7 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kerne
  evidence.browser=browser.version();evidence.errors=[];
  page.on('pageerror',e=>evidence.errors.push(String(e)));
  page.on('console',m=>{if(m.type()==='error')evidence.errors.push(m.text());});
- for(const name of ['os/os-system.img','os/os-system.img.small.json']) evidence.files[name]=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
- evidence.small=JSON.parse(fs.readFileSync(path.join(root,'os/os-system.img.small.json'),'utf8'));
+ for(const name of ['os/os-system.img']) evidence.files[name]=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,name))).digest('hex');
  await page.goto(url);await page.waitForFunction(()=>window.__osState==='ready',null,{timeout:180000});
  evidence.served={};
  for(const name of Object.keys(evidence.files)) {
@@ -35,13 +34,11 @@ for(const name of ['host.js','kernel.js','compiler.js','os/image.json','os/kerne
    await setVt(1);await page.keyboard.type(command+'\r');
    await page.waitForFunction(m=>window.__osOut.includes(m),marker,{timeout:120000});
  }
- await shell("cat /usr/share/os-release; cat /usr/lib/small/snapshot.json; echo UI-IMAGE-PIN-O''K",'UI-IMAGE-PIN-OK');
+ await shell("cat /usr/share/os-release; echo UI-IMAGE-PIN-O''K",'UI-IMAGE-PIN-OK');
  evidence.installed=await page.evaluate(()=>window.__osOut);
  const installedVersion=/(?:^|[\r\n])VERSION_ID=(\d+)/.exec(evidence.installed);
- const installedSmall=/\{"format":1,"sha256":"([a-f0-9]{64})"\}/.exec(evidence.installed);
  const manifest=JSON.parse(fs.readFileSync(path.join(root,'os/image.json'),'utf8'));
  if(!installedVersion||Number(installedVersion[1])!==manifest.version)throw Error('installed image version mismatch');
- if(!installedSmall||installedSmall[1]!==evidence.small.smallSnapshot)throw Error('installed Small snapshot mismatch');
  await shell("cat > /root/ui-lifecycle.c <<'EOF'\n"+source+"EOF\ncc /root/ui-lifecycle.c -o /root/ui-lifecycle && echo UI-COMPILE-O''K",'UI-COMPILE-OK');
  async function count(name) {
    await setVt(2);await waitScreen();

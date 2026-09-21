@@ -17,7 +17,7 @@ const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 const evidence={commit:execFileSync('git',['rev-parse','HEAD'],{cwd:ROOT,encoding:'utf8'}).trim(),files:{},runs:[],measurement:'CPU-side call/submission latency; not GPU completion or display latency'};
 const s=await openOsSession({port:PORT,serverTries:2400,serverInterval:250});
 const {page,setVt,waitOut,check}=s;
-for(const f of ['tests/browser/os-fontbridge.mjs','tests/browser/lib/render-evidence.mjs','tests/browser/lib/guest-png.mjs','host.js','compiler.js','os/process-worker.js','os/image.json','os/os-system.img','os/os-system.img.small.json','tests/browser/fixtures/fontbridge.c']){
+for(const f of ['tests/browser/os-fontbridge.mjs','tests/browser/lib/render-evidence.mjs','tests/browser/lib/guest-png.mjs','host.js','compiler.js','os/process-worker.js','os/image.json','os/os-system.img','tests/browser/fixtures/fontbridge.c']){
  const p=path.join(ROOT,f);evidence.files[f]=fs.existsSync(p)?hash(fs.readFileSync(p)):null;
 }
 let cpu;
@@ -31,7 +31,7 @@ try{
  await page.evaluate(src=>navigator.clipboard.writeText(src),source);
  await page.keyboard.type('pbpaste > /root/font.c && cc /root/font.c -o /root/fonttest && echo FONT-C""OMPILED\r');await waitOut('FONT-COMPILED',180000);
  const identityStart=await page.evaluate(()=>window.__osOut.length);
- await page.keyboard.type('sha256sum /root/fonttest /usr/lib/small/runtime.js /usr/lib/fontbridge.wasm; cat /usr/share/os-release; cat /usr/lib/small/snapshot.json; echo FONT-I""DENTIFIED\r');
+ await page.keyboard.type('sha256sum /root/fonttest /usr/lib/fontbridge.wasm; cat /usr/share/os-release; echo FONT-I""DENTIFIED\r');
  await waitOut('FONT-IDENTIFIED',30000);
  evidence.installed=await page.evaluate(start=>window.__osOut.slice(start),identityStart);
  for(const mode of ['CPU','GPU']){

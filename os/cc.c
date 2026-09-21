@@ -1,4 +1,4 @@
-/* /bin/cc and /bin/small — compiler commands as OS binaries. There is no wasm image to exec
+/* /bin/cc — the compiler command as an OS binary. There is no wasm image to exec
  * (the compiler is compiler.js, living in the kernel worker), so this is a
  * thin shim over the __compile syscall: ship argv+cwd to the kernel's
  * compile hook, then write the returned stdout/stderr to our OWN fds — so

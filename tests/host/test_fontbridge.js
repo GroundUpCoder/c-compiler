@@ -67,8 +67,7 @@ const allFonts=[fresh];for(let i=1;i<16;i++){const h=e.__font_open(0,12,0);asser
 for(const h of allFonts)assert.equal(e.__font_close(h),0);
 e.__font_dispose();
 console.log('fontbridge: PASS (real FreeType ink, metrics, runs, cache/result bounds, UTF-8, stale handles, memory growth, teardown)');
-// Compile Small through the installed-snapshot cc driver, then execute through
-// the actual runModule import wiring. Optional sibling follows test_small.js.
+// Verify the shared fontcore allocation bounds through compiled C.
 (async()=>{
  // Compile the bounded allocator fixture against the same shared fontcore and
  // FreeType dependency graph; no production test exports or altered module.
@@ -81,31 +80,4 @@ console.log('fontbridge: PASS (real FreeType ink, metrics, runs, cache/result bo
  }
  assert.equal(new WebAssembly.Instance(boundedModule,{c:boundedImports}).exports.main(),0,'tofu pre-allocation bounds');
  console.log('fontcore tofu: PASS (dimension/product/overflow rejection before allocation, exact-bound pixels)');
- const sibling=require('../../tools/small-sibling.js'),snap=sibling.snapshot(ROOT);
- if(!snap){console.log('Small font ABI: NOT RUN (optional sibling absent)');return;}
- const folded=sibling.fold(ROOT,{system:{dirs:[],files:{}}});
- for(const dir of folded.system.dirs)kfs.mkdir(dir,0o755);
- for(const [p,v] of Object.entries(folded.system.files))if(v.content!==undefined)COMMON.writeFile(kfs,p,v.content);
- kfs.mkdir('/work',0o755);
- COMMON.writeFile(kfs,'/work/font.wc',`import std.Memory;
- @import("c","__font_open") int openFont(int path,int px,int flags);
- @import("c","__font_glyph") int glyph(int font,int cp);
- @import("c","__font_result_field") int field(int result,int index);
- @import("c","__font_result_copy") int copy(int result,int ptr,int cap,int rgba);
- @import("c","__font_result_release") int release(int result);
- @import("c","__font_close") int closeFont(int font);
- int main(){
-  int f=openFont(0,20,0);if(f<=0)return 1;
-  int g=glyph(f,65);if(g<=0)return 2;
-  int n=field(g,5);if(n<=0)return 3;
-  int p=Memory.malloc(n);if(copy(g,p,n,-1)!=n)return 4;
-  int ink=0;for(int i=3;i<n;i+=4){if(Memory.loadByte(p+i)!=0)ink++;}
-  Memory.free(p);if(release(g)!=0||closeFont(f)!=0)return 5;
-  return ink>0?0:6;
- }`);
- const compiled=await COMMON.createCcDriver(null,kfs)(['/usr/bin/small','font.wc','-o','font'],'/work');
- assert.equal(compiled.exitCode,0,compiled.stderr);
- const rc=await HOST({bytes:COMMON.readFileBytes(kfs,'/work/font'),args:['/work/font'],env:{},blockFsFactory:async ctx=>({c:kfs.toWasmEnv(ctx)})});
- assert.equal(rc,0);
- console.log('Small font ABI: PASS (installed snapshot '+snap.sha256+', actual host imports, real FreeType pixels)');
 })().catch(e=>{console.error(e);process.exitCode=1;});

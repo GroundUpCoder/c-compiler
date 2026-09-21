@@ -1,6 +1,5 @@
 {
-  "version": 298,
-  "smallSnapshotPolicy": "required",
+  "version": 299,
   "defaultPackages": ["doom", "gcode", "calc", "paint"],
   "overlays": [
     {

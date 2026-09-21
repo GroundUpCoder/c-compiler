@@ -16,7 +16,6 @@ require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/r
 var tests = [
   ['test_language_retirement.js', []], // #796 retired inputs and archive integrity
   ['test_stat_identity.js', []], // #785: mounted identity, RO ownership, C/WASI metadata contract (pure Node)
-  ['test_small.js', []], // optional Small sibling and shared process ABI
   ['test_epipe_listeners.js', []],       // runModule must not stack stream 'error' listeners
   ['test_stdout_flush.js', []],          // exit drains piped stdout; queued chunks survive memory.grow
   ['test_console_ring.js', []],          // console SAB ring blocks (pty backpressure), never overruns
@@ -73,7 +72,7 @@ var tests = [
   ['test_sdl_clip.js', []],           // #791: real software clipping pixels and UVs
   ['test_compositor_shm.js', []],      // #790: the compositor's shm upload cache with a fake device — (gen, seq) identity, SH_LOCK try-lock never waits, contention keeps the PREVIOUS texture (a new-generation entry replaces the old one only after its first successful upload; a contended first-frame-of-new-buffer must not show a never-uploaded texture — the review-1 blocker), retry signalling, old texture destroyed only after the upload lands
   ['test_surface_configure.js', []],  // #790: host-side configure identities — the ring's serial reaches beginConfigure, the new SAB carries SH_GEN = serial, the ack names it, an ESTALE reply keeps the old buffer (released, counted), allocation failure DECLINES the serial (no pending state on either side), gpu-transport frames ship with the committed serial, flips go through the locked mailbox
-  ['test_fontbridge.js', []],          // #791: compiled FreeType and installed Small ABI
+  ['test_fontbridge.js', []],          // #791: compiled FreeType and font ABI
   ['test_sdl_api_index.js', []],       // #677: the generated SDL API index (os/doc/sdl-api-index.md) is byte-in-sync with the header surface (mksdlindex --check), baked + referenced from GCODE.md, and the notably-absent boundary is pinned behaviorally (absent names fail undeclared, #672's SDL_RenderTextureRotated compiles); red controls on comparator/matchers/absence gate
   ['test_sdl_deadstrip.js', []],       // #722: the zero-byte witness on DEFAULT flags — a no-audio SDL program carries no #529-A literal (the dead-literal prune: dropped code sheds its rodata), with positive controls (referenced/global-pinned/address-taken literals survive) and a run smoke
   ['test_sdl_loadwav_diff.js', []],    // #723: SDL_LoadWAV differential vs the pinned upstream SDL 3.4.0 oracle manifest — 92 fixtures byte-identical in spec/len/decoded sha256/exact error string; demand-link keyed on EXTERNAL-LINKAGE SYMBOL IDENTITY, proven by ADMISSION probes (missing-source oracle: statics/locals of the spelling never fire, extern refs and block-scope externs do, withdrawal spares static forward decls) plus every-mode zero-byte witnesses and variable/EInitList/address-taken routes; red controls on the comparator
