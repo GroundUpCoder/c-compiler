@@ -99,7 +99,7 @@ function sessionFrames() {
 //   - Up (SDLK_UP = 1073741906 → the UP D-pad axis): white/blue → green.
 // This exercises the whole input path — INJECT_KEY → SDL event → set_button →
 // input_data_set_standard_controller → raw[]+treated[] → standard-controller
-// $4016 read. The Up leg is the todos/0213 regression guard: before the fix,
+// $4016 read. The Up leg is the docs/archive/0213 regression guard: before the fix,
 // set_button poked treated[] with raw[]==0, so the SOCD filter erased the D-pad
 // on every read and Up never registered (only A/B/Start/Select, the non-axis
 // indices, survived). A green Up frame proves the D-pad now sticks; if it stays
@@ -167,7 +167,7 @@ function sessionInput() {
     ar === '4c9aec', ar);
   // The 0213 regression guard: a held D-pad direction must register. Green ($2A
   // = 4cd020) proves raw[UP] was populated and survived the SOCD $4016 read.
-  check('holding Up (D-pad) tints the frame green ($2A = 4cd020) — todos/0213 D-pad reaches the CPU',
+  check('holding Up (D-pad) tints the frame green ($2A = 4cd020) — docs/archive/0213 D-pad reaches the CPU',
     up === '4cd020', up);
 }
 

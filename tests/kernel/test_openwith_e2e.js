@@ -15,7 +15,7 @@
 //     extension goes to the default.gui program (notepad); the "With"
 //     picker prefills the effective command, "Always for .txt" + OK
 //     persists the pick and plain Open honors it afterwards
-//   - .mgp (todos/0202): desktop dblclick AND fileman Open raise the mgp
+//   - .mgp (docs/archive/0202): desktop dblclick AND fileman Open raise the mgp
 //     VIEWER (the baked association), while the fileman row menu's Edit
 //     and the desktop icon menu's EDIT open the deck TEXT in notepad
 //     (openwith.h ow_editor — always default.gui, never the viewer)
@@ -75,7 +75,7 @@ const ROM_B64 = minimalRom().toString('base64');
 
 /* Desktop grid geometry: the drive.js model (deskEntries/deskCell over
  * os/image.json — dirs first, Recycle Bin tail-pinned, column wrap at 11
- * rows on 1024x768; todos/0184/0185). game.gb's cell is derived from the
+ * rows on 1024x768; docs/archive/0184/0185). game.gb's cell is derived from the
  * seeded set + the test's own drop. */
 const GB = deskCell(deskEntries(['game.gb']), 'game.gb');
 const DECK = deskCell(deskEntries(['game.gb', 'deck.mgp']), 'deck.mgp');
@@ -90,7 +90,7 @@ const sel = (row) => ['wmctl click $SID 200 260', HOME,
 /* fileman's picker/Open launches (activate() -> spawn, WNOHANG-reaped) run the
  * probe launcher ASYNCHRONOUSLY, so its "opened:" line lands in probe.out after
  * a beat with no WM/agent signal to key on. Replace the `sleep 2` guesses with a
- * bounded poll for the expected line count (todos/0154 — a condition poll, not a
+ * bounded poll for the expected line count (docs/archive/0154 — a condition poll, not a
  * fixed sync sleep; ~10s cap). */
 const waitProbe = (n) =>
   `for i in $(seq 1 200); do [ "$(grep -c "^opened:" /root/probe.out 2>/dev/null)" -ge ${n} ] && break; sleep 0.05; done`;
@@ -147,7 +147,7 @@ const out = boot([
   // ---- fileman: .gb -> gameboy, picker, default.gui ----
   'fileman /root/owtest &',
   // Boot barrier: fileman serving the "Open" button label means its window is up,
-  // the dir listing is loaded, and it is pumping the agent tree (todos/0154).
+  // the dir listing is loaded, and it is pumping the agent tree (docs/archive/0154).
   'wmctl wait label Open 10000',
   'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
   'echo ==list1',
@@ -204,7 +204,7 @@ const out = boot([
   'wmctl list',
   'echo ==cut',
 
-  // ---- .mgp (todos/0202): dblclick/Open = the VIEWER, Edit = the EDITOR ----
+  // ---- .mgp (docs/archive/0202): dblclick/Open = the VIEWER, Edit = the EDITOR ----
   'cp /usr/share/mgp/tutorial/01-welcome.mgp /root/Desktop/deck.mgp',
   // Same coarse desk re-read tick as game.gb above (0083 rule, annotated).
   'sleep 1',
@@ -214,7 +214,7 @@ const out = boot([
   'wmctl key $MSID 0 113',                       // q quits the viewer
   'wmctl wait nowin MagicPoint 8000',
   // fileman at the Presentations folder: the decks live in SUBFOLDERS since
-  // todos/0221 (MagicPoint Tutorial / POSIX on WebAssembly) — the folder
+  // docs/archive/0221 (MagicPoint Tutorial / POSIX on WebAssembly) — the folder
   // itself lists them, then Open (the dblclick path) on tutorial deck 01
   'wmctl settext EDIT:0 /root/Desktop/Presentations',
   'wmctl click Go',
@@ -306,10 +306,10 @@ check('...and no ERROR box (0111: the abs path is not a /-option)',
 check('desktop dblclick on the .gb icon launches sameboy (SameBoy +1)',
   count(section(out, 'list4'), /\tSameBoy$/) === 2, section(out, 'list4'));
 
-// ---- .mgp: view vs edit (todos/0202) ----
+// ---- .mgp: view vs edit (docs/archive/0202) ----
 check('desktop dblclick on a .mgp icon raises the mgp viewer',
   out.includes('MGP-DESK-OK'));
-check('Presentations lists the tutorial subfolder (todos/0221 nesting)',
+check('Presentations lists the tutorial subfolder (docs/archive/0221 nesting)',
   out.includes('SUBDIRS-OK'));
 check('fileman Open on a .mgp raises the mgp viewer',
   out.includes('MGP-FM-OK'));

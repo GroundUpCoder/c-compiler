@@ -1,6 +1,6 @@
 /* See LICENSE file for copyright and license details.
  *
- * gucOS port (todos/0119): the suckless drw layer rebuilt over SDL +
+ * gucOS port (docs/archive/0119): the suckless drw layer rebuilt over SDL +
  * freetype. Same API shape sent.c consumes (fontsets, schemes, rect/text),
  * but a Drawable is the SDL window surface and a Fnt is a pixel size on
  * ONE shared freetype face (the baked mono.ttf) instead of an Xft fontset.

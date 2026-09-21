@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// tests/kernel/test_overlays.js — optional opt-in image overlays (todos/0118).
+// tests/kernel/test_overlays.js — optional opt-in image overlays (docs/archive/0118).
 //
 // Exercises the consumer side of the frozen `overlay@1` contract at UNIT scale:
 // bakeSystemImage over a tiny synthetic manifest (one trivial compile) instead

@@ -1,4 +1,4 @@
-/* egress.h — gucOS -> host file egress (todos/0398), the C surface of the
+/* egress.h — gucOS -> host file egress (docs/archive/0398), the C surface of the
  * ONE transfer seam: Download, Save As, and any future app export are the
  * same mechanism with different disposition words.
  *

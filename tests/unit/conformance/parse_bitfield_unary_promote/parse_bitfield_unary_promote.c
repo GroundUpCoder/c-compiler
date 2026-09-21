@@ -1,7 +1,7 @@
 // BUG: makeUnary computed the result type from the UNPROMOTED declared type
 // (computeUnaryType only promotes size < 4), so -bf/~bf/+bf on a narrow
 // unsigned bit-field stayed unsigned: (-s.u20) < 0 was 0, and
-// (unsigned long long)~s.u20 zero-extended (todos/0367 — the "unary was
+// (unsigned long long)~s.u20 zero-extended (docs/archive/0367 — the "unary was
 // already correct" claim in 0356's record was false).
 // C11: 6.3.1.1p2 + 6.5.3.3 — the integer promotions apply to the operand of
 // unary +, -, ~; a bit-field whose values int can represent (width < 32, or

@@ -1,5 +1,5 @@
-// serve.js --clang overlay on-ramp (todos/0141). `--clang` folds the sibling
-// clang-simplified `clang-apps` image overlay (todos/0118) into the served
+// serve.js --clang overlay on-ramp (docs/archive/0141). `--clang` folds the sibling
+// clang-simplified `clang-apps` image overlay (docs/archive/0118) into the served
 // system blob WHEN the sibling artifact is available, and serves the resulting
 // sidecar for the `os-system.img` fetch the browser makes. When the sibling
 // build is absent it must serve the BASE image and exit 0 (a missing sibling is

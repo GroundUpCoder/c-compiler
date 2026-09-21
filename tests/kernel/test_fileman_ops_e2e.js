@@ -37,7 +37,7 @@ const cp = require('child_process');
 const { driveBoot, freshImage, deskEntries, deskCell } = require('./lib/drive.js');
 const { parsePng, parseB64Png } = require('../lib/png.js');
 
-// The seeded desktop grid (drive.js model, todos/0184/0185): dirs sort
+// The seeded desktop grid (drive.js model, docs/archive/0184/0185): dirs sort
 // first and the set wraps past column 0, so the test's dropped files land
 // at derived cells, not "icon 0".
 const DFILE = deskCell(deskEntries(['dfile.txt']), 'dfile.txt');
@@ -74,7 +74,7 @@ const RC_PANE = 'wmctl click $SID 100 300 3';
 // Refresh / Add Default Icons / Paste (center 136) / sep / Display (the
 // Lane D row shifted Paste down one). Desktop cells are derived from the
 // drive.js grid model (deskEntries/deskCell — dirs first, Recycle Bin
-// tail-pinned, column wrap at 11 rows; todos/0184/0185), never "icon 0"
+// tail-pinned, column wrap at 11 rows; docs/archive/0184/0185), never "icon 0"
 // row math.
 const ICON_CUT_Y = 86, ICON_COPY_Y = 116, DESK_PASTE_Y = 136;   // Paste row 4 since Lane D's Add Default Icons
 

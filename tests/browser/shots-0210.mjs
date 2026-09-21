@@ -1,4 +1,4 @@
-// Booted-OS verification + screenshots for todos/0210 (manual; NOT part of
+// Booted-OS verification + screenshots for docs/archive/0210 (manual; NOT part of
 // the sweep — the os-*.mjs discovery glob deliberately doesn't match).
 // Boots the reference OS in Chromium, opens a CRLF file in notepad (no "?"),
 // a 120-line document (built-in WS_VSCROLL scrollbar), wheel-scrolls it with
@@ -56,7 +56,7 @@ try {
 
   // ---- seed the files on VT1 ----
   await setVt(1);
-  await type('printf "Meeting notes\\r\\n=============\\r\\n\\r\\nThis file was written by a Windows tool with CRLF endings.\\r\\nBefore todos/0210 every one of these lines ended in a ?\\r\\n\\r\\nNow the EDIT strips the CR at load and saves back pure LF.\\r\\n" > /root/notes-crlf.txt; echo SEED""1');
+  await type('printf "Meeting notes\\r\\n=============\\r\\n\\r\\nThis file was written by a Windows tool with CRLF endings.\\r\\nBefore docs/archive/0210 every one of these lines ended in a ?\\r\\n\\r\\nNow the EDIT strips the CR at load and saves back pure LF.\\r\\n" > /root/notes-crlf.txt; echo SEED""1');
   await waitOut('SEED1');
   await type('i=1; while [ $i -le 120 ]; do echo "line $i of the long document, enough rows that the EDIT needs its scrollbar"; i=$((i+1)); done > /root/longdoc.txt; echo SEED""2');
   await waitOut('SEED2');

@@ -1,5 +1,5 @@
 /*
- * plist.c — gucOS port stub (todos/0119).
+ * plist.c — gucOS port stub (docs/archive/0119).
  *
  * Upstream plist.c implements the page-list popup (one X child window per
  * page, raised while Control is held) and the page-guide bar, both drawn

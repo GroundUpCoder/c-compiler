@@ -1,4 +1,4 @@
-// todos/0325 Group A — fma(). BEHAVIOUR, not linkage.
+// docs/archive/0325 Group A — fma(). BEHAVIOUR, not linkage.
 //
 // fma's whole contract is that x*y+z rounds ONCE. WebAssembly has no fused
 // multiply-add, so ours is emulated (compiler.js __math.c) — which makes a

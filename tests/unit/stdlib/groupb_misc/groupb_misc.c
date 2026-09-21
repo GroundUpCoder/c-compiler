@@ -1,4 +1,4 @@
-// todos/0325 Group B — memrchr, explicit_bzero, strsignal, getentropy,
+// docs/archive/0325 Group B — memrchr, explicit_bzero, strsignal, getentropy,
 // confstr/pathconf/fpathconf, timegm, clock_nanosleep, wcsftime.
 // BEHAVIOUR throughout.
 #include <stdio.h>

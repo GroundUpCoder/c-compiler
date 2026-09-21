@@ -1,4 +1,4 @@
-%% 06-lists.mgp - learn MagicPoint on gucOS, deck 6 of 10 (todos/0202).
+%% 06-lists.mgp - learn MagicPoint on gucOS, deck 6 of 10 (docs/archive/0202).
 %% Tab-depth lists: %tab preamble styles, %icon shapes. Body list lines
 %% below start with REAL tab characters.
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"

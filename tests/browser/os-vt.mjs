@@ -1,7 +1,7 @@
 // 0022 browser acceptance: VT switching, Linux-console semantics — the xterm
 // tty is VT1, the desktop VT2; os.html shows exactly one at a time. Boot
 // STREAMS on VT1 (the log visible), then a healthy boot lands on VT2 — the
-// desktop is the default tab (todos/0070); the Terminal/Desktop TAB BAR is
+// desktop is the default tab (docs/archive/0070); the Terminal/Desktop TAB BAR is
 // the primary affordance, with Ctrl+Alt+F1/F2 (and the Ctrl+Alt+1/2 alias)
 // as the hotkey path — both flip between them. VT1 entry refocuses (and
 // re-fits) xterm, VT2 entry focuses the canvas. The rationale
@@ -81,7 +81,7 @@ try {
 
   // ---- 0070: a healthy boot lands on VT2 — desktop visible, canvas focused.
   let s = await vtState();
-  check('healthy boot lands on VT2 (todos/0070)', s.vt === 2, s);
+  check('healthy boot lands on VT2 (docs/archive/0070)', s.vt === 2, s);
   check('VT2 default: desktop visible, tty hidden, canvas focused',
     s.desktopVisible && !s.termVisible && s.canvasFocused, s);
 
@@ -91,7 +91,7 @@ try {
   // (size the temp canvas from the layout rect, not the stale attributes).
   await waitScreen();
   const { w: SW, h: SH } = await page.evaluate(() => window.__osScreen);
-  check('VT2 screen tracks the viewport pane (todos/0023)', SW > 800 && SH > 500, { SW, SH });
+  check('VT2 screen tracks the viewport pane (docs/archive/0023)', SW > 800 && SH > 500, { SW, SH });
   const TEAL = [0, 128, 128], FACE = [192, 192, 192];
   await waitPixel(SW - 20, SH - 60, TEAL, 60000);
   await waitPixel(400, SH - 14, FACE, 60000);   // taskbar re-laid at the new bottom

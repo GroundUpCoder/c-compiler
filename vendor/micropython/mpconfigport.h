@@ -55,7 +55,7 @@
 #define MICROPY_PY_STR_BYTES_CMP_WARN    (1)
 #define MICROPY_FULL_CHECKS              (1)
 
-// --- todos/0117 R1: script runner + file I/O -------------------------------
+// --- docs/archive/0117 R1: script runner + file I/O -------------------------------
 // Everything below needs the qstr pool / module table / root-pointer list
 // regenerated. `node tools/mkmpgenhdr.js` does that (and `--check` is a test),
 // so the old "only enable what doesn't need QSTR regeneration" ceiling that
@@ -93,7 +93,7 @@ extern const struct _mp_print_t mp_stderr_print;
 #define MICROPY_FLOAT_IMPL                (MICROPY_FLOAT_IMPL_DOUBLE)
 #define MICROPY_PY_MATH                   (1)
 
-// --- todos/0117 R2: the curated stdlib -------------------------------------
+// --- docs/archive/0117 R2: the curated stdlib -------------------------------------
 // Two groups. This first group costs NOTHING but a define: every .c file is
 // already in bin.json and was being compiled to an empty translation unit,
 // because MICROPY_CONFIG_ROM_LEVEL_MINIMUM gates them at CORE/EXTRA. Before
@@ -146,7 +146,7 @@ extern const struct _mp_print_t mp_stderr_print;
 // os.sync() stays OFF. Upstream's body only syncs FatFS volumes, so with no
 // VFS it is an unconditional no-op — a function that silently promises
 // durability it does not deliver is worse than a missing one. Durability here
-// is the kernel's FS_FSYNC (file objects' .flush()), landed in todos/0036.
+// is the kernel's FS_FSYNC (file objects' .flush()), landed in docs/archive/0036.
 #define MICROPY_PY_OS_SYNC                (0)
 
 // Epoch and timestamp width. MicroPython defaults to a 2000 epoch with
@@ -218,7 +218,7 @@ typedef long mp_off_t;
 
 #ifdef __wasm__
 #define MICROPY_MIN_USE_STDOUT (1)
-// 32 MB (todos/0117 R1). The old 256 KB was a REPL-toy number: a 640x480
+// 32 MB (docs/archive/0117 R1). The old 256 KB was a REPL-toy number: a 640x480
 // list-of-lists is ~900 KB, i.e. 3.5x the whole heap, and one float64
 // temporary of that shape is 7.4 MB. Sized for scripts that hold real data.
 // GC-pause cost measured in logs/2026-07-27/0117-micropython-script-runner.md.

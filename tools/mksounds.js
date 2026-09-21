@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// mksounds.js — synthesize the event-sound WAVs (todos/0094) into os/sounds/.
+// mksounds.js — synthesize the event-sound WAVs (docs/archive/0094) into os/sounds/.
 //
 // The OS ships a small Win95-style sound scheme (startup chime, error chord,
 // ding, exclamation chimes); real Windows media files are copyrighted, so the
@@ -10,7 +10,7 @@
 // step. Re-run only when changing a clip, then re-commit.
 //
 // Format: 22050 Hz mono s16 PCM — small (~44 KB/s), and the kernel mixer
-// (todos/0017) resamples to the 48k output ring anyway. Keep every clip
+// (docs/archive/0017) resamples to the 48k output ring anyway. Keep every clip
 // comfortably under ~5s: PlaySound pushes a clip into the per-device source
 // ring (256 KB) in one shot and lets the kernel drain it.
 //
@@ -19,7 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// Cross-tree preflight (todos/0341, extended by #142): writes the committed
+// Cross-tree preflight (docs/archive/0341, extended by #142): writes the committed
 // os/sounds/*.wav next to itself. No harness spawns — hand-run only.
 require(path.join(__dirname, '../tests/lib/tree-guard.js'))
   .assertSameTree(__dirname, { label: 'tools/mksounds.js' });

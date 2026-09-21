@@ -212,7 +212,7 @@ static nserror set_defaults(struct nsoption_s *defaults)
 
 	/* The CORE select menu, drawn in the content — the frontend supplies
 	 * no create_form_select_menu, so without this a <select> click
-	 * reached neither menu (todos/0422).  Same default-override
+	 * reached neither menu (docs/archive/0422).  Same default-override
 	 * semantics as enable_javascript above: Choices and the command
 	 * line are read over it.  NB the option also SIZES the closed
 	 * widget — layout.c adds SCROLLBAR_WIDTH to the box when it is
@@ -226,7 +226,7 @@ static nserror set_defaults(struct nsoption_s *defaults)
 	 * rendering — image_cache_redraw() decodes lazily with no size
 	 * refusal, so a 17 MB decoded PNG renders at load even under the
 	 * 3 MB ceiling (the "large image never renders" sighting was the
-	 * todos/0410 post-DONE-reformat bug, fixed separately).  What the
+	 * docs/archive/0410 post-DONE-reformat bug, fixed separately).  What the
 	 * ceiling DOES gate is retention: any bitmap set that exceeds it is
 	 * re-decoded on every expose/scroll after the ~10 s background
 	 * clean, so one modern image blows the whole cache and browsing
@@ -263,7 +263,7 @@ static struct gui_misc_table gucos_misc_table = {
 /**
  * Set by the SIGCHLD handler, cleared by the loop's poll.
  *
- * term's flag-then-park pattern (todos/0433): a SIGCHLD claimed at an
+ * term's flag-then-park pattern (docs/archive/0433): a SIGCHLD claimed at an
  * import return between the poll and the park clears the kernel's
  * pending bit, so without the flag the park would sleep out its whole
  * timeout — or forever, on a -1 deadline — with the picker already
@@ -317,7 +317,7 @@ static void gucos_run(void)
 		 * gucos_process_events() would still say -1 ("nothing
 		 * scheduled, sleep until input") and park on it — losing
 		 * the re-box until some unrelated later event happened to
-		 * wake the loop.  todos/0316. */
+		 * wake the loop.  docs/archive/0316. */
 		schedtm = gucos_schedule_next();
 
 		if (gucos_sigchld) {
@@ -489,7 +489,7 @@ int main(int argc, char **argv)
 		die("Failed to create browser window");
 	}
 
-	/* file-picker children (todos/0433): SIGCHLD is the wake, the
+	/* file-picker children (docs/archive/0433): SIGCHLD is the wake, the
 	 * loop's poll is the reap */
 	signal(SIGCHLD, gucos_on_sigchld);
 

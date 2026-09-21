@@ -3,11 +3,11 @@
 //      varScope, so callers bound the body-less node; the per-TU tree-shake
 //      marks reachability by NODE identity over unit.staticFunctions, so the
 //      definition was never marked live and got filtered out. Predates
-//      todos/0219 — that fix covered `extern`/no-storage-class
+//      docs/archive/0219 — that fix covered `extern`/no-storage-class
 //      re-declarations only and left the repeated-`static` cell broken.
 //      Two shapes: def->decl (below: b/e/g) and decl->use->decl->def (h),
 //      where the call bound the FIRST declaration and the definition's
-//      back-pointer landed on the second. todos/0321.
+//      back-pointer landed on the second. docs/archive/0321.
 // C11: 6.7p4 — a declaration may be repeated in the same scope; 6.2.2p4/p5 —
 //      a re-declaration of an internal-linkage function names the SAME
 //      function. Exactly the shape CPython's Argument Clinic emits: the
@@ -25,7 +25,7 @@ static int a(int x) { return x + 1; }
 static int b(int x) { return x + 2; }
 static int b(int);
 
-/* def -> extern decl (the todos/0219 case; must not regress) */
+/* def -> extern decl (the docs/archive/0219 case; must not regress) */
 static int c(int x) { return x + 3; }
 extern int c(int);
 

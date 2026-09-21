@@ -1,11 +1,11 @@
 {
-  "version": 296,
+  "version": 297,
   "smallSnapshotPolicy": "required",
   "defaultPackages": ["doom", "gcode", "calc", "paint"],
   "overlays": [
     {
       "id": "clang-apps",
-      "description": "C/C++ apps cross-compiled by the sibling clang-simplified (cc2wasm) toolchain; prebuilt, opt-in via --overlay=clang-apps (todos/0118)",
+      "description": "C/C++ apps cross-compiled by the sibling clang-simplified (cc2wasm) toolchain; prebuilt, opt-in via --overlay=clang-apps (docs/archive/0118)",
       "manifest": "../clang-simplified/out-image/overlay.json",
       "enableFlag": "clang-apps",
       "default": false
@@ -317,19 +317,19 @@
         "content": "# Baked font fallback chain (fontchain.h's /usr layer; tickets #435/#515).\n# One ABSOLUTE face path per line; the /etc layer (gucman font-package\n# deltas) CONCATENATES ahead of this list, so installed faces probe\n# first and install/remove semantics are unchanged.\n# Noto Sans Symbols 2 covers five of the Mac modifier symbols (U+2318\n# cmd, U+2325 option, U+21E7 shift, U+232B delete-left, U+23CE return);\n# Noto Sans Symbols (1) covers the sixth, U+2303 control — measured\n# 2026-08-05, the two families are complementary (each maps none of the\n# other's modifiers). No baked text face maps any of them.\n/usr/share/fonts/symbols2.ttf\n/usr/share/fonts/symbols.ttf\n"
       },
       "/usr/share/sounds/scheme": {
-        "content": "# Event-sound scheme (todos/0094), consulted by PlaySound/MessageBeep\n# (os/win32) and the wm startup chime through os/sounds.h. Three layers\n# overlaid per key, highest wins: ~/.config/sounds, /etc/sounds,\n# /usr/share/sounds/scheme. Lines: EVENT<ws>WAV-PATH; the value `none`\n# silences that event; the reserved key `mute on` silences all of them\n# (the Control Panel Sounds applet toggles it).\nSystemStart\t/usr/share/sounds/startup.wav\nSystemDefault\t/usr/share/sounds/ding.wav\nSystemHand\t/usr/share/sounds/chord.wav\nSystemQuestion\t/usr/share/sounds/ding.wav\nSystemExclamation\t/usr/share/sounds/chimes.wav\nSystemAsterisk\t/usr/share/sounds/ding.wav\nBell\t/usr/share/sounds/ding.wav\n"
+        "content": "# Event-sound scheme (docs/archive/0094), consulted by PlaySound/MessageBeep\n# (os/win32) and the wm startup chime through os/sounds.h. Three layers\n# overlaid per key, highest wins: ~/.config/sounds, /etc/sounds,\n# /usr/share/sounds/scheme. Lines: EVENT<ws>WAV-PATH; the value `none`\n# silences that event; the reserved key `mute on` silences all of them\n# (the Control Panel Sounds applet toggles it).\nSystemStart\t/usr/share/sounds/startup.wav\nSystemDefault\t/usr/share/sounds/ding.wav\nSystemHand\t/usr/share/sounds/chord.wav\nSystemQuestion\t/usr/share/sounds/ding.wav\nSystemExclamation\t/usr/share/sounds/chimes.wav\nSystemAsterisk\t/usr/share/sounds/ding.wav\nBell\t/usr/share/sounds/ding.wav\n"
       },
       "/usr/share/keys": {
-        "content": "# Keyboard scheme (todos/0149), consulted by user32 (EDIT/LISTBOX verbs +\n# accelerators), term (copy/paste chord), the wm desktop and the Control\n# Panel Keyboard applet through os/keys.h. Three layers overlaid per key,\n# highest wins: ~/.config/keys, /etc/keys, /usr/share/keys. Keys:\n# scheme (windows | macos \u2014 which keymap; windows = Ctrl verbs, macos =\n# Cmd verbs + the emacs Ctrl rows in GUI text fields), readline (on |\n# off \u2014 those emacs rows; only meaningful under the macos scheme).\nscheme\twindows\nreadline\ton\n"
+        "content": "# Keyboard scheme (docs/archive/0149), consulted by user32 (EDIT/LISTBOX verbs +\n# accelerators), term (copy/paste chord), the wm desktop and the Control\n# Panel Keyboard applet through os/keys.h. Three layers overlaid per key,\n# highest wins: ~/.config/keys, /etc/keys, /usr/share/keys. Keys:\n# scheme (windows | macos \u2014 which keymap; windows = Ctrl verbs, macos =\n# Cmd verbs + the emacs Ctrl rows in GUI text fields), readline (on |\n# off \u2014 those emacs rows; only meaningful under the macos scheme).\nscheme\twindows\nreadline\ton\n"
       },
       "/usr/share/display": {
         "content": "# Display configuration (hires-display), consulted by the Control Panel\n# Display applet (os/display.h) and the kernel worker's display-config\n# bridge to the page (os/kernel-worker.js). Three layers overlaid per key,\n# highest wins: ~/.config/display, /etc/display, /usr/share/display. Keys:\n# zoom (auto | 0.5 | 0.75 | 1 | 2 | 3 — the VT2 desktop zoom factor; >1\n# magnifies, <1 is high-density (more fits), auto = viewport default:\n# phone-shaped boots 2x, everything else 1x).\n# NB deliberately no baked `zoom` line: an ABSENT key is the automatic\n# default AND lets the page honor a pre-bridge localStorage choice; an\n# explicit user-layer `zoom auto` (the applet's Automatic) overrides that.\n"
       },
       "/usr/share/screensaver": {
-        "content": "# Screensaver configuration (todos/0096), consulted by /bin/wm (the idle\n# raise) and the Control Panel Screen Saver applet through os/saver.h.\n# Three layers overlaid per key, highest wins: ~/.config/screensaver,\n# /etc/screensaver, /usr/share/screensaver. Keys: saver (none | marquee |\n# starfield), timeout (idle seconds; 0 disables), text (marquee banner).\nsaver\tstarfield\ntimeout\t900\ntext\tgucOS\n"
+        "content": "# Screensaver configuration (docs/archive/0096), consulted by /bin/wm (the idle\n# raise) and the Control Panel Screen Saver applet through os/saver.h.\n# Three layers overlaid per key, highest wins: ~/.config/screensaver,\n# /etc/screensaver, /usr/share/screensaver. Keys: saver (none | marquee |\n# starfield), timeout (idle seconds; 0 disables), text (marquee banner).\nsaver\tstarfield\ntimeout\t900\ntext\tgucOS\n"
       },
       "/usr/share/term": {
-        "content": "# Terminal configuration (todos/0273d), consulted by /bin/term (loaded at\n# startup, applied live, live-reloaded on a ~/.config watch) and edited by\n# its Shell > Settings... window. Three layers overlaid per key, highest\n# wins: ~/.config/term, /etc/term, /usr/share/term. Keys: fontsize (grid\n# font px, 8..32), theme (dark | light | green | amber | ocean), scrollback\n# (history lines, 0..10000; 0 disables), cursor (block | under | bar),\n# bell (sound | visual | none), autoscroll (on | off; 0/1 accepted — snap\n# the view back to live when new output arrives).\nfontsize\t14\ntheme\tdark\nscrollback\t2000\ncursor\tblock\nbell\tsound\nautoscroll\ton\n"
+        "content": "# Terminal configuration (docs/archive/0273d), consulted by /bin/term (loaded at\n# startup, applied live, live-reloaded on a ~/.config watch) and edited by\n# its Shell > Settings... window. Three layers overlaid per key, highest\n# wins: ~/.config/term, /etc/term, /usr/share/term. Keys: fontsize (grid\n# font px, 8..32), theme (dark | light | green | amber | ocean), scrollback\n# (history lines, 0..10000; 0 disables), cursor (block | under | bar),\n# bell (sound | visual | none), autoscroll (on | off; 0/1 accepted — snap\n# the view back to live when new output arrives).\nfontsize\t14\ntheme\tdark\nscrollback\t2000\ncursor\tblock\nbell\tsound\nautoscroll\ton\n"
       },
       "/usr/share/sounds/startup.wav": {
         "bin": "os/sounds/startup.wav"
@@ -344,13 +344,13 @@
         "bin": "os/sounds/chimes.wav"
       },
       "/usr/share/openwith": {
-        "content": "# File associations (todos/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\nc\t/bin/sedit\nh\t/bin/sedit\ndeck\t/bin/deck\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
+        "content": "# File associations (docs/archive/0072), consulted by the desktop/fileman GUI\n# opens and by open(1). Three layers overlaid per key, highest wins:\n#   ~/.config/openwith, /etc/openwith, /usr/share/openwith\n# Lines: KEY<ws>COMMAND. KEY = lowercase extension or default.gui /\n# default.term; the file path is appended to COMMAND as one argument.\n# Bare program words resolve through /usr/local/bin:/bin. GUI commands\n# should be windowed apps (wrap tty programs: `term vi`).\nc\t/bin/sedit\nh\t/bin/sedit\ndeck\t/bin/deck\nmgp\t/bin/mgp\ndefault.gui\t/bin/notepad\ndefault.term\tvi\n"
       },
       "/usr/share/net": {
         "content": "# Network (HTTP bridge) configuration (tickets #349/#391), consulted by\n# the kernel embedder's fetch wrapper (os/os-common.js netConfig) and the\n# Control Panel Network applet through os/netcfg.h. Three layers overlaid\n# per key, highest wins: ~/.config/net, /etc/net, /usr/share/net. Keys:\n# bridge (on | off — route off-origin kernel HTTP transfers through the\n# localhost bridge process, tools/net-bridge.js; same-origin fetches\n# always take the direct path, #391), url (the bridge's base URL). The\n# bridge is NOT part of the OS image — the user runs it themselves.\nbridge\toff\nurl\thttp://127.0.0.1:8199\n"
       },
       "/usr/share/cmdalt": {
-        "content": "# Command alternatives (todos/0338): which implementation a dispatched\n# command NAME runs. Consulted by /usr/bin/cmdalt — every /usr/bin/<name>\n# link resolves to that one binary, which takes the key from its own\n# argv[0] — and by the Control Panel's Default Programs applet.\n# Three layers overlaid per key, highest wins:\n#   ~/.config/cmdalt (the user's pick), /etc/cmdalt (package claims),\n#   /usr/share/cmdalt (this file, the baked suggestion).\n# Lines: KEY<ws>VALUE. KEY is a command name; VALUE is an argv prefix, and\n# the dispatched command's own arguments are appended to it verbatim. Bare\n# program words resolve through /usr/local/bin:/bin. A key may carry\n# SEVERAL lines — that is the candidate set the picker offers — and the\n# FIRST one wins, so the earliest package claim stays the default until\n# the user picks otherwise.\n# Nothing python is baked into the image: `python` is a ROLE name, and the\n# line below is only the SUGGESTION a fresh boot shows when no\n# implementation is installed —\n#   python: no python implementation is installed\n#          install one:  gucman install cpython-clang\npython\tcpython-clang\n"
+        "content": "# Command alternatives (docs/archive/0338): which implementation a dispatched\n# command NAME runs. Consulted by /usr/bin/cmdalt — every /usr/bin/<name>\n# link resolves to that one binary, which takes the key from its own\n# argv[0] — and by the Control Panel's Default Programs applet.\n# Three layers overlaid per key, highest wins:\n#   ~/.config/cmdalt (the user's pick), /etc/cmdalt (package claims),\n#   /usr/share/cmdalt (this file, the baked suggestion).\n# Lines: KEY<ws>VALUE. KEY is a command name; VALUE is an argv prefix, and\n# the dispatched command's own arguments are appended to it verbatim. Bare\n# program words resolve through /usr/local/bin:/bin. A key may carry\n# SEVERAL lines — that is the candidate set the picker offers — and the\n# FIRST one wins, so the earliest package claim stays the default until\n# the user picks otherwise.\n# Nothing python is baked into the image: `python` is a ROLE name, and the\n# line below is only the SUGGESTION a fresh boot shows when no\n# implementation is installed —\n#   python: no python implementation is installed\n#          install one:  gucman install cpython-clang\npython\tcpython-clang\n"
       },
       "/usr/bin/coreutils": {
         "project": "vendor/busybox/coreutils.json"
@@ -618,7 +618,7 @@
     ],
     "files": {
       "/etc/profile": {
-        "content": "# gucOS default profile — sourced by login shells (hush spawned as \"-sh\",\n# todos/0174). hush itself sources ~/.profile right after this file, so put\n# per-user settings there (e.g. ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL exports\n# for /bin/gcode) — do NOT source ~/.profile here or it runs twice.\n"
+        "content": "# gucOS default profile — sourced by login shells (hush spawned as \"-sh\",\n# docs/archive/0174). hush itself sources ~/.profile right after this file, so put\n# per-user settings there (e.g. ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL exports\n# for /bin/gcode) — do NOT source ~/.profile here or it runs twice.\n"
       },
       "/root/hello.c": {
         "text": "hello.c"

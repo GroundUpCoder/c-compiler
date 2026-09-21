@@ -94,7 +94,7 @@ const SQLEMBED_C = [
 const SQLEMBED_OK = (s) => /ROW 1\|alice/.test(s) && /ROW 2\|bob/.test(s) &&
   /SQLEMBED rows=2 ver=3\.53\.1/.test(s);
 
-// The shipped shells, piped (exit clean on EOF — the todos/0036 contract).
+// The shipped shells, piped (exit clean on EOF — the docs/archive/0036 contract).
 const SHELL_LEGS = [
   'echo ==shells',
   `echo 'print("shell-ok", 2^10)' | lua`,

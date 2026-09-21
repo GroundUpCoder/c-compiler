@@ -1,4 +1,4 @@
-/* gdidemo.c — the 0057 gdi32 acceptance app (todos/WIN32.md).
+/* gdidemo.c — the 0057 gdi32 acceptance app (docs/WIN32.md).
  *
  * Two modes:
  *   gdidemo            windowed: a Petzold-style WM_PAINT scene (shapes,

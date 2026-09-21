@@ -1,4 +1,4 @@
-# std-rust.wasm — the committed wasip1 std fixture (todos/0442)
+# std-rust.wasm — the committed wasip1 std fixture (docs/archive/0442)
 
 `std-rust.wasm` is a NORMAL Rust bin crate (`fn main()`, upstream `std`,
 no attributes). Stable `rustc` built it for the tier-2 target
@@ -7,7 +7,7 @@ crate `crates/std-demo`). The `RUST_ROOT` environment variable in
 `tests/kernel/test_rust_std_e2e.js` is the one point that resolves the
 sibling path.
 
-The module is the two-namespace acceptance shape of the `todos/0418`
+The module is the two-namespace acceptance shape of the `docs/archive/0418`
 ruling: `std::fs`, `std::io`, `std::env`, `std::time`, `thread::sleep`
 and `HashMap` import from `wasi_snapshot_preview1` (served by the
 `toWasiPreview1` shim in `host.js`), and one `gucos-sys` call (`getpid`)

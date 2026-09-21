@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Host-level regression test (todos/0361, reworked for #492): the sleep
+// Host-level regression test (docs/archive/0361, reworked for #492): the sleep
 // primitives must request the duration they were asked for — no floor, no
 // clamp, no unit slip — and, since #492, must do it as a bounded deadline
 // loop, never a spin.
@@ -46,7 +46,7 @@
 // identity` trick from test_pipe_read_block.js, so the async bodies are
 // callable directly.
 //
-// The zero-length nanosleep gap this test used to decline to pin (todos/0365,
+// The zero-length nanosleep gap this test used to decline to pin (docs/archive/0365,
 // ticket #146) is CLOSED: the native-fs path's `Math.max(1, ms)` floor is
 // gone, so nanosleep(0,0) requests 0 ms on both backends — POSIX ("a zero
 // request shall return immediately"), matching usleep(0) — and is asserted

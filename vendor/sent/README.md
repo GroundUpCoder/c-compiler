@@ -1,4 +1,4 @@
-# sent — suckless presentation tool, on SDL (todos/0119)
+# sent — suckless presentation tool, on SDL (docs/archive/0119)
 
 Upstream: https://git.suckless.org/sent @ `882d54c225b83c762acf5bb3967f4890c3ecef86`
 (2023-01-10, post-1.0). License: ISC (see `LICENSE`).

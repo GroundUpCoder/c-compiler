@@ -1,5 +1,5 @@
-// Desktop-shell browser acceptance (todos/0028 start menu, Win7 two-pane
-// restyle todos/0098 reverted to one Win95 column by todos/0132, todos/0029
+// Desktop-shell browser acceptance (docs/archive/0028 start menu, Win7 two-pane
+// restyle docs/archive/0098 reverted to one Win95 column by docs/archive/0132, docs/archive/0029
 // desktop icons): boot the reference OS page in headless Chromium and drive
 // the /bin/wm shell furniture through the real UI-bridge path — canvas
 // clicks -> kernel hit-test/rings -> wm.c policy — asserting composited
@@ -56,7 +56,7 @@ try {
   };
 
   await setVt(2);
-  // Derive geometry from the LIVE screen (todos/0023 rule).
+  // Derive geometry from the LIVE screen (docs/archive/0023 rule).
   await waitScreen();
   const { w: SW, h: SH } = await page.evaluate(() => window.__osScreen);
   const rect = await page.evaluate(() => {
@@ -66,11 +66,11 @@ try {
   const clickAt = (sx, sy) => page.mouse.click(rect.x + sx, rect.y + sy);
   const BARY = SH - 14;                          // mid-taskbar sample row
 
-  // ---- the Start menu (todos/0028) ----
+  // ---- the Start menu (docs/archive/0028) ----
   await waitPixel(400, BARY, FACE, 60000);       // taskbar composited
   check('taskbar strip composited', true);
 
-  // The clock (todos/0031): right-aligned HH.MM — histogram the black
+  // The clock (docs/archive/0031): right-aligned HH.MM — histogram the black
   // text pixels over the clock cell (exact digits depend on the time). The
   // cell now sits left of the 0101 Show Desktop sliver (SHOWDESK_W = 14).
   const clockBlack = await page.evaluate(([x0, y0, w, h]) => {
@@ -91,7 +91,7 @@ try {
   check('Start button face at the taskbar left', near(await sample(74, BARY), FACE),
     await sample(74, BARY));
 
-  // The single-column root (os/wm.c, todos/0098+0132 + follow-up): a fixed
+  // The single-column root (os/wm.c, docs/archive/0098+0132 + follow-up): a fixed
   // 192x274 panel above the 28px taskbar. A 22px gucOS branding BAND runs down
   // the left, then a 170px column = pinned + MRU recents, a groove, the fixed
   // places Settings/Run..., a groove, and — XP/Vista/7 style — the "All
@@ -199,7 +199,7 @@ try {
     return n;
   }, [SM_SIDE + 4, SM_Y + SM_PAD + r * SM_ROW_H + 4, SM_COL - 10, SM_ROW_H - 8]);
   // Open the Start menu and block until the COLUMN ITSELF shows the cleared
-  // state — the todos/0171 rule: synchronise on the thing you depend on, not on
+  // state — the docs/archive/0171 rule: synchronise on the thing you depend on, not on
   // a proxy for it. wm.c stacks pins, then recents, then Settings and Run...,
   // with All Programs pinned to the bottom slot; so with the store cleared rows
   // 0/1 are the two fixed places and row 2 — the first slot any survivor would
@@ -232,7 +232,7 @@ try {
 
   check('menu spot is desktop before the click', near(await sample(120, SM_Y + 74), TEAL),
     await sample(120, SM_Y + 74));
-  // Map-on-placement (todos/0069): burst-capture frames THROUGH the open —
+  // Map-on-placement (docs/archive/0069): burst-capture frames THROUGH the open —
   // the menu must never composite at the kernel cascade default (the
   // top-left band) before appearing parked above the taskbar. (120, SM_Y+74)
   // is an empty column row (recents cleared -> rows 0-2 are Settings + Run... +
@@ -268,7 +268,7 @@ try {
   check('Start click opens the single-column root (face fill above the taskbar)',
     frames.some(f => f[0] === 1), frames.length);
   const maxCasc = Math.max(...frames.map(f => f[1]));
-  check('no first-frame teleport: nothing composited in the cascade band (todos/0069)',
+  check('no first-frame teleport: nothing composited in the cascade band (docs/archive/0069)',
     maxCasc < 300, { maxCasc, frames: frames.length });
   await waitPixel(120, SM_Y + 74, FACE);         // settle
 
@@ -316,7 +316,7 @@ try {
   await waitPixel(120, SM_Y + 74, TEAL);
   check('selection dismissed the whole cascade', true);
 
-  // Recents (todos/0098): the launch above recorded winbox; re-open and the
+  // Recents (docs/archive/0098): the launch above recorded winbox; re-open and the
   // MRU appears as left row 0 (above All Programs) — clicking it relaunches.
   const wb0 = await winCount();
   await clickAt(25, BARY);
@@ -327,7 +327,7 @@ try {
   const wb1 = await winCount();
   check('recent MRU entry relaunches the program (winbox +1)', wb1 === wb0 + 1, { wb0, wb1 });
 
-  // Live search (todos/0098): type into the search box (the root holds
+  // Live search (docs/archive/0098): type into the search box (the root holds
   // focus); the flat tree walk narrows and the top hit highlights navy. Esc
   // clears the query then closes; a fresh open + type + Enter launches it.
   await clickAt(25, BARY);
@@ -384,7 +384,7 @@ try {
   await waitPixel(120, SM_Y + 74, TEAL);
   check('Start click toggles the menu closed', true);
 
-  // Keyboard (todos/0078): Esc closes the open menu (the root holds focus),
+  // Keyboard (docs/archive/0078): Esc closes the open menu (the root holds focus),
   // and the Ctrl+Esc chord toggles it from anywhere (kernel wmKey -> WMP
   // EV_MENU -> the same menu_toggle).
   await clickAt(25, BARY);
@@ -472,12 +472,12 @@ try {
   await setVt(2);
   await waitPixel(400, BARY, FACE);
 
-  // ---- the desktop layer (todos/0029) ----
+  // ---- the desktop layer (docs/archive/0029) ----
   // (WHITE and waitNotPixel are declared with the other pixel helpers up top —
   // the Start-menu legs need them too since the Run... dialog probes landed.)
 
   // Icons flow down the left edge, sorted. The grid model is the harness's
-  // deskEntries/deskCell (the todos/0166 rule: derived from os/image.json,
+  // deskEntries/deskCell (the docs/archive/0166 rule: derived from os/image.json,
   // never hardcoded — and since 0184/0185 the seeded set wraps into column
   // 1 and leads with the Presentations DIR, so cells are looked up at the
   // LIVE screen height). Probes below use calc (a 4-char label like the
@@ -498,7 +498,7 @@ try {
   check(`desktop icon tile composited (calc, cell ${DC.col},${DC.row})`, true);
   check('icon glyph navy center', near(await sample(I3X + 16, I3Y + 16), NAVY),
     await sample(I3X + 16, I3Y + 16));
-  // The Presentations folder icon (todos/0185): tab+body glyph — the tab
+  // The Presentations folder icon (docs/archive/0185): tab+body glyph — the tab
   // notch leaves (+16,+6) of the tile white where a launcher block is navy.
   const FC = cell('Presentations');
   check('folder glyph on the Presentations icon (white tab notch, navy body)',
@@ -511,7 +511,7 @@ try {
   { const [lx, ly] = stripL(DC, 'calc'); await waitPixel(lx, ly, NAVY); }   // label strip left
   check('single click selects (navy label strip)', true);
 
-  // ---- selection & manipulation (todos/0077) ----
+  // ---- selection & manipulation (docs/archive/0077) ----
   // The click above also focused the desktop (wm.c policy), so modifier
   // and navigation keys reach the icon grid from here on.
   // Ctrl+click paint: additive — calc stays.
@@ -597,12 +597,12 @@ try {
   // Minimize term via its taskbar button (button 0 — the winboxes were
   // closed above, so term is the sole button): the desktop shows through
   // where the window was. The app strip starts past the Start strip AND the
-  // Task-View/overview button (todos/EXPOSE), so button 0 is at x~112.
+  // Task-View/overview button (docs/EXPOSE), so button 0 is at x~112.
   await clickAt(150, BARY);
   await waitPixel(500, 300, TEAL);
   check('minimize reveals the desktop', true);
 
-  // ---- the Run... builtin (todos/0078; folded into the column by 0132) ----
+  // ---- the Run... builtin (docs/archive/0078; folded into the column by 0132) ----
   // Start -> the Run... place opens the dialog (RUN_DW x RUN_DH bottom-left,
   // white input box); typed command + Enter spawns via /bin/sh -c.
   //
@@ -628,7 +628,7 @@ try {
   const rb1 = await winCount();
   check('run-dialog command spawned (winbox +1)', rb1 === rb0 + 1, { rb0, rb1 });
 
-  // ---- Control Panel v2: the applet hub (todos/0089) ----
+  // ---- Control Panel v2: the applet hub (docs/archive/0089) ----
   // Launch from VT1, parse LIVE geometry from wmctl list (the 0023 rule),
   // then drive the real pixel path on VT2: single-click the Sound icon in
   // the hub folder -> the applet opens as its OWN window; the kernel close
@@ -693,7 +693,7 @@ try {
     !/Sound Properties/.test(afterClose), afterClose.slice(0, 400));
   await setVt(2);
 
-  // ---- System clipboard (todos/0090): notepad -> notepad over the real
+  // ---- System clipboard (docs/archive/0090): notepad -> notepad over the real
   // keyboard path. Type into one notepad on VT2, Ctrl+A/Ctrl+C, Ctrl+V
   // into a SECOND notepad process; Ctrl+X empties the source while the
   // kernel slot keeps the text. gettext EDIT:0 is tree-order-global
@@ -787,7 +787,7 @@ try {
     await page.evaluate(() => window.__osOut.slice(-300)));
   await setVt(2);
 
-  // ---- taskbar polish (todos/0101): the strip menu (render + dismiss on
+  // ---- taskbar polish (docs/archive/0101): the strip menu (render + dismiss on
   // outside-click AND Esc), the clock date tooltip (hover), and Show Desktop
   // (reveals the desktop, restores). Park one winbox at a KNOWN spot via
   // wmctl so the reveal is a deterministic pixel, not window-placement luck.
@@ -846,7 +846,7 @@ try {
   check('...and the sliver is raised', near(await sample(SW - 6, BARY), FACE),
     await sample(SW - 6, BARY));
 
-  // ---- desktop icon rename-in-place (todos/0103): F2 opens an inline editor
+  // ---- desktop icon rename-in-place (docs/archive/0103): F2 opens an inline editor
   // over the label (a solid white box); the grid relabels after Enter commits
   // rename(2). A fresh 'aaa' that sorts before every seeded icon makes the
   // top-left cell deterministic despite the earlier grid churn — select it by
@@ -854,13 +854,13 @@ try {
   await setVt(1);
   // Kill every leftover app (hub/applet/notepads/winbox) first — the
   // desktop-focus click below must land on the DESKTOP, not on the window
-  // soup the earlier legs accumulated (todos/0156: the click hit a window, so
+  // soup the earlier legs accumulated (docs/archive/0156: the click hit a window, so
   // ArrowRight never selected anything). SIGKILL, not `wmctl close`: a close
   // box on a modified notepad raises a modal save prompt that keeps focus
   // (and SIGTERM can't wake a process parked in GetMessage).
   await page.keyboard.type('pkill -9 notepad; pkill -9 ctlpanel; pkill -9 winbox; pkill -9 term; echo WCL""-DONE\r', { delay: 20 });
   await page.waitForFunction(() => window.__osOut.includes('WCL-DONE'), { timeout: 20000, polling: 'raf' });
-  // Drop the seeded Presentations DIR too: dirs sort first (todos/0185),
+  // Drop the seeded Presentations DIR too: dirs sort first (docs/archive/0185),
   // so it would steal the top-left cell from aaa — the long-name leg
   // below wipes the whole Desktop anyway.
   await page.keyboard.type('rm -f /root/Desktop/.icons; rm -rf /root/Desktop/Presentations; printf x > /root/Desktop/aaa; echo RN-""SETUP\r', { delay: 20 });
@@ -870,7 +870,7 @@ try {
   // Focus the desktop on an empty cell (col ~5), then Right selects the
   // top-left icon (aaa). Its 3-char label strip goes navy when selected.
   // The strip spans x=47..67, y=48..58 with the 'aaa' glyphs at y>=50 —
-  // (49,52) sat ON the first 'a' glyph's white ink (todos/0156, could never
+  // (49,52) sat ON the first 'a' glyph's white ink (docs/archive/0156, could never
   // pass); sample the strip's all-navy top padding row instead.
   await clickAt(500, 400);
   await new Promise(r => setTimeout(r, 400));
@@ -899,7 +899,7 @@ try {
   check('inline rename committed on disk (aaa -> bbb)', true);
   await setVt(2);
 
-  // ---- long/spaced Desktop-icon launch (todos/0151): a launcher whose name
+  // ---- long/spaced Desktop-icon launch (docs/archive/0151): a launcher whose name
   // exceeds the old menu_ent.name[32] used to be snprintf-truncated, so
   // desk_launch stat()'d a path that didn't exist and the icon silently never
   // launched. Clear the desktop to a short-spaced and a 36-char-spaced

@@ -34,7 +34,7 @@ int main() {
   // Pointer. Deliberately a FIXED pointer value, not the address of a string
   // literal: the literal's address moves whenever the libc's data segment
   // grows, so that spelling made this golden fail on every unrelated libc
-  // addition while testing nothing about %p (todos/0382 tripped it). What is
+  // addition while testing nothing about %p (docs/archive/0382 tripped it). What is
   // under test here is %p's FORMATTING, which this pins exactly and stably.
   printf("Pointer: %p\n", (void *)0x1161c);
 

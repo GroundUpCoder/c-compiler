@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// todos/0338 acceptance, headless: the command-alternatives dispatcher.
+// docs/archive/0338 acceptance, headless: the command-alternatives dispatcher.
 //
 // /usr/bin/cmdalt is a MULTICALL binary — under its own name it is the
 // admin CLI, under any other name it dispatches that name to whichever
@@ -32,7 +32,7 @@
 // shadow the dispatcher is gone), `python` then really runs MicroPython
 // with sys.argv intact and its status propagated, the picker-equivalent
 // switch works through the same store, and `gucman remove` deletes exactly
-// that claim line. It closes with the todos/0355 leg: a HAND-BUILT payload
+// that claim line. It closes with the docs/archive/0355 leg: a HAND-BUILT payload
 // carrying a `bin` claim on the dispatched name `python` (a payload mkpkg
 // refuses to build) makes gucman's install-time bin-plant guard fire —
 // refused loudly, nothing planted, no DB record.
@@ -58,7 +58,7 @@ function check(name, cond, extra) {
  * the shipped pipeline (mkpkg refuses to build such a payload, and gucman
  * verifies the payload sha against the mkpkg index) — which is why session
  * B's ==shadowinstall leg builds the payload BY HAND (addShadowPackage
- * below, todos/0355) to make that guard fire too. */
+ * below, docs/archive/0355) to make that guard fire too. */
 function checkShadowingBinRefused(check) {
   const { spawnSyncBudgeted } = require('../lib/spawn-budget.js');
   const pathm = require('path');
@@ -96,7 +96,7 @@ function checkShadowingBinRefused(check) {
   }
 }
 
-/* The install-time twin's firing fixture (todos/0355). gucman's bin-plant
+/* The install-time twin's firing fixture (docs/archive/0355). gucman's bin-plant
  * loop refuses to plant /usr/local/bin/<cmd> over a name the base image
  * DISPATCHES (`gm_same_file(disp, GM_DISPATCH)` in os/gucman/gucman.c) — the
  * runtime backstop for a payload that arrived OUTSIDE the shipped pipeline.
@@ -150,13 +150,13 @@ function addShadowPackage(repo, check) {
     .map((p) => p.slice('/usr/bin/'.length));
   check('CONTROL: the base image still dispatches at least one command name',
         dispatched.length > 0,
-        're-pin todos/0355 fixture: os/image.json has no /usr/bin/* -> /usr/bin/cmdalt link left');
+        're-pin docs/archive/0355 fixture: os/image.json has no /usr/bin/* -> /usr/bin/cmdalt link left');
   check('CONTROL: `python` is still a dispatched name (the shadow fixture claims it)',
         dispatched.includes('python'),
-        `re-pin todos/0355 fixture to one of: ${dispatched.join(', ') || '(none)'}`);
+        `re-pin docs/archive/0355 fixture to one of: ${dispatched.join(', ') || '(none)'}`);
   const control = JSON.stringify({
     name: 'shadowpkg', version: '1.0',
-    summary: 'todos/0355 fixture: a bin claim on a dispatched name',
+    summary: 'docs/archive/0355 fixture: a bin claim on a dispatched name',
     bin: { python: 'tool' },
   }, null, 2) + '\n';
   const tool = Buffer.from('#!/bin/sh\necho SHADOW-TOOL-RAN\n');
@@ -176,7 +176,7 @@ function addShadowPackage(repo, check) {
   const idx = JSON.parse(fs.readFileSync(idxPath, 'utf-8'));
   idx.packages.shadowpkg = {
     version: '1.0',
-    summary: 'todos/0355 fixture: a bin claim on a dispatched name',
+    summary: 'docs/archive/0355 fixture: a bin claim on a dispatched name',
     minBase: idx.baseVersion, deps: [],
     payload: { format: 'tar+gzip', url: 'pool/' + file, size: gz.length, sha256: sha },
   };
@@ -418,7 +418,7 @@ async function main() {
     'python -c "print(1)" 2>&1; echo RC=$?',
     'echo ==cut',
 
-    // ---- todos/0355: the INSTALL-TIME shadow guard really fires ----
+    // ---- docs/archive/0355: the INSTALL-TIME shadow guard really fires ----
     // The repo carries a hand-built payload (addShadowPackage) whose
     // control.json claims bin `python` — a payload mkpkg refuses to build,
     // so the only thing standing between it and a permanent PATH shadow is
@@ -471,14 +471,14 @@ async function main() {
   check('...and python is back to the 127 install hint',
         /RC=127/.test(B('after')), JSON.stringify(B('after')));
 
-  /* todos/0355: the install-time guard's FIRING path. The message regex is
+  /* docs/archive/0355: the install-time guard's FIRING path. The message regex is
    * guard-branch-specific: gucman says "would shadow the command dispatcher
    * at", mkpkg's build-time tier says "would shadow the base image's command
    * dispatcher at" — so a refusal from anywhere earlier in the install
    * (index, sha256, tar validation) cannot satisfy it. */
   check('CONTROL: in-OS, /usr/bin/python really is the dispatcher link',
         B('shadowctl').trim() === '/usr/bin/cmdalt',
-        `re-pin todos/0355 fixture: readlink /usr/bin/python said ${JSON.stringify(B('shadowctl'))}`);
+        `re-pin docs/archive/0355 fixture: readlink /usr/bin/python said ${JSON.stringify(B('shadowctl'))}`);
   check('the hand-built shadow payload is REFUSED at install (exit 1)',
         /^RC=1$/m.test(B('shadowinstall')), JSON.stringify(B('shadowinstall')));
   check('...by the bin-plant guard, naming package, bin and dispatcher',

@@ -1,4 +1,4 @@
-# todos/0117 R2 — the curated stdlib, as a stdin-driven smoke test.
+# docs/archive/0117 R2 — the curated stdlib, as a stdin-driven smoke test.
 #
 # The kernel e2e (tests/kernel/test_micropython_stdlib_e2e.js) owns everything
 # that needs a real filesystem or a real process. This file owns the part that

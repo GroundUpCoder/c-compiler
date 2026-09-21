@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // #424: `os/boot.js --vsync[=hz]` — the headless host drives kernel.vsyncTick()
 // from a timer, so frame-paced code (host.js's frame-loop driver pacing SDL
-// main-loop apps off KernelClient.vsyncWait, todos/0100/0167) is exercisable
+// main-loop apps off KernelClient.vsyncWait, docs/archive/0100/0167) is exercisable
 // under the fast Node host instead of only under a real browser rAF.
 //
 // Legs:

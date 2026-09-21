@@ -1,4 +1,4 @@
-/* wm.c — /bin/wm, the window-management policy client (todos/0014).
+/* wm.c — /bin/wm, the window-management policy client (docs/archive/0014).
  *
  * Policy lives HERE, out of the kernel: this ordinary wasm process speaks
  * the framed WM protocol (wm_proto.h) over the kernel-owned AF_UNIX
@@ -6,13 +6,13 @@
  * clear of the taskbar), and draws the taskbar — itself just a borderless
  * SDL window whose surface is an shm kernel surface like any other app's.
  * Buttons: click focuses (restoring if minimized); clicking the focused
- * window's button minimizes it (the Win95 toggle). Maximize (todos/0025)
+ * window's button minimizes it (the Win95 toggle). Maximize (docs/archive/0025)
  * also lives here: EV_TITLE_ACTIVATE (title double-click / wmctl max)
  * toggles between the work area and saved geometry, dispatching on the
  * RESIZABLE bit — configure vs scale-to-fit. A wm restart forgets
  * maximize state (deliberate: restarting the WM tidies the desktop).
  *
- * Aero Snap (todos/0095) extends that: the kernel reports the pointer
+ * Aero Snap (docs/archive/0095) extends that: the kernel reports the pointer
  * crossing screen-edge zones mid-title-drag (EV_SNAP_EDGE — this process
  * raises a translucent preview window over the target rect, the 0063
  * alpha tier) and the drop (EV_SNAP_DROP — commit: left/right halves,
@@ -28,9 +28,9 @@
  * restart forgets them. Fixed-size windows letterbox into their half or
  * quarter with the same aspect-fit SET_DST maximize uses.
  *
- * The Start menu (todos/0028, Win95-classic by todos/0078, given the Win7
- * two-pane facelift by todos/0098, then reverted to ONE Win95 column by
- * todos/0132) is a set of borderless SDL windows in this same process,
+ * The Start menu (docs/archive/0028, Win95-classic by docs/archive/0078, given the Win7
+ * two-pane facelift by docs/archive/0098, then reverted to ONE Win95 column by
+ * docs/archive/0132) is a set of borderless SDL windows in this same process,
  * created on Start-button click (or the Ctrl+Esc chord / `wmctl menu` —
  * WMP EV_MENU, the EV_CYCLE pattern) and destroyed on selection or dismiss
  * — SDL events dispatch per window by e.*.windowID. The ROOT window
@@ -38,7 +38,7 @@
  * down the left (the Win95 sidebar): pinned entries (~/.config/pinned) + MRU
  * recents (~/.config/recent, pushed by activate() on every real launch,
  * capped at RECENT_MAX), a groove and the fixed places (Settings ->
- * /bin/ctlpanel, Run... -> the run dialog; Shut Down joins when todos/0051
+ * /bin/ctlpanel, Run... -> the run dialog; Shut Down joins when docs/archive/0051
  * lands), then — XP/Vista/7 style — the "All Programs" row at the BOTTOM,
  * with a live SEARCH box at its foot. Typing (the root holds keyboard
  * focus) filters a flat walk of the menu tree into the column live (fixed
@@ -47,7 +47,7 @@
  * cascades the menu tree as flyout columns snugly off the column's right
  * edge — each its own window titled "startmenu2"/"startmenu3"/...
  * so the EV_CREATED park can tell them apart, listing /etc/menu if that
- * directory exists else the baked /usr/share/menu (todos/0040 —
+ * directory exists else the baked /usr/share/menu (docs/archive/0040 —
  * systemd-style /etc: user overrides only, first-existing-dir wins), with
  * subdirectories as GROUPS that cascade further. Only the root ever holds
  * keyboard focus (flyouts hand it back at their create echo, the Aero-Peek
@@ -58,7 +58,7 @@
  * (the wm chdir's at startup — doom finds its WAD by cwd) and are reaped
  * with a WNOHANG poll.
  *
- * Aero Peek (todos/0063): hovering a taskbar button raises a live
+ * Aero Peek (docs/archive/0063): hovering a taskbar button raises a live
  * thumbnail popup — another borderless window in this process, fed by
  * kernel WMP_THUMB replies (deterministic box-filter downscale of the
  * app's front buffer), refreshed on a frame-tick timer while hovered.
@@ -67,8 +67,8 @@
  * sees motion over its own windows, so "pointer parked over an app"
  * needs the timeout backstop).
  *
- * The desktop layer (todos/0029) is a third borderless window: fullscreen,
- * pinned to the BOTTOM z layer at create (SET_LAYER -1, todos/0038 — the
+ * The desktop layer (docs/archive/0029) is a third borderless window: fullscreen,
+ * pinned to the BOTTOM z layer at create (SET_LAYER -1, docs/archive/0038 — the
  * taskbar and Start menu ride the TOP layer, so app windows can neither
  * cover the bar nor sink under the desktop), teal fill + an
  * icon grid from /root/Desktop (re-read on a coarse frame-tick timer).
@@ -76,24 +76,24 @@
  * desktop clicks — invisible to the WM before (kernel hit-test returned
  * 'desktop' to the embedder only) — are ordinary client clicks on this
  * layer now, so they dismiss the Start menu. Icons are selectable and
- * movable (todos/0077): click / ctrl-click / shift-range / marquee build
+ * movable (docs/archive/0077): click / ctrl-click / shift-range / marquee build
  * a selection set, drags move it snapped to the grid with positions
  * persisted in /root/Desktop/.icons, and arrows/Enter/Esc/Ctrl+A drive
  * it from the keyboard — the desktop takes kernel focus on click to make
  * that possible (the kernel's borderless exemption is policy-overridable
  * by the WM asking).
  *
- * Launching is ONE mechanism (activate(), todos/0066), shared by the menu
+ * Launching is ONE mechanism (activate(), docs/archive/0066), shared by the menu
  * and the desktop (and fileman): a file the kernel can exec — wasm magic
- * `\0asm` or a `#!` script (todos/0065), told apart by peeking the first
+ * `\0asm` or a `#!` script (docs/archive/0065), told apart by peeking the first
  * bytes, through symlinks — spawns directly; anything else opens through
- * the openwith associations (openwith.h, todos/0072): extension map first,
+ * the openwith associations (openwith.h, docs/archive/0072): extension map first,
  * then the default.gui program (notepad in the baked store). Launcher
  * entries are ordinary executable scripts (`#!/bin/sh` + a command line),
  * not a private format — the old first-line-argv menu convention is gone
  * (its seeded user, menu/snake, became a real script in image.json v36).
  *
- * Context menus (todos/0091): right-click raises a two-window popup (root
+ * Context menus (docs/archive/0091): right-click raises a two-window popup (root
  * "ctxmenu" + at most one "ctxmenu2" flyout — the v1 depth cap) built from
  * fixed item lists. Empty desktop: New >, Sort by >, Refresh, Add Default
  * Icons (Lane D: spawns /usr/bin/desktop-defaults, the additive default-
@@ -108,7 +108,7 @@
  * Enter drive it. The Start strip stays reserved; window title bars for
  * 0102.
  *
- * Taskbar polish (todos/0101): the empty strip (and the clock/Show Desktop
+ * Taskbar polish (docs/archive/0101): the empty strip (and the clock/Show Desktop
  * region) right-clicks to a taskbar menu — Cascade, Tile, Minimize All,
  * Properties (-> ctlpanel) — pure wm.c policy loops over the window list
  * (resizable windows get real MOVE+RESIZE; fixed-size ones are cascaded,
@@ -118,7 +118,7 @@
  * clicking, for agent parity) the clock raises a "datepop" tooltip window
  * with the full date — the Aero-Peek borderless-furniture mechanism.
  *
- * The window system menu (todos/0102): Alt+Space (WMP EV_SYSMENU, the
+ * The window system menu (docs/archive/0102): Alt+Space (WMP EV_SYSMENU, the
  * EV_CYCLE chord pattern; also `wmctl sysmenu`) raises the Win95 sysmenu on
  * the focused window — the taskbar-button menu (0101) plus Move/Size rows,
  * anchored at the window's top-left, rows grayed per its state. Picking
@@ -129,7 +129,7 @@
  * pointer, 0024). Restore/Minimize/Maximize/Close reuse the existing
  * chrome ops.
  *
- * The screensaver (todos/0096): after the configured seconds of idle —
+ * The screensaver (docs/archive/0096): after the configured seconds of idle —
  * measured by the KERNEL (WMP GET_IDLE, polled once a second off the frame
  * tick), since this process only ever sees input over its own windows —
  * one more fullscreen borderless window ("screensaver") raises on the TOP
@@ -150,7 +150,7 @@
  * os/boot.js; seeded by os/image.json.
  */
 #include <SDL.h>
-#include <SDL_popup.h>     /* anchored menu columns (todos/0282 over 0256) */
+#include <SDL_popup.h>     /* anchored menu columns (docs/archive/0282 over 0256) */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -165,10 +165,10 @@
 #include <sys/select.h>
 #include "wm_proto.h"
 #include "launch.h"
-#include "listdir.h"       /* the shared directory walk (CD34, todos/0291) */
+#include "listdir.h"       /* the shared directory walk (CD34, docs/archive/0291) */
 #include "openwith.h"
 #include "fileops.h"
-#include "egress.h"        /* icon-menu Download -> the host (todos/0398) */
+#include "egress.h"        /* icon-menu Download -> the host (docs/archive/0398) */
 #include "sounds.h"
 #include "saver.h"
 #include "keys.h"
@@ -179,7 +179,7 @@
 #define SDLK_LGUI 1073742051
 #define SDLK_RGUI 1073742055
 #endif
-/* The ONE menu engine (todos/0259, arch A13): wm.c is menu-engine
+/* The ONE menu engine (docs/archive/0259, arch A13): wm.c is menu-engine
  * customer #2 — its Start-menu flyouts and context menus track/measure/
  * raster through menucore (model + chain + gdi32/freetype raster), with
  * this process supplying the window substrate (borderless top-layer
@@ -188,7 +188,7 @@
 #include "win32/menucore.h"
 #include "win32/win32_internal.h"
 
-/* The unified multi-source wait (kernel FS_WAIT via host.js, todos/0178):
+/* The unified multi-source wait (kernel FS_WAIT via host.js, docs/archive/0178):
  * park until an fd in rfds is readable (1), the input ring has records —
  * already drained into the SDL queue at return (2), timeout_ms elapses
  * (0; < 0 waits forever), or a signal was posted (-1, handler already ran).
@@ -210,17 +210,17 @@ __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 #define TITLE_H   28    /* keep placements below the kernel title bar (>= WM_TITLE_H) */
 
 /* Flyout/ctx geometry (MENU_W/MENU_ENTRY_H/MENU_PAD/MENU_SEP_H/CTX_W) and
- * the MENU_DEPTH-4 cap are GONE since todos/0259: popup columns are
+ * the MENU_DEPTH-4 cap are GONE since docs/archive/0259: popup columns are
  * menucore chain levels (MENU_ITEM_H rows, measured widths, arbitrary
  * depth to MENU_MAX_DEPTH). */
 #define MAX_MENU     32
 #define ENT_NAME     256    /* entry/item name buffer: a full filesystem name
                               * (BlockFS d_name is 255 chars + NUL) fits, so a
                               * long/spaced Desktop or menu filename is never
-                              * truncated on the launch path (todos/0151). */
+                              * truncated on the launch path (docs/archive/0151). */
 #define SM_WALK_MAX  8      /* search-walk recursion cap (was MENU_DEPTH) */
 
-/* Win95 single-column root (todos/0132, restyling the 0098 two-pane; the
+/* Win95 single-column root (docs/archive/0132, restyling the 0098 two-pane; the
  * gucOS branding band + bottom "All Programs" are the 0132 follow-up).
  * A vertical gucOS BAND runs down the left (the Win95 sidebar), then ONE
  * column: pinned entries + MRU recents, a groove, the fixed places
@@ -245,20 +245,20 @@ __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 #define SM_SEARCH_Y  (SM_PAD + SM_ROWS * SM_ROW_H + 4)
 #define RECENT_MAX   8      /* MRU cap in ~/.config/recent */
 
-#define RUN_W        340    /* the RUN... dialog (todos/0078) */
+#define RUN_W        340    /* the RUN... dialog (docs/archive/0078) */
 #define RUN_H        78
 #define RUN_MAX      100
 
-#define DESK_MARGIN  16     /* the icon grid (todos/0029) */
+#define DESK_MARGIN  16     /* the icon grid (docs/archive/0029) */
 #define CELL_W       116
 #define CELL_H       96
 #define ICON_W       32
 #define MAX_DESK     64
 #define DBLCLICK_NS  500000000ULL   /* 500ms, the SDL click-count window */
 #define DRAG_SLOP    4      /* px of button-held travel before a press
-                               becomes a marquee or icon drag (todos/0077) */
+                               becomes a marquee or icon drag (docs/archive/0077) */
 
-/* Window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) */
+/* Window overview / Exposé (docs/EXPOSE-MISSION-CONTROL.md) */
 #define OV_GAP       16     /* grid gap between miniature cells */
 #define OV_CAPTION_H 24     /* per-row caption strip — MUST MATCH the compositor
                                (compositor.js OV_CAPTION_H) so the browser
@@ -267,7 +267,7 @@ __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
                                (Win10 position); shifts the app-button strip */
 
 
-#define PEEK_W       160    /* Aero Peek popup (todos/0063) */
+#define PEEK_W       160    /* Aero Peek popup (docs/archive/0063) */
 #define PEEK_H       120
 #define PEEK_PAD     6      /* face border around the thumbnail */
 #define PEEK_REFRESH_MS 500  /* ms between live THUMB refreshes */
@@ -275,23 +275,23 @@ __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
                                 the wm only sees motion over its OWN windows,
                                 so a pointer parked over an app window can't
                                 tell us to close; this backstop does (wall
-                                clock since todos/0168: the loop wakes ~1/s
+                                clock since docs/archive/0168: the loop wakes ~1/s
                                 idle, not per frame) */
 
 typedef struct {
     int32_t sid, pid;
     int32_t x, y, w, h;                /* tracked geometry (EV_MOVED /
                                           EV_CONFIGURED) — the EV_SCREEN
-                                          re-clamp needs it (todos/0023) */
+                                          re-clamp needs it (docs/archive/0023) */
     int32_t dst_w, dst_h;              /* on-screen viewport (EV_SCALED,
-                                          todos/0024) — the clamp must use
+                                          docs/archive/0024) — the clamp must use
                                           the SCALED size */
     int minimized, focused;
     int resizable;                     /* WMP_F_RESIZABLE at create — the
-                                          maximize dispatch bit (todos/0025) */
+                                          maximize dispatch bit (docs/archive/0025) */
     int maximized;                     /* maximize state lives HERE, not in
-                                          the kernel (todos/0025) */
-    int snapped;                       /* Aero Snap edge (todos/0095): 0
+                                          the kernel (docs/archive/0025) */
+    int snapped;                       /* Aero Snap edge (docs/archive/0095): 0
                                           floating, 1 L, 2 R, 4-7 quarters
                                           (top snap becomes maximized) */
     int32_t sx, sy, sw, sh;            /* saved FLOATING geometry for
@@ -300,7 +300,7 @@ typedef struct {
                                           leaving the floating state, kept
                                           across snap-to-snap moves */
     uint32_t stamp;                    /* focus recency (EV_FOCUS/CREATED) —
-                                          the cycling order (todos/0032) */
+                                          the cycling order (docs/archive/0032) */
     uint32_t order;                    /* creation order (#794): the taskbar
                                           slot key, kept across hide/show so
                                           A/B/C never becomes B/C/A */
@@ -310,12 +310,12 @@ typedef struct {
 static int sock = -1;
 static int scr_w = 800, scr_h = 500;
 
-/* Fatal-exit with a diagnostic (todos/0234): the wm is the desktop's
+/* Fatal-exit with a diagnostic (docs/archive/0234): the wm is the desktop's
  * central service, and the kernel-chrome fallback makes its death easy
  * to miss — a bare exit turns a protocol drift or a dead endpoint
  * into an strace hunt. Every fatal path says WHAT failed and WHY on
  * stderr — and the WHY must come from the layer that actually failed
- * (todos/0255). Two intents:
+ * (docs/archive/0255). Two intents:
  *   fatal()      appends strerror(errno) — the socket/wmp_read callers,
  *                where errno IS the cause (wmp_read_all names EOF as
  *                ECONNRESET, so the common endpoint-gone case reads
@@ -377,7 +377,7 @@ static void hidden_save(const win_t *w) {
 
 static int32_t bar_sid = 0;        /* our own taskbar surface */
 static int own_pid = 0;
-static int overview_active = 0;    /* window overview / Exposé (todos/EXPOSE):
+static int overview_active = 0;    /* window overview / Exposé (docs/EXPOSE):
                                       1 while the miniature grid is up. Declared
                                       here (not with the overview functions) so
                                       saver_show can end it — mutual exclusion */
@@ -386,14 +386,14 @@ static SDL_Window *bar_win;
 static SDL_Surface *bar_surf;
 static int bar_w;
 
-/* Show Desktop (todos/0101): the far-right sliver toggles minimize-all /
+/* Show Desktop (docs/archive/0101): the far-right sliver toggles minimize-all /
  * restore. sd_stash holds the sids WE minimized on the way down (by sid,
  * since wins[] indices aren't stable), so a second click brings back
  * exactly those — windows minimized before the toggle stay minimized. */
 static int32_t sd_stash[MAX_WIN];
 static int sd_nstash = 0;
 
-/* The clock-hover date tooltip (todos/0101): a borderless top-layer
+/* The clock-hover date tooltip (docs/archive/0101): a borderless top-layer
  * "datepop" furniture window (the Aero-Peek mechanism). Shown on hover
  * (unpinned: idle-dismissed) or toggled by a click (pinned: stays up). */
 static SDL_Window *date_win;
@@ -403,26 +403,26 @@ static int date_x = 0;
 static uint64_t date_hover_ms = 0; /* last raise/hover stamp (0101; 0168 wall clock) */
 static int date_pinned = 0;
 
-/* Start menu state (todos/0028; single-column root 0098/0132; flyouts on
- * the menucore chain since todos/0259). The ROOT panel (branding band +
+/* Start menu state (docs/archive/0028; single-column root 0098/0132; flyouts on
+ * the menucore chain since docs/archive/0259). The ROOT panel (branding band +
  * pins/recents/search) stays this process's own window and drawing — its
  * shape (search box, fixed places, bottom All Programs) is shell policy,
  * not an item-tree menu, and deliberately did NOT reseat onto the
  * engine. The flyout columns (All Programs and every subdirectory
  * cascade) ARE engine chain levels: entries union-read from /etc/menu
- * AND /usr/share/menu (todos/0259, ex-0244/0250 — /etc wins same-name
+ * AND /usr/share/menu (docs/archive/0259, ex-0244/0250 — /etc wins same-name
  * clashes) at each popup_opening. */
 /* Desktop icon glyph kinds (ticket #82): the normalized filetype the desk
  * render loop dispatches on. Computed per entry by desk_kind() (desktop
  * only — Start-menu loads leave it 0/unused). */
 enum {
     DK_FILE = 0,                   /* generic document: dog-eared page */
-    DK_DIR,                        /* folder: tab + body (todos/0185) */
+    DK_DIR,                        /* folder: tab + body (docs/archive/0185) */
     DK_EXEC,                       /* runnable (\0asm / #!): solid block */
     DK_TEXT,                       /* text/config: page + text lines */
     DK_IMAGE,                      /* image: framed sun + ridge */
     DK_DECK,                       /* presentation deck: screen on stand */
-    DK_BIN,                        /* the Recycle Bin basket (todos/0093) */
+    DK_BIN,                        /* the Recycle Bin basket (docs/archive/0093) */
     DK_STORE,                      /* software center: shopping bag (Q2) */
 };
 typedef struct { char name[ENT_NAME]; int is_link; int is_dir; int kind; } menu_ent;
@@ -434,10 +434,10 @@ static struct {                    /* the root panel window; NULL = closed */
 } smroot;
 static int nkids = 0;              /* live spawned children (reap on frame) */
 
-/* ---- the menucore front-end (todos/0259) --------------------------
+/* ---- the menucore front-end (docs/archive/0259) --------------------------
  * One tracking at a time (menus are modal): mc_kind says which consumer
  * owns the open chain; ov[] is the overlay-window substrate — one
- * furniture window per open chain level. Since todos/0282 every level
+ * furniture window per open chain level. Since docs/archive/0282 every level
  * with an owner surface is a kernel ANCHORED CHILD (0256, created via
  * SDL_CreatePopupWindow): positioned kernel-side from the owner +
  * offset, layer-inherited, re-slotted above the owner after every z
@@ -472,7 +472,7 @@ static MenuTbl *ctx_tbl;           /* the ctx tracking's root table */
 static void ctx_command(int id);   /* the CM-id dispatch (defined with the
                                       ctx builders) */
 
-/* Single-column root state (todos/0098, right pane dropped in 0132):
+/* Single-column root state (docs/archive/0098, right pane dropped in 0132):
  * smroot still owns the root WINDOW (sid/geometry/parking through the
  * shared plumbing), but its column is this heterogeneous item list rather
  * than a directory listing — pinned entries, then MRU recents, then All Programs,
@@ -487,7 +487,7 @@ static int sm_lhover = -1;         /* column cursor row, -1 none */
 static char sm_search[64];         /* the live search query */
 static int sm_search_len = 0;
 
-/* RUN... dialog state (todos/0078): one more borderless window with a
+/* RUN... dialog state (docs/archive/0078): one more borderless window with a
  * text field; Enter spawns `/bin/sh -c <input>` the desktop way. */
 static SDL_Window *run_win;        /* NULL = closed */
 static SDL_Surface *run_surf;
@@ -495,10 +495,10 @@ static int32_t run_sid = 0;        /* EV_CREATED echo ("startrun") */
 static char run_buf[RUN_MAX + 1];
 static int run_len = 0;
 
-/* Desktop layer state (todos/0029, selection & manipulation todos/0077):
+/* Desktop layer state (docs/archive/0029, selection & manipulation docs/archive/0077):
  * fullscreen, bottom of z, recreated on EV_SCREEN like the taskbar.
  * menu_ent is the same shape (name + is_link). Icons live in grid CELLS
- * (column-major auto-flow, todos/0029); todos/0077 adds free placement —
+ * (column-major auto-flow, docs/archive/0029); docs/archive/0077 adds free placement —
  * a cell per icon, persisted in /root/Desktop/.icons ("col row name"
  * lines, rewritten on every drag-drop; entries absent from the file
  * auto-flow into the free cells, so a fresh Desktop looks exactly like
@@ -518,17 +518,17 @@ static int desk_dirty = 1;         /* redraw only when contents change */
 static int desk_last_idx = -1;     /* double-click tracking (event timestamps) */
 static uint64_t desk_last_ns = 0;
 static uint64_t desk_poll_ms = 0;  /* coarse /root/Desktop re-read stamp */
-static int desk_trash_full = 0;    /* Recycle Bin glyph state (todos/0093),
+static int desk_trash_full = 0;    /* Recycle Bin glyph state (docs/archive/0093),
                                       refreshed on the same coarse tick */
 static int mod_ctrl = 0, mod_shift = 0,   /* held modifiers, tracked from
                                              key events by KEYSYM — pointer
                                              records carry no mod word; reset
                                              when the desktop loses focus so
                                              a keyup that went elsewhere can't
-                                             wedge them (todos/0077) */
-           mod_gui = 0;                   /* ⌘/GUI likewise (todos/0149 —
+                                             wedge them (docs/archive/0077) */
+           mod_gui = 0;                   /* ⌘/GUI likewise (docs/archive/0149 —
                                              the macos-scheme select-all) */
-/* Press/drag state (todos/0077). desk_drag: 0 idle, 1 marquee (press began
+/* Press/drag state (docs/archive/0077). desk_drag: 0 idle, 1 marquee (press began
  * on empty desktop), 2 icon-move (press began on a selected icon). */
 static int desk_press = 0;         /* left button is down on the desktop */
 static int desk_press_idx = -1;    /* icon under the press, -1 = empty */
@@ -538,9 +538,9 @@ static int desk_drag = 0;
 static int desk_collapse = 0;      /* plain press on an already-selected icon:
                                       collapse the set to it on a drag-less
                                       release (the Win95 mouseup rule) */
-static uint32_t zctr = 0;          /* focus-recency counter (todos/0032) */
+static uint32_t zctr = 0;          /* focus-recency counter (docs/archive/0032) */
 
-/* Inline rename editor (todos/0103): F2 on a single-selected icon, or the
+/* Inline rename editor (docs/archive/0103): F2 on a single-selected icon, or the
  * icon menu's Rename, opens an edit box over that icon's label — printable
  * keys insert, Backspace deletes, Enter commits rename(2), Esc cancels, a
  * click-away or focus-loss commits (the Win95 behavior). desk_edit is the
@@ -553,7 +553,7 @@ static int desk_edit_armed = 0;    /* the editor's desktop focus has landed —
                                       focus-fall when the icon menu dismisses
                                       (Rename path) can't close it early */
 
-/* Context menu state (todos/0091; on the menucore chain since 0259 —
+/* Context menu state (docs/archive/0091; on the menucore chain since 0259 —
  * the "at most one ctxmenu2" v1 depth cap is gone with the fork engine):
  * item tables built per open from fixed lists, tracked/measured/rastered
  * by the engine over the ov[] furniture windows ("ctxmenu"/"ctxmenu2"/
@@ -573,14 +573,14 @@ enum {                             /* command ids (ctx_command dispatch) */
     CM_EMPTY,                      /* the Recycle Bin icon (0093) */
     CM_RESTORE, CM_MINIMIZE, CM_MAXIMIZE, CM_CLOSE, /* taskbar button */
     CM_CASCADE, CM_TILE, CM_MIN_ALL, CM_PROPERTIES, /* taskbar strip (0101) */
-    CM_MOVE, CM_SIZE               /* window system menu (todos/0102) */
+    CM_MOVE, CM_SIZE               /* window system menu (docs/archive/0102) */
 };
 
 static int32_t ctx_target = 0;     /* taskbar menu: the acted-on window */
 static int ctx_icon = -1;          /* icon menu: desk[] index */
 static void ctx_dismiss(void);     /* defined with the rest (0091) */
 
-/* Window system menu keyboard move/resize modes (todos/0102): after the
+/* Window system menu keyboard move/resize modes (docs/archive/0102): after the
  * sysmenu popup's Move/Size row fires, the popup stays up as the key
  * grabber (its root holds kernel focus) and arrows nudge the target; Enter
  * commits, Esc reverts to the stashed rect. sys_mode 0 none / 1 move / 2
@@ -602,7 +602,7 @@ static void peek_dismiss(void);
 static void date_dismiss(void);                    /* clock tooltip (0101) */
 static void sm_record_recent(const char *path);   /* MRU recents (0098) */
 
-/* Aero Peek state (todos/0063): hovering a taskbar button raises a live
+/* Aero Peek state (docs/archive/0063): hovering a taskbar button raises a live
  * thumbnail popup — a fourth borderless window in this process, fed by
  * kernel THUMB replies (the only R_SHOT this process ever requests, so the
  * drain can claim every R_SHOT for it). */
@@ -618,7 +618,7 @@ static int peek_dirty = 0;         /* fresh thumb: repaint */
 static uint8_t peek_px[(PEEK_W - 2 * PEEK_PAD) * (PEEK_H - 2 * PEEK_PAD) * 4];
 static int peek_tw = 0, peek_th = 0;
 
-/* Snap preview state (todos/0095): a translucent borderless window (the
+/* Snap preview state (docs/archive/0095): a translucent borderless window (the
  * 0063 alpha tier) covering the snap target while a title drag hovers a
  * screen-edge zone — raised/replaced/dropped on EV_SNAP_EDGE, always gone
  * at the drop. */
@@ -628,7 +628,7 @@ static int32_t snapprev_sid = 0;   /* EV_CREATED echo ("snappreview") */
 static int snapprev_edge = 0;      /* zone currently previewed */
 static int snapprev_x, snapprev_y, snapprev_w, snapprev_h;
 
-/* Screensaver state (todos/0096): one fullscreen borderless top-layer
+/* Screensaver state (docs/archive/0096): one fullscreen borderless top-layer
  * window, alive only while the saver runs; the animation redraws it per
  * frame tick. The idle clock is the kernel's (GET_IDLE -> R_IDLE, routed
  * off the drain like the peek's R_SHOT). */
@@ -833,7 +833,7 @@ static int sym_text(int sym) {
 }
 
 /* Drawing helpers over any surface (sw x sh) — the taskbar and the Start
- * menu share them (todos/0028). (x, y) addresses the top of the CAP cell
+ * menu share them (docs/archive/0028). (x, y) addresses the top of the CAP cell
  * (CHROME_CAP px tall — the generalization of the retired 5x7 table's
  * 7px cell): the baseline sits at y + CHROME_CAP and every
  * (H - CHROME_CAP) / 2 centering in the chrome derives from the real
@@ -889,7 +889,7 @@ static unsigned char *text_mask(const char *s, int *tw, int *th) {
 }
 
 /* Vertical label reading BOTTOM-to-TOP — the Win95 sidebar title
- * (todos/0132 follow-up): upright and correctly ordered when the head
+ * (docs/archive/0132 follow-up): upright and correctly ordered when the head
  * tilts left. (cx, cy) is the CENTER of the band area; a mask pixel
  * (hx, hy) maps to horizontal +hy and vertical -hx, a true (non-mirrored)
  * 90° CCW rotation of the freetype-rendered text. */
@@ -1017,7 +1017,7 @@ static void fit_dst(const win_t *w, int32_t bw, int32_t bh, int allow_over,
 }
 
 /* The user drag-released a fixed-size window's frame at box (bw, bh)
- * (EV_SCALE_REQ, todos/0024): answer with the aspect-fit SET_DST. The
+ * (EV_SCALE_REQ, docs/archive/0024): answer with the aspect-fit SET_DST. The
  * echo (EV_SCALED) updates the model. */
 static void scale_request(int32_t sid, int32_t bw, int32_t bh) {
     win_t *w = find(sid);
@@ -1030,7 +1030,7 @@ static void scale_request(int32_t sid, int32_t bw, int32_t bh) {
 /* Fill the work area (screen minus taskbar, below the kernel title bar)
  * with w — the maximize half of the 0025 toggle, also re-run on EV_SCREEN
  * while maximized. Dispatch on the RESIZABLE bit (the same bit that makes
- * RESIZE vs SET_DST legal — exclusive modes, todos/0021/0024): resizable
+ * RESIZE vs SET_DST legal — exclusive modes, docs/archive/0021/0024): resizable
  * gets a real MOVE + RESIZE configure to the work area; fixed-size gets
  * the aspect-fit SET_DST letterbox, centered. Echoes (EV_MOVED /
  * EV_CONFIGURED / EV_SCALED) update the model. */
@@ -1052,7 +1052,7 @@ static void maximize(win_t *w) {
     }
 }
 
-/* ---- taskbar-strip arrangement commands (todos/0101) ---- */
+/* ---- taskbar-strip arrangement commands (docs/archive/0101) ---- */
 
 /* Place one window at cascade slot k: a diagonal offset in the work area,
  * wrapped so a long run stays on-screen. Resizable windows also resize to
@@ -1112,7 +1112,7 @@ static void tile_windows(void) {
     }
 }
 
-/* Minimize All (todos/0101): stash then minimize every visible window, so
+/* Minimize All (docs/archive/0101): stash then minimize every visible window, so
  * Show Desktop can bring back exactly this set. */
 static void min_all(void) {
     sd_nstash = 0;
@@ -1124,7 +1124,7 @@ static void min_all(void) {
         }
 }
 
-/* Show Desktop toggle (todos/0101): if we hold a stash of still-minimized
+/* Show Desktop toggle (docs/archive/0101): if we hold a stash of still-minimized
  * windows, restore them (focus restores — the 0014 rule) and clear it;
  * otherwise minimize-all and stash. Windows the user minimized before the
  * toggle are never in the stash, so they stay down across a restore. */
@@ -1142,7 +1142,7 @@ static void show_desktop_toggle(void) {
     min_all();
 }
 
-/* ---- Aero Snap (todos/0095) ---- */
+/* ---- Aero Snap (docs/archive/0095) ---- */
 
 /* Client rect for a snap edge in the CURRENT work area (screen minus
  * taskbar, below the kernel title bar — the 0025 maximize metrics).
@@ -1222,7 +1222,7 @@ static void snap_to(win_t *w, int edge) {
     snap_place(w);
 }
 
-/* EV_TITLE_ACTIVATE (title double-click or wmctl max, todos/0025): toggle.
+/* EV_TITLE_ACTIVATE (title double-click or wmctl max, docs/archive/0025): toggle.
  * First activate maximizes (saving the floating rect unless a snap already
  * did); the second restores it. */
 static void title_activate(int32_t sid) {
@@ -1232,7 +1232,7 @@ static void title_activate(int32_t sid) {
     else restore_floating(w);
 }
 
-/* EV_SNAP_KEY (Win+arrow, or wmctl snap — todos/0095): drive the focused
+/* EV_SNAP_KEY (Win+arrow, or wmctl snap — docs/archive/0095): drive the focused
  * window. Left/Right snap to halves — pressing toward the edge it already
  * holds wraps to the other side ("cycle across the edge"); Up maximizes;
  * Down restores a snapped/maximized window, minimizes a floating one. */
@@ -1262,7 +1262,7 @@ static void snapprev_dismiss(void) {
     snapprev_edge = 0;
 }
 
-/* Raise the snap preview for an edge zone (todos/0095): one borderless
+/* Raise the snap preview for an edge zone (docs/archive/0095): one borderless
  * SDL_WINDOW_TRANSPARENT window over the target's outer rect (client +
  * title band), translucent white fill under a stronger 2px border,
  * painted ONCE — the 0063 per-pixel-alpha composite does the translucency
@@ -1294,7 +1294,7 @@ static void snapprev_show(int edge) {
     SDL_UpdateWindowSurface(snapprev_win);
 }
 
-/* ---- the screensaver (todos/0096) ---- */
+/* ---- the screensaver (docs/archive/0096) ---- */
 
 /* The marquee's glyph zoom for the current screen: the chrome font scaled
  * to a banner that reads across the room, clamped sane on tiny screens. */
@@ -1371,7 +1371,7 @@ static void saver_show(void) {
     ctx_dismiss();
     date_dismiss();
     snapprev_dismiss();
-    if (overview_active) {             /* mutually exclusive (todos/EXPOSE) */
+    if (overview_active) {             /* mutually exclusive (docs/EXPOSE) */
         wmp_send(sock, WMP_OVERVIEW_END, NULL, 0);
         overview_active = 0;
     }
@@ -1404,7 +1404,7 @@ static void saver_poll(void) {
     if (wmp_send(sock, WMP_GET_IDLE, NULL, 0) == 0) idle_pending = 1;
 }
 
-/* ---- the kernel key-grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4) ----
+/* ---- the kernel key-grab table (docs/KEYBINDING-OVERRIDE-SYSTEM.md §4) ----
  * wm.c is the POLICY owner of the global chords: it computes the desired grab
  * table from the keys.h registry (active scheme + user bind.<action> overrides,
  * resolved per-action by ks_action_binding) and PUSHES it to the config-blind
@@ -1473,7 +1473,7 @@ static void idle_consume(wmp_hdr *h) {
         saver_show();
 }
 
-/* EV_SAVER (wmctl saver / the Control Panel Preview, todos/0096): raise
+/* EV_SAVER (wmctl saver / the Control Panel Preview, docs/archive/0096): raise
  * the configured saver NOW. A 'none' config means there is nothing to
  * preview — the gesture is a no-op then. */
 static void saver_force(void) {
@@ -1518,20 +1518,20 @@ static void draw_saver(void) {
     SDL_UpdateWindowSurface(saver_win);
 }
 
-/* ---- launching + the Start menu (todos/0028) ----
+/* ---- launching + the Start menu (docs/archive/0028) ----
  * The spawn primitive itself (spawn_path/reap_kids) is shared with fileman
  * via launch.h; the wm passes its own kid counter and "wm" as the
  * diagnostic prefix. */
 
-/* activate()'s directory policy: a folder opens in fileman (todos/0185).
+/* activate()'s directory policy: a folder opens in fileman (docs/archive/0185).
  * Start-menu dirs are flyout groups and never reach here. */
 static void dir_open_fileman(const char *path) {
     char *argv[3] = { "fileman", (char *)path, 0 };
     spawn_path("/bin/fileman", argv, &nkids, "wm");
 }
 
-/* One "activate a path" (todos/0066), shared by the Start menu and the
- * desktop grid: the launch.h ladder (todos/0240 — fileman rides the same
+/* One "activate a path" (docs/archive/0066), shared by the Start menu and the
+ * desktop grid: the launch.h ladder (docs/archive/0240 — fileman rides the same
  * one) with wm's policies — directories open in a new fileman, direct
  * launches push the MRU recents (0098). The stat follows links, matching
  * the grid's is_dir; a gone/dangling link is a no-op. */
@@ -1544,7 +1544,7 @@ static void activate(const char *path) {
 
 static int entcmp(const void *a, const void *b) {
     const menu_ent *ea = (const menu_ent *)a, *eb = (const menu_ent *)b;
-    /* The Recycle Bin pins to the grid's TAIL (todos/0093): every other
+    /* The Recycle Bin pins to the grid's TAIL (docs/archive/0093): every other
      * icon keeps its pre-0093 sorted cell, and the bin sits below/after
      * everything the way Win95 keeps it apart. (Shared with the Start
      * menu, where no entry carries this name.) */
@@ -1560,7 +1560,7 @@ static int entcmp(const void *a, const void *b) {
  * Groups-first + alpha sort for a deterministic layout. Shared by the
  * Start menu (/etc/menu) and the desktop grid (/root/Desktop).
  *
- * The walk itself is os/listdir.h since the CD34 fold (todos/0291) —
+ * The walk itself is os/listdir.h since the CD34 fold (docs/archive/0291) —
  * this was the third drifted hand copy. Policy is kept exactly:
  * dotfiles always hidden, a link to a directory cascades
  * (LIST_FOLLOW_LINKS keeps is_link AND hands over the target's is_dir),
@@ -1588,7 +1588,7 @@ static int load_entries(const char *dir, menu_ent *dst, int max) {
     return n;
 }
 
-/* ---- the menu-tree UNION (todos/0259, resolving the 0244 "4th class
+/* ---- the menu-tree UNION (docs/archive/0259, resolving the 0244 "4th class
  * member" + the 0250 deferral): a Start-menu directory is the union of
  * /etc/menu/<rel> and /usr/share/menu/<rel>, an /etc entry winning a
  * same-NAME clash (so a package or the admin can drop one entry into the
@@ -1623,7 +1623,7 @@ static void menu_union_abs(const char *rel, const char *name,
              "/", name);
 }
 
-/* ---- the menucore ops (todos/0259): the window substrate + command
+/* ---- the menucore ops (docs/archive/0259): the window substrate + command
  * sinks this process supplies to the engine ---- */
 
 static int ov_index(SDL_Window *win) {
@@ -1742,7 +1742,7 @@ static MCWIN wmmc_win_create(MCWIN parent, int dx, int dy, int w, int h,
                                           rule, keyboard stays on the root */
     int lvl = __mc.nlev;
     if (lvl < 0 || lvl >= MENU_MAX_DEPTH) return NULL;
-    /* The surface this level hangs off (todos/0282): deeper levels anchor to
+    /* The surface this level hangs off (docs/archive/0282): deeper levels anchor to
      * the previous column, the level-0 Start flyout to the root panel. A
      * ctx-menu ROOT has no owner surface (it opens at the pointer over the
      * desktop/taskbar/an icon) and stays an ownerless top-level. */
@@ -1775,7 +1775,7 @@ static MCWIN wmmc_win_create(MCWIN parent, int dx, int dy, int w, int h,
     }
     SDL_Window *win;
     if (aw) {
-        /* A kernel anchored child (todos/0256): _wmZNormalize re-slots it
+        /* A kernel anchored child (docs/archive/0256): _wmZNormalize re-slots it
          * above its owner after every z mutation, so the column can never
          * render below the panel it cascades from — the 0282 fix. It
          * inherits the owner's layer and never takes focus by construction
@@ -1832,7 +1832,7 @@ static const MenuCoreOps wm_mc = {
     wmmc_screen_size,
 };
 
-/* ---- the RUN... dialog (todos/0078) ---- */
+/* ---- the RUN... dialog (docs/archive/0078) ---- */
 
 static void run_dismiss(void) {
     if (!run_win) return;
@@ -1908,9 +1908,9 @@ static void draw_run(void) {
     SDL_UpdateWindowSurface(run_win);
 }
 
-/* ---- the Start menu flyout columns (todos/0078; menucore chain levels
- * since todos/0259 — the MENU_DEPTH-4 cap is gone; the single-column
- * root that anchors them is todos/0098+0132, further down) ---- */
+/* ---- the Start menu flyout columns (docs/archive/0078; menucore chain levels
+ * since docs/archive/0259 — the MENU_DEPTH-4 cap is gone; the single-column
+ * root that anchors them is docs/archive/0098+0132, further down) ---- */
 
 /* Close the whole Start menu: the flyout chain, then the root panel.
  * (The chain alone closes level-wise via the engine's Esc/Left.) */
@@ -1946,7 +1946,7 @@ static int menu_open_root(void) {
     return 1;
 }
 
-/* ---- single-column root: recents, pins, live search (todos/0098+0132) ---- */
+/* ---- single-column root: recents, pins, live search (docs/archive/0098+0132) ---- */
 
 static const char *sm_home(void) {
     const char *h = getenv("HOME");
@@ -1972,7 +1972,7 @@ static int sm_name_matches(const char *name, const char *q) {
 /* Push `path` to the head of the MRU recents file (~/.config/recent),
  * de-duplicated, capped at RECENT_MAX. activate() calls this on every real
  * program launch — menu, desktop, or run dialog all flow through it, so
- * "recent programs" spans the whole shell (todos/0098). */
+ * "recent programs" spans the whole shell (docs/archive/0098). */
 static void sm_record_recent(const char *path) {
     if (!path || !*path) return;
     char cfg[300], file[320];
@@ -2106,7 +2106,7 @@ static int sm_ap_index(void) {
 
 /* The DISPLAY row of item i. XP/Vista/7: "All Programs" pins to the last
  * row slot — the bottom of the panel, right above the search box — with an
- * empty gap above it; every other item stacks from the top (todos/0132
+ * empty gap above it; every other item stacks from the top (docs/archive/0132
  * follow-up 2). Search mode has no All Programs, so this is the identity. */
 static int sm_disp_row(int i) {
     return i == sm_ap_index() ? SM_ROWS - 1 : i;
@@ -2180,7 +2180,7 @@ static void sm_root_motion(int x, int y) {
         sm_open_allprogs();
 }
 
-/* Keyboard while only the root is open (todos/0098): printable keys type
+/* Keyboard while only the root is open (docs/archive/0098): printable keys type
  * into the search box (filtering the tree live), arrows walk the column,
  * Enter launches the cursor row (the top hit in search mode), Right
  * cascades All Programs, Esc clears the search then closes. When a flyout
@@ -2253,7 +2253,7 @@ static void draw_root_menu(void) {
     fill_s(px, w, h, w - 1, 0, 1, h, sh);
     /* the gucOS branding band down the left (the Win95 sidebar): a vertical
      * navy->blue gradient with "gucOS" rotated reading bottom-to-top, and a
-     * sunken divider between the band and the item column (todos/0132). */
+     * sunken divider between the band and the item column (docs/archive/0132). */
     for (int j = 1; j < h - 1; j++) {
         int b = 72 + (j * 140) / h;        /* darker at top, brighter at foot */
         fill_s(px, w, h, 1, j, SM_SIDE_W - 2, 1, rgb(0, 16, b));
@@ -2271,7 +2271,7 @@ static void draw_root_menu(void) {
         if (hl) fill_s(px, w, h, X0 + 2, y, SM_COL_W - 4, SM_ROW_H, sel);
         /* a groove above the fixed section (Settings) and above the bottom
          * All Programs row — the Win95 separators between the program list,
-         * the places, and the bottom-pinned All-Programs gateway (todos/0132) */
+         * the places, and the bottom-pinned All-Programs gateway (docs/archive/0132) */
         if ((sm_left[i].kind == SMI_ALLPROGS ||
              (i > 0 && sm_left[i].kind == SMI_SETTINGS)))
             fill_s(px, w, h, X0 + 6, y - 1, SM_COL_W - 12, 1, sh);
@@ -2305,7 +2305,7 @@ static void draw_root_menu(void) {
  * first-existing-dir shadowing); the fixed section keeps the menu useful
  * even over an empty programs list. */
 static void menu_toggle(void) {
-    ctx_dismiss();                     /* one popup at a time (todos/0091) */
+    ctx_dismiss();                     /* one popup at a time (docs/archive/0091) */
     if (smroot.win) { menu_dismiss(); return; }
     menu_open_root();
 }
@@ -2315,7 +2315,7 @@ static int menu_owns_sid(int32_t sid) {
     return mc_kind == MK_START && ov_owns_sid(sid);
 }
 
-/* Keyboard while the Start menu is open (todos/0078): with a flyout
+/* Keyboard while the Start menu is open (docs/archive/0078): with a flyout
  * chain up the engine owns the keys (arrows/Right/Enter/Esc walk the
  * DEEPEST level; Esc and Left close level-wise, Win95-style — Left at
  * the first flyout returns to the root panel), plus the 0078 first-
@@ -2330,7 +2330,7 @@ static void menu_key(int sym) {
     sm_root_key(sym);
 }
 
-/* ---- the desktop layer (todos/0029; selection & drag todos/0077) ---- */
+/* ---- the desktop layer (docs/archive/0029; selection & drag docs/archive/0077) ---- */
 
 /* Icons flow down the left edge, column-major (Win95), clear of the
  * taskbar strip. */
@@ -2344,7 +2344,7 @@ static int desk_cols(void) {
     return cols < 1 ? 1 : cols;
 }
 
-/* Resolve entry cells (todos/0077): saved positions from .icons win when
+/* Resolve entry cells (docs/archive/0077): saved positions from .icons win when
  * they exist, are in bounds for the CURRENT grid, and don't collide;
  * everything else auto-flows column-major into the free cells — with no
  * .icons file this reproduces the 0029 layout exactly. Display-only: an
@@ -2387,7 +2387,7 @@ static void desk_place(const menu_ent *ents, int n, int *col, int *row) {
     }
 }
 
-/* Persist the whole layout (todos/0077): every current entry gets a line,
+/* Persist the whole layout (docs/archive/0077): every current entry gets a line,
  * pinning the on-screen arrangement; files added later still auto-flow
  * (they're not in the file). Stale lines for removed files just stop
  * matching. Rewritten only on an actual drag-drop. */
@@ -2436,7 +2436,7 @@ static void desk_load(void) {
     if (desk_press) return;            /* never reshuffle under a drag (0077) */
     if (desk_edit >= 0) return;        /* nor under an inline rename (0103) —
                                           the edited index must stay valid */
-    int tf = fo_trash_count() > 0;     /* bin glyph state (todos/0093) */
+    int tf = fo_trash_count() > 0;     /* bin glyph state (docs/archive/0093) */
     if (tf != desk_trash_full) { desk_trash_full = tf; desk_dirty = 1; }
     menu_ent fresh[MAX_DESK];
     int fcol[MAX_DESK], frow[MAX_DESK];
@@ -2467,7 +2467,7 @@ static void desk_load(void) {
     memcpy(desk_row, frow, (size_t)n * sizeof frow[0]);
     desk_n = n;
     /* The entry set (or layout) changed under us: selection indexes are
-     * stale — clear rather than mis-highlight (todos/0077). Our own
+     * stale — clear rather than mis-highlight (docs/archive/0077). Our own
      * .icons rewrite resolves to the cells already shown, so the memcmp
      * above keeps the selection across the post-drag re-read tick. */
     desk_selmask = 0;
@@ -2492,7 +2492,7 @@ static int make_desk(void) {
 }
 
 /* Icon under a desktop point, or -1. The whole cell is the click target;
- * cells are per-icon since free placement (todos/0077). */
+ * cells are per-icon since free placement (docs/archive/0077). */
 static int desk_hit(int x, int y) {
     if (x < DESK_MARGIN || y < DESK_MARGIN || y >= scr_h - BAR_H) return -1;
     int col = (x - DESK_MARGIN) / CELL_W;
@@ -2503,9 +2503,9 @@ static int desk_hit(int x, int y) {
     return -1;
 }
 
-/* Double-click: the same activate() the Start menu uses (todos/0066) —
+/* Double-click: the same activate() the Start menu uses (docs/archive/0066) —
  * runnable files (wasm, #! launchers, links to them) spawn, anything else
- * opens through the openwith associations (todos/0072). */
+ * opens through the openwith associations (docs/archive/0072). */
 static void desk_launch(int idx) {
     if (idx < 0 || idx >= desk_n) return;
     char path[300];
@@ -2513,7 +2513,7 @@ static void desk_launch(int idx) {
     activate(path);
 }
 
-/* Desktop mousedown (todos/0029 double-click, todos/0077 selection):
+/* Desktop mousedown (docs/archive/0029 double-click, docs/archive/0077 selection):
  * launch on a quick second click on the SAME icon (own timestamp check —
  * the global SDL click counter accumulates across windows, so it can't
  * be trusted alone; a held modifier suppresses the pair, so ctrl-click
@@ -2648,7 +2648,7 @@ static void desk_up(float fx, float fy) {
     desk_dirty = 1;
 }
 
-/* Keyboard on the focused desktop (todos/0077): arrows walk the grid
+/* Keyboard on the focused desktop (docs/archive/0077): arrows walk the grid
  * (nearest icon in the pressed direction — least perpendicular offset,
  * then least forward distance), Enter launches an unambiguous SINGLE
  * selection (Enter on a multi-selection is a deliberate no-op: never
@@ -2682,7 +2682,7 @@ static void desk_arrow(int dx, int dy) {
     desk_dirty = 1;
 }
 
-/* Carry a 0077 .icons placement across a rename (todos/0103): rewrite the
+/* Carry a 0077 .icons placement across a rename (docs/archive/0103): rewrite the
  * matching "col row name" line's name in place so the renamed icon keeps its
  * cell. No-op if the file or the entry is absent — the icon just auto-flows
  * under its new name (the "if present" the 0103 plan calls for). */
@@ -2724,7 +2724,7 @@ static void desk_icons_rename(const char *oldn, const char *newn) {
     fclose(f);
 }
 
-/* Open the inline rename editor on icon idx (todos/0103). The Recycle Bin is
+/* Open the inline rename editor on icon idx (docs/archive/0103). The Recycle Bin is
  * never renamable (wm.c recreates it every start). Seeds the buffer with the
  * current name and takes desktop focus so the following keys route here. */
 static void desk_edit_start(int idx) {
@@ -2750,7 +2750,7 @@ static void desk_edit_cancel(void) {
     desk_dirty = 1;
 }
 
-/* Commit the rename (todos/0103): refuse empty / '/'-bearing names and leave
+/* Commit the rename (docs/archive/0103): refuse empty / '/'-bearing names and leave
  * the editor open (the beep-equivalent — no dialog furniture here); an
  * unchanged name just closes it. rename(2) on /root/Desktop, but refuse to
  * clobber an existing target (both files kept, editor stays open — EEXIST),
@@ -2782,7 +2782,7 @@ static void desk_edit_commit(void) {
 }
 
 /* Commit-if-valid, else discard — the click-away / focus-loss path where an
- * invalid name can't just linger the editor open off-screen (todos/0103). */
+ * invalid name can't just linger the editor open off-screen (docs/archive/0103). */
 static void desk_edit_finish(void) {
     if (desk_edit < 0) return;
     desk_edit_commit();
@@ -2834,9 +2834,9 @@ static void desk_key(int sym) {
         }
         return;
     }
-    /* the LIST verbs, resolved through the scheme table (todos/0149;
+    /* the LIST verbs, resolved through the scheme table (docs/archive/0149;
      * keys.h case-folds the shifted keysym): select-all (Explorer's ^A/⌘A)
-     * plus copy/cut/paste (todos/0398 — the same fileops clipboard the
+     * plus copy/cut/paste (docs/archive/0398 — the same fileops clipboard the
      * icon menu drives, which is also how a HOST file paste lands: the
      * page stages the pasted files and forwards this very chord). */
     if (sym >= 32 && sym < 127) {
@@ -2861,7 +2861,7 @@ static void desk_key(int sym) {
     else if (sym == SDLK_DOWN) desk_arrow(0, 1);
 }
 
-/* 1px outline (marquee + drag ghosts, todos/0077). */
+/* 1px outline (marquee + drag ghosts, docs/archive/0077). */
 static void rect_s(uint32_t *px, int sw, int sh, int x, int y, int w, int h,
                    uint32_t col) {
     fill_s(px, sw, sh, x, y, w, 1, col);
@@ -2885,7 +2885,7 @@ static void draw_icon_glyph(uint32_t *px, int w, int h, int ix, int iy,
     uint32_t white = rgb(255, 255, 255), navy = rgb(0, 0, 128);
     fill_s(px, w, h, ix, iy, ICON_W, ICON_W, white);
     switch (kind) {
-    case DK_BIN:                       /* basket (todos/0093): hollow when
+    case DK_BIN:                       /* basket (docs/archive/0093): hollow when
                                           empty, contents block when full */
         fill_s(px, w, h, ix + 4, iy + 4, ICON_W - 8, 3, navy);   /* rim */
         fill_s(px, w, h, ix + 7, iy + 7, 3, ICON_W - 14, navy);  /* walls */
@@ -2894,7 +2894,7 @@ static void draw_icon_glyph(uint32_t *px, int w, int h, int ix, int iy,
         if (desk_trash_full)
             fill_s(px, w, h, ix + 11, iy + 11, ICON_W - 22, ICON_W - 22, navy);
         break;
-    case DK_DIR:                       /* folder tab + body (todos/0185) */
+    case DK_DIR:                       /* folder tab + body (docs/archive/0185) */
         fill_s(px, w, h, ix + 7, iy + 7, (ICON_W - 14) / 2, 4, navy);
         fill_s(px, w, h, ix + 7, iy + 11, ICON_W - 14, ICON_W - 18, navy);
         break;
@@ -2994,7 +2994,7 @@ static void draw_desk(void) {
         draw_icon_glyph(px, w, h, ix, iy, desk[i].kind);
         if (desk[i].is_link)
             fill_s(px, w, h, ix + 3, iy + ICON_W - 11, 8, 8, black);
-        if (i == desk_edit) {          /* inline rename editor (todos/0103):
+        if (i == desk_edit) {          /* inline rename editor (docs/archive/0103):
                                           a sunken white box + black text +
                                           caret over the label cell, sized to
                                           the tail that fits and clamped on. */
@@ -3048,7 +3048,7 @@ static void draw_desk(void) {
     SDL_UpdateWindowSurface(desk_win);
 }
 
-/* ---- context menus (todos/0091) ---- */
+/* ---- context menus (docs/archive/0091) ---- */
 
 /* Dismiss the ctx tracking (the engine tears the ov[] chain down; the
  * leaving track_state resets any keyboard move/size, 0102). */
@@ -3108,8 +3108,8 @@ static void ctx_open_desktop(int x, int y) {
 }
 
 /* Right-click a desktop icon: Open + Cut/Copy of the selection set
- * (todos/0092 — the same format-2 clipboard file list fileman pastes)
- * + Delete to the Recycle Bin (todos/0093) + Rename (todos/0103, the inline
+ * (docs/archive/0092 — the same format-2 clipboard file list fileman pastes)
+ * + Delete to the Recycle Bin (docs/archive/0093) + Rename (docs/archive/0103, the inline
  * label editor — dir launchers rename like any file, the link name IS label).
  * The Recycle Bin icon itself gets its own menu: Open + Empty Recycle
  * Bin (grayed when the store is empty; unconfirmed by design — this
@@ -3144,7 +3144,7 @@ static void ctx_open_icon(int idx, int x, int y) {
 }
 
 /* Cut/Copy every selected icon's path onto the clipboard (fileops.h
- * format-2 file list over the ONE kernel slot, todos/0090 — fileman and
+ * format-2 file list over the ONE kernel slot, docs/archive/0090 — fileman and
  * other wm instances paste it). */
 static void desk_clip(int cut) {
     static char bufs[MAX_DESK][300];   /* off the 64KB wasm stack */
@@ -3162,7 +3162,7 @@ static void desk_clip(int cut) {
         fprintf(stderr, "wm: clipboard set failed: %s\n", strerror(errno));
 }
 
-/* Download the selection to the host (todos/0398): the same selection walk
+/* Download the selection to the host (docs/archive/0398): the same selection walk
  * as desk_clip, but the paths go to the egress seam — the kernel
  * materializes ONE artifact (a lone file's bytes, or one zip for a
  * directory / multi-selection) and the embedder performs the host-side
@@ -3183,7 +3183,7 @@ static void desk_download(void) {
         fprintf(stderr, "wm: download failed: %s\n", strerror(errno));
 }
 
-/* Delete the selection to the Recycle Bin (todos/0093 — recoverable, so
+/* Delete the selection to the Recycle Bin (docs/archive/0093 — recoverable, so
  * no confirm; wm.c has no dialog furniture anyway). The bin itself is
  * skipped; errors go to the service log, the fileman precedent. */
 static void desk_delete(void) {
@@ -3249,9 +3249,9 @@ static void ctx_open_bar(const win_t *w, int bx) {
     ctx_show(bx, scr_h);               /* clamp parks it above the bar */
 }
 
-/* Right-click the empty taskbar strip (todos/0101): the Win95 bar menu —
+/* Right-click the empty taskbar strip (docs/archive/0101): the Win95 bar menu —
  * window-arrangement policy this process owns, plus Properties -> the
- * ctlpanel hub (todos/0089). Anchored at the click x, parked above the bar
+ * ctlpanel hub (docs/archive/0089). Anchored at the click x, parked above the bar
  * by the win_create clamp. */
 static void ctx_open_taskbar(int bx) {
     MenuTbl *t = ctx_begin();
@@ -3291,7 +3291,7 @@ static void ctx_new_entry(int is_dir) {
     desk_dirty = 1;
 }
 
-/* The window system menu (todos/0102): the Win95 Alt+Space menu — the
+/* The window system menu (docs/archive/0102): the Win95 Alt+Space menu — the
  * taskbar-button menu (0101) plus Move/Size rows — anchored at the target
  * window's top-left. Rows gray per the window's state: Restore only when
  * off the floating rect, Move/Maximize disabled while minimized, Size only
@@ -3314,7 +3314,7 @@ static void ctx_open_sysmenu(const win_t *w) {
     ctx_show(w->x, w->y);
 }
 
-/* End a keyboard move/size (todos/0102): optionally revert to the stashed
+/* End a keyboard move/size (docs/archive/0102): optionally revert to the stashed
  * rect, tear the popup grabber down, and hand focus back to the window we
  * were driving (the popup took it at open). */
 static void sys_end(int revert) {
@@ -3340,7 +3340,7 @@ static void sys_end(int revert) {
     }
 }
 
-/* Enter a keyboard move (1) or size (2) mode from the sysmenu (todos/0102).
+/* Enter a keyboard move (1) or size (2) mode from the sysmenu (docs/archive/0102).
  * The popup stays up as the key grabber (do NOT dismiss); arrows nudge the
  * target. Size is refused on a fixed-size window (its row is grayed anyway,
  * so this is defensive). */
@@ -3353,7 +3353,7 @@ static void sys_enter(int mode) {
     sys_x0 = w->x; sys_y0 = w->y; sys_w0 = w->w; sys_h0 = w->h;
 }
 
-/* Arrow-key nudge while a move/size mode is live (todos/0102). Enter
+/* Arrow-key nudge while a move/size mode is live (docs/archive/0102). Enter
  * commits, Esc reverts; the ordinary MOVE/RESIZE ops drive it (the echo
  * re-syncs the model). Non-arrow keys are swallowed so the mode stays
  * modal — only Enter/Esc leave it. */
@@ -3467,7 +3467,7 @@ static void ctx_command(int id) {
     case CM_CASCADE: cascade_windows(); break;   /* taskbar strip (0101) */
     case CM_TILE: tile_windows(); break;
     case CM_MIN_ALL: min_all(); break;
-    case CM_PROPERTIES: {               /* the ctlpanel hub (todos/0089) */
+    case CM_PROPERTIES: {               /* the ctlpanel hub (docs/archive/0089) */
         char *argv[2] = { (char *)"ctlpanel", 0 };
         spawn_path("/bin/ctlpanel", argv, &nkids, "wm");
         break;
@@ -3534,7 +3534,7 @@ static int ctx_owns_sid(int32_t sid) {
     return mc_kind == MK_CTX && ov_owns_sid(sid);
 }
 
-/* ---- Aero Peek (todos/0063) ---- */
+/* ---- Aero Peek (docs/archive/0063) ---- */
 
 static void peek_dismiss(void) {
     if (peek_win) SDL_DestroyWindow(peek_win);
@@ -3611,7 +3611,7 @@ static void peek_show(int32_t sid, int btn_x, int bw) {
     draw_peek();                       /* bare face until the thumb lands */
 }
 
-/* EV_CYCLE (todos/0032): walk focus. dir > 0 focuses the LEAST recently
+/* EV_CYCLE (docs/archive/0032): walk focus. dir > 0 focuses the LEAST recently
  * used window — repeated presses tour the whole ring in LRU order (each
  * FOCUS echo restamps, so the walk converges instead of ping-ponging);
  * dir < 0 focuses the PREVIOUS window (second most recent — the quick
@@ -3644,14 +3644,14 @@ static int make_bar(void) {
     return 0;
 }
 
-/* The screen changed resolution (EV_SCREEN, todos/0023). Re-lay the taskbar
+/* The screen changed resolution (EV_SCREEN, docs/archive/0023). Re-lay the taskbar
  * by destroy + recreate (there is no client-initiated resize, by 0019's
  * design), give focus back (a create steals it), and re-clamp windows so
  * every title bar stays reachable and clear of the taskbar. Policy: clamp,
  * don't re-cascade — no placement churn on a mere resize. */
 static void screen_refit(win_t *w) {
-    if (w->maximized) { maximize(w); return; }   /* re-fit (todos/0025) */
-    if (w->snapped) { snap_place(w); return; }   /* re-fit (todos/0095) */
+    if (w->maximized) { maximize(w); return; }   /* re-fit (docs/archive/0025) */
+    if (w->snapped) { snap_place(w); return; }   /* re-fit (docs/archive/0095) */
     int nx = w->x, ny = w->y;
     if (nx > scr_w - 40) nx = scr_w - 40;
     if (nx < 40 - w->dst_w) nx = 40 - w->dst_w;   /* on-screen size (0024) */
@@ -3665,14 +3665,14 @@ static void screen_refit(win_t *w) {
 
 static void screen_changed(void) {
     menu_dismiss();                    /* geometry is stale; reopen re-lays */
-    run_dismiss();                     /* likewise (todos/0078) */
-    peek_dismiss();                    /* likewise (todos/0063) */
-    ctx_dismiss();                     /* likewise (todos/0091) */
-    date_dismiss();                    /* likewise (todos/0101) */
-    snapprev_dismiss();                /* likewise (todos/0095) */
+    run_dismiss();                     /* likewise (docs/archive/0078) */
+    peek_dismiss();                    /* likewise (docs/archive/0063) */
+    ctx_dismiss();                     /* likewise (docs/archive/0091) */
+    date_dismiss();                    /* likewise (docs/archive/0101) */
+    snapprev_dismiss();                /* likewise (docs/archive/0095) */
     saver_dismiss();                   /* geometry is stale; the idle clock
                                           re-raises it in timeout seconds
-                                          (todos/0096) */
+                                          (docs/archive/0096) */
     if (desk_win) SDL_DestroyWindow(desk_win);   /* recreate at the new size */
     desk_win = NULL;
     if (bar_win) SDL_DestroyWindow(bar_win);
@@ -3688,7 +3688,7 @@ static void screen_changed(void) {
     for (hidden_win *n = hidden_wins; n; n = n->next) screen_refit(&n->value);
 }
 
-/* ---- window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) ----
+/* ---- window overview / Exposé (docs/EXPOSE-MISSION-CONTROL.md) ----
  * The policy half of the 0025/0095 mechanism-split: the kernel composites live
  * miniatures at the cell rects WE compute and routes hover/pick; wm.c owns the
  * candidate set + grid layout + what a pick does. (overview_active is declared
@@ -3698,7 +3698,7 @@ static void screen_changed(void) {
  * every tracked window (wins[], LAUNCH order so the grid reads like the taskbar
  * — NOT recency; minimized INCLUDED, "find the window I lost" being the point;
  * furniture and foreign borderless popups never enter wins[], so nothing to
- * filter). Grid is aspect-fit (todos/EXPOSE §3): cols ~ sqrt(N*W/H), each
+ * filter). Grid is aspect-fit (docs/EXPOSE §3): cols ~ sqrt(N*W/H), each
  * window letterboxed into its cell at scale <= 1 (never magnified), last row
  * centered. Returns the candidate count (0 = nothing to show). */
 static int overview_layout_send(void) {
@@ -3736,7 +3736,7 @@ static int overview_layout_send(void) {
         /* Aspect-fit the window's ON-SCREEN size into the cell, scale <= 1
          * (never magnify a small window), centered. It is a presentation rect,
          * not a SET_DST — no interaction with the scaled/configurable
-         * exclusivity (todos/0024). */
+         * exclusivity (docs/archive/0024). */
         int sw = w->dst_w > 0 ? w->dst_w : (w->w > 0 ? w->w : cellW);
         int sh = w->dst_h > 0 ? w->dst_h : (w->h > 0 ? w->h : cellH);
         double sc = (double)cellW / (double)sw;
@@ -3803,7 +3803,7 @@ static void overview_pick(int32_t sid) {
     wmp_send(sock, WMP_RESTACK, rs, 2);             /* raise to top of its layer */
 }
 
-/* WMP_EV_HOTKEY (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4): a non-reserved
+/* WMP_EV_HOTKEY (docs/KEYBINDING-OVERRIDE-SYSTEM.md §4): a non-reserved
  * grab-table entry matched. Dispatch by KTOK_* token to the SAME policy
  * handlers the legacy events reach — which still arrive from wmctl commands and,
  * pre-GRAB_SET at startup, from the kernel's default table, so wm.c keeps its
@@ -3875,7 +3875,7 @@ static void handle_event(wmp_hdr *h) {
         }
         if (r.pid == own_pid) {        /* our own furniture: park by title */
             if (r.flags & WMP_F_ANCHORED) {
-                /* A menucore chain level (todos/0282): kernel-positioned
+                /* A menucore chain level (docs/archive/0282): kernel-positioned
                  * from its owner + (dx,dy), layer-inherited, re-slotted
                  * above the owner by _wmZNormalize, never focused — nothing
                  * to park, and policy ops would EPERM (0256). The echo
@@ -3893,7 +3893,7 @@ static void handle_event(wmp_hdr *h) {
                 smroot.sid = r.sid;
                 int32_t a[3] = { r.sid, smroot.x, smroot.y };
                 wmp_send(sock, WMP_MOVE, a, 3);
-                /* Top layer like the bar (todos/0038) — created later,
+                /* Top layer like the bar (docs/archive/0038) — created later,
                  * so the stable sort keeps the menu above it. */
                 int32_t ly[2] = { r.sid, 1 };
                 wmp_send(sock, WMP_SET_LAYER, ly, 2);
@@ -3933,7 +3933,7 @@ static void handle_event(wmp_hdr *h) {
                  * otherwise leave it under the earlier-created taskbar. */
                 int32_t f[1] = { r.sid };
                 wmp_send(sock, WMP_FOCUS, f, 1);
-            } else if (strncmp(r.title, "peek", 5) == 0) {   /* todos/0063 */
+            } else if (strncmp(r.title, "peek", 5) == 0) {   /* docs/archive/0063 */
                 if (!peek_win) return;         /* dismissed before the echo */
                 peek_sid = r.sid;
                 int32_t a[3] = { r.sid, peek_x, scr_h - BAR_H - PEEK_H - 4 };
@@ -3947,11 +3947,11 @@ static void handle_event(wmp_hdr *h) {
                         wmp_send(sock, WMP_FOCUS, f, 1);
                         break;
                     }
-            } else if (strncmp(r.title, "desktop", 8) == 0) {   /* todos/0029 */
+            } else if (strncmp(r.title, "desktop", 8) == 0) {   /* docs/archive/0029 */
                 desk_sid = r.sid;
                 int32_t a[3] = { r.sid, 0, 0 };
                 wmp_send(sock, WMP_MOVE, a, 3);
-                /* Bottom layer (todos/0038, was RESTACK place=1): pinned —
+                /* Bottom layer (docs/archive/0038, was RESTACK place=1): pinned —
                  * a lowered app window can no longer sink under it. */
                 int32_t ly[2] = { r.sid, -1 };
                 wmp_send(sock, WMP_SET_LAYER, ly, 2);
@@ -3966,7 +3966,7 @@ static void handle_event(wmp_hdr *h) {
             } else if (strncmp(r.title, "ctxmenu", 7) == 0) {   /* 0091 */
                 /* the ROOT level only — it opens at the pointer with no
                  * owner surface; chain levels ("ctxmenu2"+) are anchored
-                 * children handled above (todos/0282) */
+                 * children handled above (docs/archive/0282) */
                 if (r.title[7] || mc_kind != MK_CTX || !ov[0].win) return;
                 ov[0].sid = r.sid;
                 int32_t a[3] = { r.sid, ov[0].x, ov[0].y };
@@ -3991,7 +3991,7 @@ static void handle_event(wmp_hdr *h) {
                 bar_sid = r.sid;
                 int32_t a[3] = { r.sid, 0, scr_h - BAR_H };
                 wmp_send(sock, WMP_MOVE, a, 3);
-                /* Always-on-top (todos/0038): windows dragged onto the strip
+                /* Always-on-top (docs/archive/0038): windows dragged onto the strip
                  * slide UNDER the bar; its buttons stay clickable. */
                 int32_t ly[2] = { r.sid, 1 };
                 wmp_send(sock, WMP_SET_LAYER, ly, 2);
@@ -4016,7 +4016,7 @@ static void handle_event(wmp_hdr *h) {
         }
         if (r.flags & WMP_F_BORDERLESS) return;   /* not ours to manage */
         if (r.flags & WMP_F_TRANSIENT) {
-            /* Owned/modal popup (todos/0281): a real framed, focusable window
+            /* Owned/modal popup (docs/archive/0281): a real framed, focusable window
              * — a MessageBox or dialog — but Win95 never lists owned dialogs
              * in the taskbar, so it stays OUT of wins[]: no taskbar button,
              * and cycle/cascade/tile/minimize-all (all wins[] walks) skip it.
@@ -4059,7 +4059,7 @@ static void handle_event(wmp_hdr *h) {
         if (sys_mode && p[0] == sys_target) sys_end(0);   /* target gone (0102) */
         if (p[0] == desk_sid) { desk_sid = 0; desk_focused = 0; }   /* (0077) */
         /* Compact, don't swap-remove: taskbar buttons keep launch order
-         * across any close (todos/0031 — the Win95 behavior). */
+         * across any close (docs/archive/0031 — the Win95 behavior). */
         for (int i = 0; i < nwins; i++)
             if (wins[i].sid == p[0]) {
                 memmove(&wins[i], &wins[i + 1], (size_t)(nwins - i - 1) * sizeof wins[0]);
@@ -4078,18 +4078,18 @@ static void handle_event(wmp_hdr *h) {
          * sid (EV_CREATED is emitted first, so the sid is known). The
          * run dialog follows the same rule, gated on its echo having
          * landed: between run_open() and the echo, the focus fall from
-         * the menu teardown must not kill it (todos/0078). The root-echo
+         * the menu teardown must not kill it (docs/archive/0078). The root-echo
          * gate matters here too since 0091: menu_toggle's ctx_dismiss
          * makes focus fall to an app window, and that EV_FOCUS must not
          * kill the menu it just opened. */
         if (smroot.win && smroot.sid && !menu_owns_sid(p[0])) menu_dismiss();
         if (run_win && run_sid && p[0] != run_sid) run_dismiss();
         /* Focus leaving the context menu dismisses it — outside-click on
-         * any app window lands here (todos/0091). Gated on the root echo
+         * any app window lands here (docs/archive/0091). Gated on the root echo
          * having arrived, the run-dialog precedent. */
         if (__mc.open && mc_kind == MK_CTX && ov[0].sid &&
             !ctx_owns_sid(p[0])) ctx_dismiss();
-        /* Desktop focus tracking (todos/0077): keys route to the icon grid
+        /* Desktop focus tracking (docs/archive/0077): keys route to the icon grid
          * only while it holds focus; losing it also resets the tracked
          * modifiers (their keyups would land elsewhere). */
         if (desk_sid) {
@@ -4111,7 +4111,7 @@ static void handle_event(wmp_hdr *h) {
         }
         break;
     }
-    case WMP_EV_CYCLE: {               /* window cycling (todos/0032) */
+    case WMP_EV_CYCLE: {               /* window cycling (docs/archive/0032) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_CYCLE read");
         cycle(p[0]);
         break;
@@ -4149,11 +4149,11 @@ static void handle_event(wmp_hdr *h) {
         win_t *w = find(p[0]);
         if (!w) for (hidden_win *n = hidden_wins; n; n = n->next)
             if (n->value.sid == p[0]) { w = &n->value; break; }
-        /* configure implies resizable: dst tracks the buffer (todos/0024) */
+        /* configure implies resizable: dst tracks the buffer (docs/archive/0024) */
         if (w) { w->w = p[1]; w->h = p[2]; w->dst_w = p[1]; w->dst_h = p[2]; }
         break;
     }
-    case WMP_EV_SCALED: {               /* dst viewport changed (todos/0024) */
+    case WMP_EV_SCALED: {               /* dst viewport changed (docs/archive/0024) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SCALED read");
         win_t *w = find(p[0]);
         if (!w) for (hidden_win *n = hidden_wins; n; n = n->next)
@@ -4166,18 +4166,18 @@ static void handle_event(wmp_hdr *h) {
         scale_request(p[0], p[1], p[2]);
         break;
     }
-    case WMP_EV_TITLE_ACTIVATE: {       /* maximize toggle (todos/0025) */
+    case WMP_EV_TITLE_ACTIVATE: {       /* maximize toggle (docs/archive/0025) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_TITLE_ACTIVATE read");
         title_activate(p[0]);
         break;
     }
-    case WMP_EV_SNAP_EDGE: {            /* mid-drag edge zone (todos/0095) */
+    case WMP_EV_SNAP_EDGE: {            /* mid-drag edge zone (docs/archive/0095) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SNAP_EDGE read");
         if (p[1] > 0 && find(p[0])) snapprev_show(p[1]);
         else snapprev_dismiss();
         break;
     }
-    case WMP_EV_SNAP_DROP: {            /* title-drag release (todos/0095) */
+    case WMP_EV_SNAP_DROP: {            /* title-drag release (docs/archive/0095) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SNAP_DROP read");
         snapprev_dismiss();
         win_t *w = find(p[0]);
@@ -4235,7 +4235,7 @@ static void handle_event(wmp_hdr *h) {
         if (w && !w->minimized) ctx_open_sysmenu(w);
         break;
     }
-    case WMP_EV_SCREEN: {               /* dynamic resolution (todos/0023) */
+    case WMP_EV_SCREEN: {               /* dynamic resolution (docs/archive/0023) */
         if (wmp_read_all(sock, p, (int)h->plen) != 0) die("EV_SCREEN read");
         scr_w = p[0]; scr_h = p[1];
         screen_changed();
@@ -4250,7 +4250,7 @@ static void handle_event(wmp_hdr *h) {
 /* Drain the socket: replies (fire-and-forget acks) are skipped, events
  * update the model. select() keeps the loop non-blocking. Returns the
  * frame count consumed — the event loop's "did anything happen" signal
- * (todos/0168). */
+ * (docs/archive/0168). */
 static int drain_socket(void) {
     int n = 0;
     for (;;) {
@@ -4271,17 +4271,17 @@ static int drain_socket(void) {
 
 /* ---- the taskbar ---- */
 
-/* Left edge of the right-aligned clock cell (todos/0101): the Show Desktop
+/* Left edge of the right-aligned clock cell (docs/archive/0101): the Show Desktop
  * sliver sits past it, so the button strip and clock both budget against
  * this, not bar_w. */
 static int clock_left(void) { return bar_w - SHOWDESK_W - CLOCK_W; }
 
 /* Left edge of the app-button strip: past the Start strip AND the Task-View
- * (overview) button right of it (Win10 position, todos/EXPOSE). btn_width /
+ * (overview) button right of it (Win10 position, docs/EXPOSE). btn_width /
  * draw_bar / bar_click / bar_rclick / bar_motion all budget from here. */
 static int strip_left(void) { return START_W + TASKVIEW_W; }
 
-/* ---- the clock-hover date tooltip (todos/0101) ---- */
+/* ---- the clock-hover date tooltip (docs/archive/0101) ---- */
 
 static void date_dismiss(void) {
     if (date_win) SDL_DestroyWindow(date_win);
@@ -4336,7 +4336,7 @@ static void date_toggle(void) {
 }
 
 /* Current button width: BTN_W until the row would run past the clock,
- * then shrink to fit (Win95 overflow, todos/0031). Drawing and click
+ * then shrink to fit (Win95 overflow, docs/archive/0031). Drawing and click
  * mapping share this. */
 static int btn_width(void) {
     if (nwins == 0) return BTN_W;
@@ -4347,7 +4347,7 @@ static int btn_width(void) {
     return w;
 }
 
-/* Taskbar hover (todos/0063 Aero Peek): motion over a drawn button raises
+/* Taskbar hover (docs/archive/0063 Aero Peek): motion over a drawn button raises
  * the live thumbnail popup for its window; anywhere else on the bar drops
  * it. An open menu wins every conflict — both raises below go through
  * peek_show/date_show, which stand down on popup_holds_focus(), so neither
@@ -4378,11 +4378,11 @@ static void bar_click(float fx) {
     peek_dismiss();                    /* a click acts; the preview drops */
     if ((int)fx < START_W) { date_dismiss(); menu_toggle(); return; }  /* Start */
     menu_dismiss();                    /* any other taskbar click dismisses */
-    ctx_dismiss();                     /* likewise (todos/0091) */
-    /* The Task-View button right of Start (todos/EXPOSE): toggle the overview
+    ctx_dismiss();                     /* likewise (docs/archive/0091) */
+    /* The Task-View button right of Start (docs/EXPOSE): toggle the overview
      * straight to layout+SET — no self-round-trip through the kernel needed. */
     if ((int)fx < strip_left()) { date_dismiss(); overview_toggle(); return; }
-    /* Show Desktop sliver, then the clock cell (todos/0101): the sliver
+    /* Show Desktop sliver, then the clock cell (docs/archive/0101): the sliver
      * toggles minimize-all/restore, the clock toggles the date tooltip. */
     if ((int)fx >= bar_w - SHOWDESK_W) { date_dismiss(); show_desktop_toggle(); return; }
     if ((int)fx >= clock_left()) { date_toggle(); return; }
@@ -4417,7 +4417,7 @@ static void bar_rclick(float fx) {
     ctx_open_taskbar((int)fx);         /* empty strip / clock / show-desktop */
 }
 
-/* Present the taskbar only when its pixels actually changed (todos/0168
+/* Present the taskbar only when its pixels actually changed (docs/archive/0168
  * piece D, recovered from the reverted 0160 attempt). frame_cb redraws the
  * bar every wake, but SDL_UpdateWindowSurface bumps the surface's frame-seq
  * UNCONDITIONALLY — so an unconditional present churned the compositor's
@@ -4451,7 +4451,7 @@ static void draw_bar(void) {
              sh = rgb(96, 96, 96), txt = rgb(0, 0, 0);
     fill(px, 0, 0, bar_w, BAR_H, face);
     fill(px, 0, 0, bar_w, 1, hi);                       /* top edge highlight */
-    /* The Start button (todos/0028): raised normally, sunken while open. */
+    /* The Start button (docs/archive/0028): raised normally, sunken while open. */
     {
         int down = smroot.win != NULL;
         fill(px, 2, 3, START_W - 4, BAR_H - 6, down ? rgb(222, 222, 222) : face);
@@ -4461,7 +4461,7 @@ static void draw_bar(void) {
         fill(px, START_W - 3, 3, 1, BAR_H - 6, down ? hi : sh);
         draw_text(px, 8, (BAR_H - CHROME_CAP) / 2, "START", txt);
     }
-    /* The Task-View / overview button (todos/EXPOSE): right of Start, a small
+    /* The Task-View / overview button (docs/EXPOSE): right of Start, a small
      * three-pane glyph; sunken while the overview is active. */
     {
         int bx = START_W, down = overview_active;
@@ -4476,7 +4476,7 @@ static void draw_bar(void) {
         fill(px, gx + 10, gy, 6, 6, g);           /* top-right */
         fill(px, gx + 3, gy + 8, 10, 6, g);       /* bottom-center */
     }
-    int bw = btn_width();              /* overflow shrink (todos/0031) */
+    int bw = btn_width();              /* overflow shrink (docs/archive/0031) */
     int cx = clock_left();
     for (int i = 0; i < nwins; i++) {
         int x = strip_left() + BTN_GAP + i * (bw + BTN_GAP) + 2;
@@ -4496,9 +4496,9 @@ static void draw_bar(void) {
         draw_text(px, x + 6, (BAR_H - CHROME_CAP) / 2, label,
                   wins[i].minimized ? rgb(80, 80, 80) : txt);
     }
-    /* The clock (todos/0031): right-aligned HH.MM, local time; draw_bar
+    /* The clock (docs/archive/0031): right-aligned HH.MM, local time; draw_bar
      * runs per frame, so it updates on the minute by construction. Now left
-     * of the Show Desktop sliver (todos/0101). */
+     * of the Show Desktop sliver (docs/archive/0101). */
     {
         time_t now = time(NULL);
         struct tm *tm = localtime(&now);
@@ -4506,7 +4506,7 @@ static void draw_bar(void) {
         snprintf(hhmm, sizeof hhmm, "%02d.%02d", tm->tm_hour, tm->tm_min);
         draw_text(px, cx + 8, (BAR_H - CHROME_CAP) / 2, hhmm, txt);
     }
-    /* The Show Desktop sliver (todos/0101): a thin Win7 affordance at the
+    /* The Show Desktop sliver (docs/archive/0101): a thin Win7 affordance at the
      * far right edge, a raised divider then a strip that reads pressed while
      * a stash is held (i.e. the desktop is currently shown). */
     {
@@ -4522,21 +4522,21 @@ static void draw_bar(void) {
     bar_present();                     /* present only on change (0168/0160) */
 }
 
-/* One iteration of the event loop (todos/0168 renamed this from a per-rAF
+/* One iteration of the event loop (docs/archive/0168 renamed this from a per-rAF
  * frame callback — it now runs per WAKE: input, socket data, or the park
  * timeout, ~1/s idle). Returns nothing; main() parks between calls. */
 static void frame_cb(void) {
     int activity = drain_socket();
     reap_kids(&nkids);
     uint64_t now_ms = SDL_GetTicks();
-    /* Coarse /root/Desktop watch (todos/0029): one readdir per second of
+    /* Coarse /root/Desktop watch (docs/archive/0029): one readdir per second of
      * wall clock — the loop wakes at least that often (the 1s park), and
      * no watch API exists or is needed. */
     if (now_ms - desk_poll_ms >= 1000) { desk_poll_ms = now_ms; desk_load(); }
-    /* The screensaver's idle poll rides the same cadence (todos/0096). */
+    /* The screensaver's idle poll rides the same cadence (docs/archive/0096). */
     if (now_ms - saver_poll_ms >= 1000) { saver_poll_ms = now_ms; saver_poll(); }
     /* Rebuild+push the kernel key-grab table when scheme/overrides change
-     * (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4) — same 1 Hz config cadence. */
+     * (docs/KEYBINDING-OVERRIDE-SYSTEM.md §4) — same 1 Hz config cadence. */
     if (now_ms - grab_poll_ms >= 1000) { grab_poll_ms = now_ms; grab_table_push(); }
     /* Many windows, one queue: dispatch by windowID (0028/0029/0063/0078).
      * Menu columns and the run dialog come and go inside handlers, so
@@ -4546,7 +4546,7 @@ static void frame_cb(void) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         activity = 1;
-        /* A running screensaver swallows the waking input (todos/0096):
+        /* A running screensaver swallows the waking input (docs/archive/0096):
          * fullscreen on the top layer and holding focus, it receives every
          * pointer and key event — any of them dismisses. */
         if (saver_win &&
@@ -4570,11 +4570,11 @@ static void frame_cb(void) {
             } else if (desk_win && e.button.windowID == did) {
                 desk_edit_finish();    /* click-away commits the rename (0103) */
                 menu_dismiss();        /* a desktop click dismisses (0029) */
-                run_dismiss();         /* likewise (todos/0078) */
-                peek_dismiss();        /* likewise (todos/0063) */
+                run_dismiss();         /* likewise (docs/archive/0078) */
+                peek_dismiss();        /* likewise (docs/archive/0063) */
                 if (e.button.button == 1) {
-                    ctx_dismiss();     /* likewise (todos/0091) */
-                    /* Click-to-focus for the desktop (todos/0077): the
+                    ctx_dismiss();     /* likewise (docs/archive/0091) */
+                    /* Click-to-focus for the desktop (docs/archive/0077): the
                      * kernel exempts borderless surfaces, so the policy
                      * asks — modifier keyups and grid navigation keys
                      * must reach this process. */
@@ -4584,7 +4584,7 @@ static void frame_cb(void) {
                     }
                     desk_down(e.button.x, e.button.y, e.button.timestamp);
                 } else if (e.button.button == 3) {
-                    /* Right-click (todos/0091): an icon gets its menu —
+                    /* Right-click (docs/archive/0091): an icon gets its menu —
                      * selecting it alone first unless already in the set
                      * (the Win95 rule) — empty desktop gets the New/Sort/
                      * Refresh/Display one. No drag, no dblclick pairing. */
@@ -4647,7 +4647,7 @@ static void frame_cb(void) {
                 pkid = peek_win ? SDL_GetWindowID(peek_win) : 0;
             }
         } else if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) {
-            /* Modifier tracking (todos/0077): by keysym, both edges —
+            /* Modifier tracking (docs/archive/0077): by keysym, both edges —
              * pointer records carry no mod word, so ctrl/shift-click
              * reads these. */
             int down = e.type == SDL_EVENT_KEY_DOWN;
@@ -4655,10 +4655,10 @@ static void frame_cb(void) {
             if (k == SDLK_LCTRL || k == SDLK_RCTRL) mod_ctrl = down;
             else if (k == SDLK_LSHIFT || k == SDLK_RSHIFT) mod_shift = down;
             else if (k == SDLK_LGUI || k == SDLK_RGUI) mod_gui = down;
-            /* Keyboard (todos/0078): an open context menu owns the keys
-             * first (its root holds focus — todos/0091); then the Start
+            /* Keyboard (docs/archive/0078): an open context menu owns the keys
+             * first (its root holds focus — docs/archive/0091); then the Start
              * menu, the run dialog, and the focused desktop's icon grid
-             * (todos/0077), in that order. */
+             * (docs/archive/0077), in that order. */
             if (down) {
                 if (sys_mode || (__mc.open && mc_kind == MK_CTX)) ctx_key(k);
                 else if (smroot.win) menu_key(k);
@@ -4667,7 +4667,7 @@ static void frame_cb(void) {
             }
         } else if (e.type == SDL_EVENT_QUIT) exit(0);
     }
-    /* Aero Peek housekeeping (todos/0063): keep the thumbnail live while
+    /* Aero Peek housekeeping (docs/archive/0063): keep the thumbnail live while
      * the popup is up; drop it once nothing has hovered it for a while.
      * RE-READ the clock here: now_ms is from frame entry, but the hover/
      * refresh stamps are written DURING the event handling above
@@ -4684,14 +4684,14 @@ static void frame_cb(void) {
             peek_request();
         }
     }
-    /* The date tooltip (todos/0101): a hover (unpinned) drops once the
+    /* The date tooltip (docs/archive/0101): a hover (unpinned) drops once the
      * pointer has been off the clock for a while — the wm only sees motion
      * over its own windows, so this backstop mirrors PEEK_IDLE_MS. A pinned
      * (click-opened) tooltip stays until clicked away. */
     if (date_win && !date_pinned && hk_ms - date_hover_ms >= PEEK_IDLE_MS)
         date_dismiss();
     draw_bar();
-    /* Popup furniture redraws on ACTIVITY only (todos/0168): its content
+    /* Popup furniture redraws on ACTIVITY only (docs/archive/0168): its content
      * changes exclusively in the event/socket handlers above — an idle
      * 1s-tick wake must not re-present a static menu (present churn keeps
      * the 0169 compositor awake). */
@@ -4705,7 +4705,7 @@ static void frame_cb(void) {
     draw_saver();                      /* every wake: frame-paced while live (0096) */
 }
 
-/* The Recycle Bin's desktop presence (todos/0093): the trash store dirs
+/* The Recycle Bin's desktop presence (docs/archive/0093): the trash store dirs
  * plus a /root/Desktop launcher script — double-click opens the store in
  * fileman, the shared activate() path (a #! script IS the icon, no wm.c
  * launch special case). Recreated every wm start, so the bin can't be
@@ -4744,7 +4744,7 @@ int main(void) {
     scr_w = dims[0]; scr_h = dims[1];
 
     /* Push the key-grab table BEFORE the loop so the active scheme is in
-     * effect from boot (todos/KEYBINDING-OVERRIDE-SYSTEM.md §4) — otherwise
+     * effect from boot (docs/KEYBINDING-OVERRIDE-SYSTEM.md §4) — otherwise
      * the macos scheme would spend the first poll interval on the kernel
      * default (windows) table. In the windows scheme this is behaviour-
      * identical to that default, so it changes nothing there. */
@@ -4765,13 +4765,13 @@ int main(void) {
         fatal_sdl(2, "cannot create the desktop window");
     if (make_bar() != 0)
         fatal_sdl(2, "cannot create the taskbar window");
-    /* Desktop is up: the startup chime (todos/0094; sounds.h fire-and-
+    /* Desktop is up: the startup chime (docs/archive/0094; sounds.h fire-and-
      * forget — the kernel drains the clip, pumpless kernels drop it).
      * Deliberately per wm start, not per boot: a `wm &` respawn is a new
      * session, like a Windows logon. */
     snd_play_event("SystemStart");
-    /* Event-driven main loop (todos/0168, IDLE-POWER piece W; unified
-     * wait todos/0178): wm was a frame-callback app — 60 wakes/s whether
+    /* Event-driven main loop (docs/archive/0168, IDLE-POWER piece W; unified
+     * wait docs/archive/0178): wm was a frame-callback app — 60 wakes/s whether
      * or not anything happened, and the one app that would forever keep
      * the 0169 compositor from parking. Each iteration handles whatever
      * woke it (frame_cb drains the socket AND the SDL queue), then parks

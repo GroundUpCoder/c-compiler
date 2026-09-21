@@ -1,4 +1,4 @@
-/* filepick — the out-of-process file chooser (todos/0433).
+/* filepick — the out-of-process file chooser (docs/archive/0433).
  *
  * One GetOpenFileNameW call wrapped in argv: `filepick [--title T]
  * [--dir D]` raises the comdlg32 file dialog and reports the verdict

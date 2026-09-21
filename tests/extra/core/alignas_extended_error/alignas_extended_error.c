@@ -2,7 +2,7 @@
 // implementation-defined. This compiler HONORS them (data section for static
 // storage, over-aligned frame for automatic) rather than rejecting — matching
 // clang. Previously `_Alignas(16)` was rejected "exceeds maximum supported
-// alignment of 8" (todos/0194).
+// alignment of 8" (docs/archive/0194).
 #include <stdio.h>
 #include <stdint.h>
 _Alignas(16) int x;

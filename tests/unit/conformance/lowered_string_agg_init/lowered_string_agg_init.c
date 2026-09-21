@@ -4,7 +4,7 @@
 // fallback as B[0] = <literal address low byte>, and wide-string
 // per-element stores indexed the literal's little-endian BYTES by element
 // index (u"XY" -> {88,0,89}). Found in the 2026-07 fresh-eyes hunt
-// (todos/0206); the config's --force-dispatch-loop forces the lowering.
+// (docs/archive/0206); the config's --force-dispatch-loop forces the lowering.
 // C11: 6.7.9p14/p15 (string-literal array init, optionally braced).
 // EXPECT: matches gcc/clang; identical output with and without lowering.
 #include <stdio.h>

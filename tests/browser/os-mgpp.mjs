@@ -1,4 +1,4 @@
-// MagicPointPlus browser acceptance (todos/0272): boot the reference OS page
+// MagicPointPlus browser acceptance (docs/archive/0272): boot the reference OS page
 // in headless Chromium and drive /bin/mgpp — the -DMGPP fork of /bin/mgp — with
 // REAL mouse clicks and arrow keys through the compositor, proving the new
 // navigation end-to-end:

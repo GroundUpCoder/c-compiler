@@ -1,4 +1,4 @@
-/* tchar.h — the TCHAR CRT surface for the port corpus (todos/0060).
+/* tchar.h — the TCHAR CRT surface for the port corpus (docs/archive/0060).
  *
  * Deviation from Windows, on purpose: there _tcslen is a macro onto the
  * 16-bit-wchar_t msvcrt (wcslen). This libc's wchar_t is 4 bytes, so the

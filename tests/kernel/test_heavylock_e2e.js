@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// The heavy-test host lock guards the BOOT, not a caller list (todos/0342,
-// which also closed todos/0303).
+// The heavy-test host lock guards the BOOT, not a caller list (docs/archive/0342,
+// which also closed docs/archive/0303).
 //
 // The 2026-07-25 OOM guard used to live only in the two suite runners; the
 // documented single-file invocation (`node tests/kernel/<e2e>.js`, a bare
@@ -15,7 +15,7 @@
 // no code seam. The stand-in holder is THIS process's pid — alive by
 // construction, no second 4 GB boot. Leg 2 is the RED the acceptance demands
 // (a guard whose failure path was never exercised is not a guard — the
-// todos/0341 rule); legs 1/3/4/6 are the GREEN.
+// docs/archive/0341 rule); legs 1/3/4/6 are the GREEN.
 //
 // Leg 7's vehicle is os-boots.mjs, not the design table's os-minimal.mjs:
 // os-minimal runs a real tools/mkpkg.js build BEFORE it reaches the harness
@@ -157,7 +157,7 @@ writeLock(process.pid, 'stand-in holder');
 }
 
 // ---- leg 8: --wait-lock=SECS exits 3 at the deadline, loudly ----
-// (The holder never frees. The wait must print its status line — todos/0171:
+// (The holder never frees. The wait must print its status line — docs/archive/0171:
 // a wait is never silent — and the refusal must say the deadline fired.)
 writeLock(process.pid, 'stand-in holder');
 {

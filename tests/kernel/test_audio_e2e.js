@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Audio mixer end-to-end (todos/0017): a REAL C SDL program compiled by
+// Audio mixer end-to-end (docs/archive/0017): a REAL C SDL program compiled by
 // compiler.js runs as a worker_thread under the kernel; its
 // SDL_OpenAudioDeviceStream becomes a kernel mixer stream (host.js
 // createSurfaceSDL audio, AUDIO_OPEN handshake over the FIFO channel).

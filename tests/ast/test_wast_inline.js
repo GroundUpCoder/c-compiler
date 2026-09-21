@@ -1,6 +1,6 @@
 'use strict';
 
-// JS-level unit tests for the WAST whole-body inliner (todos/0201) —
+// JS-level unit tests for the WAST whole-body inliner (docs/archive/0201) —
 // transform mechanics on hand-built node lists, one pinned case per
 // REFUSAL category, and end-to-end C execution checks (the SameBoy
 // framebuffer-checksum interlock in tests/bench is the integration
@@ -31,7 +31,7 @@
 //   budgetCallee (real-node cap, WSrcLoc excluded), budgetCaller
 //   (growth ceiling), and enabled:false.
 //
-// Stage 3c additions (todos/0214):
+// Stage 3c additions (docs/archive/0214):
 //   - inline hints: fnMeta.noinline hard refusal (beats always_inline),
 //     fnMeta.alwaysInline size-budget bypass (localCap still applies),
 //     fnMeta.inlineHint -> hintCalleeCap
@@ -391,7 +391,7 @@ refusalCase('budgetCallee', 'budgetCallee', (w) => {
     b.i32Const(0); b.ret();
   });
   const caller = addFn(w, { params: [], results: [] }, b => { b.call(f); b.drop(); b.ret(); });
-  // Rooting the callee disables the single-use bypass (todos/0214) so
+  // Rooting the callee disables the single-use bypass (docs/archive/0214) so
   // the budget mechanics stay pinned here; the bypass has its own cases.
   w.exports = [{ name: 'f', kind: 0x00, index: f }];
   return { callee: f, caller };
@@ -465,7 +465,7 @@ refusalCase('budgetCallee', 'budgetCallee', (w) => {
 // budgetLocals: each site adds k params + ALL callee locals to the
 // caller — a tiny-BODY callee with a big locals vector must be refused
 // before the caller crosses localCap (the wasm engine hard-fails at
-// 50,000 locals: "local count too large" — todos/0209). Body-size
+// 50,000 locals: "local count too large" — docs/archive/0209). Body-size
 // budgets alone can't see this (ext_regex's ~12.5k-local helper).
 refusalCase('budgetLocals', 'budgetLocals', (w) => {
   const f = addFn(w, { params: [], results: [WT_I32], locals: [{ type: WT_I32, count: 200 }] },
@@ -493,7 +493,7 @@ refusalCase('budgetLocals', 'budgetLocals', (w) => {
      `inlined=${st.inlined} budgetLocals=${st.refused.budgetLocals} gLocals=${gLocals}`);
 }
 
-// ---- L. inline hints (todos/0214) ----
+// ---- L. inline hints (docs/archive/0214) ----
 
 // noinline: hard refusal — even for a deletable single-use callee.
 refusalCase('noinline', 'noinline', (w) => {
@@ -680,7 +680,7 @@ refusalCase('noinline-beats-always', 'noinline', (w) => {
   ok('order-stats', w.passStats.inline.inlined === 1 && w.passStats.offsetFolds === 2);
 }
 
-// ---- M. tree-shake: reachability, deletion, index remap (todos/0214) ----
+// ---- M. tree-shake: reachability, deletion, index remap (docs/archive/0214) ----
 
 // dead function deleted; every index-bearing site remapped: WCall
 // immediates, exports, funcNames/localNames; survivors keep their

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // mkgif.js — synthesize the committed static-GIF test asset for the
-// MagicPoint present demo (todos/0119 giflib follow-up), the mksounds.js
+// MagicPoint present demo (docs/archive/0119 giflib follow-up), the mksounds.js
 // precedent: a committed Node generator so the fixture is reproducible
 // anywhere with Node, no image toolchain. Writes vendor/magicpoint/demo.gif:
 // a 200x150 GIF89a split left-half magenta / right-half cyan — two colours
@@ -14,7 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// Cross-tree preflight (todos/0341, extended by #142): writes the committed
+// Cross-tree preflight (docs/archive/0341, extended by #142): writes the committed
 // vendor/magicpoint/demo.gif next to itself. Hand-run only.
 require(path.join(__dirname, '../tests/lib/tree-guard.js'))
   .assertSameTree(__dirname, { label: 'tools/mkgif.js' });

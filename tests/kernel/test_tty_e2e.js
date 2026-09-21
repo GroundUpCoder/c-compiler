@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Phase 3 tty end-to-end (todos/0002): a real C program under a live kernel,
+// Phase 3 tty end-to-end (docs/archive/0002): a real C program under a live kernel,
 // driven interactively by a SCRIPTED UI BRIDGE — the same bytes-in/bytes-out
 // protocol xterm.js will use, exercised headlessly (OS.md: this scripted
 // bridge IS the agent-driving interface). Proves: canonical line reads with

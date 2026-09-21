@@ -4,7 +4,7 @@
  * Minimal single-threaded <pthread.h> shim for the gucOS wasm build of jq.
  *
  * The gucOS process model is single-threaded (no fork, no threads — see
- * todos/OS.md), so the only pthread surface jq actually exercises collapses
+ * docs/OS.md), so the only pthread surface jq actually exercises collapses
  * trivially:
  *   - thread-specific data (jv.c's decNumber context, jv_dtoa_tsd.c's dtoa
  *     context) becomes plain per-process globals, and

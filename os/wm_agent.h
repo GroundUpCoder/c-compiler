@@ -1,5 +1,5 @@
-/* wm_agent.h — the win32 agent-tree protocol (todos/0058; design
- * todos/WIN32.md "Agent-drivability").
+/* wm_agent.h — the win32 agent-tree protocol (docs/archive/0058; design
+ * docs/WIN32.md "Agent-drivability").
  *
  * Every user32 process serves its HWND tree on an AF_UNIX socket at
  * /run/win32/agent.<pid>.sock (bound at the first CreateWindowEx,

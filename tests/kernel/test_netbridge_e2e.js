@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Tier 2.5 HTTP bridge end-to-end (ticket #349; todos/NETWORK.md Tier 2.5).
+// Tier 2.5 HTTP bridge end-to-end (ticket #349; docs/NETWORK.md Tier 2.5).
 //
 // Three legs, and the FIRST is the point (the HP pairing): a single C
 // process drives OFF -> ON -> OFF -> ON-but-dead through live /etc/net

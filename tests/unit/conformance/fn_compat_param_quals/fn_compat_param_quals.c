@@ -2,7 +2,7 @@
 // compatibility — `void f(char *, const char, const char *const)` did not
 // convert to `void (*)(char *, char, const char *)`, so busybox stat.c's
 // print_it(format, file, print_stat, ...) was rejected. Found porting
-// coreutils batch 2 (todos/0034).
+// coreutils batch 2 (docs/archive/0034).
 // C11: 6.7.6.3p15 — in the determination of type compatibility (and of a
 // composite type), each parameter declared with qualified type is taken
 // as having the unqualified version of its declared type.

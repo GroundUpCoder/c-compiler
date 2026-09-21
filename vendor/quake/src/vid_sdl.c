@@ -86,7 +86,7 @@ void VID_Init (unsigned char *palette)
 		0);
 	if (sdl_window) {
 		sdl_surface = SDL_GetWindowSurface(sdl_window);
-		// Mouse look (todos/0018): ask for relative mouse mode. The host
+		// Mouse look (docs/archive/0018): ask for relative mouse mode. The host
 		// arms click-to-pointer-lock on the window (ESC releases, click
 		// re-locks); while locked, motion events carry true xrel/yrel
 		// deltas. Where the host predates the feature this is a no-op and

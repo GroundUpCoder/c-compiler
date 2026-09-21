@@ -1,4 +1,4 @@
-# alloc-rust.wasm — the committed Rust `alloc` fixture (todos/0414)
+# alloc-rust.wasm — the committed Rust `alloc` fixture (docs/archive/0414)
 
 `alloc-rust.wasm` is a `#![no_std]` Rust binary that uses `alloc`. Stable
 `rustc` built it for the target `wasm32-unknown-unknown` in the sibling

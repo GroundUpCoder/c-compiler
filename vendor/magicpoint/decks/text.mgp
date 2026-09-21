@@ -1,4 +1,4 @@
-%% text.mgp - gucOS MagicPoint showcase (todos/0185): text sizing & spacing.
+%% text.mgp - gucOS MagicPoint showcase (docs/archive/0185): text sizing & spacing.
 %% Every deck in this set is ours (not upstream), written against the 0119
 %% port: freetype-only text, mono.ttf is the one seeded face.
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"

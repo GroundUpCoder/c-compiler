@@ -10,7 +10,7 @@
 // os-wm.mjs). Then the same lifecycle, shorter, for gameboy with the
 // seeded ROM.
 //
-// DOOM presents at native 640x400 (no CPU pre-scale since todos/0024 made
+// DOOM presents at native 640x400 (no CPU pre-scale since docs/archive/0024 made
 // fixed-size windows compositor-scalable); the window fits the desktop.
 //
 // Usage: node os-doom.mjs
@@ -45,12 +45,12 @@ try {
   // Don't race hush's banner: typed input before the first prompt is eaten.
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
-  // The audio mixer (todos/0017): the kernel handed the page its output
+  // The audio mixer (docs/archive/0017): the kernel handed the page its output
   // ring at boot; playback is gated on the first user gesture.
   check('audio output ring reached the page',
     (await page.evaluate(() => window.__osAudio)) === 'ready');
 
-  // VTs (todos/0022): shell typing on VT1, canvas pixels/input on VT2 (the
+  // VTs (docs/archive/0022): shell typing on VT1, canvas pixels/input on VT2 (the
   // compositor may idle while its placeholder canvas is hidden). Deep VT
   // coverage lives in os-vt.mjs.
   const { setVt } = osHelpers(page);
@@ -146,7 +146,7 @@ try {
   }
   check('doom animates (distinct frame signatures over ~6s)', sigs.size >= 2, sigs.size);
 
-  // Sound (todos/0017): the click above was the resume gesture; with the
+  // Sound (docs/archive/0017): the click above was the resume gesture; with the
   // receiver draining, the mixer's output writePos advances while doom's
   // music plays (kernel-side mix -> page-owned ring, end to end).
   check('audio resumed on the gesture',

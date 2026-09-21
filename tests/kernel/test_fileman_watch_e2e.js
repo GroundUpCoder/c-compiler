@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// fileman auto-refresh over FS_WATCH (ticket #75, closing todos/0123),
+// fileman auto-refresh over FS_WATCH (ticket #75, closing docs/archive/0123),
 // headless: the file manager keeps ONE path-keyed watch fd on its cwd
 // (os/win32/fileman.c watch_cwd, re-armed per navigation) riding user32's
 // RegisterFdWake seam — the fd joins GetMessage's unified WAIT, a readable

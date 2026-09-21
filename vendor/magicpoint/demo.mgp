@@ -1,4 +1,4 @@
-%% demo.mgp — the gucOS MagicPoint demo deck (todos/0119).
+%% demo.mgp — the gucOS MagicPoint demo deck (docs/archive/0119).
 %% Plain-text slides: one %page per slide; %-directives style them.
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"
 %default 1 area 90 90, size 2, fore "white", back "MidnightBlue", font "standard"

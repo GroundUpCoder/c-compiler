@@ -7,7 +7,7 @@
 //     selected directory; the title tracks the cwd
 //   - activation (the 0066 activate() semantics, wm.c's copy): a
 //     runnable file (#! script) spawns with its own pgroup; a plain
-//     file opens through the openwith associations (todos/0072 —
+//     file opens through the openwith associations (docs/archive/0072 —
 //     default.gui is notepad in the baked store; the picker itself is
 //     test_openwith_e2e.js's)
 //   - drag-resize relayout: wmctl resize reflows the strip + LISTBOX
@@ -54,7 +54,7 @@ const out = boot([
   "printf '#!/bin/sh\\nwinbox\\n' > /root/launcher",
   "printf 'plain text, not a program\\n' > /root/plain.txt",
   'fileman &',
-  // Boot barrier (todos/0154): the "Go" button resolving means fileman's window,
+  // Boot barrier (docs/archive/0154): the "Go" button resolving means fileman's window,
   // listing and agent tree are up.
   'wmctl wait label Go 10000',
   'SID=$(wmctl list | grep "File Manager" | sed "s/[^0-9].*//")',
@@ -151,7 +151,7 @@ check('Open on a directory navigates into it',
 check('Open on a #! script spawns it (winbox up)',
   section(out, 'list3').split('\n').some(l => l.endsWith('\twinbox')),
   section(out, 'list3'));
-check('Open on a plain file opens the GUI default (notepad, todos/0072)',
+check('Open on a plain file opens the GUI default (notepad, docs/archive/0072)',
   section(out, 'list4').split('\n').some(l => l.includes('Notepad')),
   section(out, 'list4'));
 

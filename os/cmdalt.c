@@ -1,5 +1,5 @@
 /* cmdalt.c — /usr/bin/cmdalt, the command-alternatives dispatcher
- * (todos/0338; design `todos/COMMAND-ALTERNATIVES.md`).
+ * (docs/archive/0338; design `docs/COMMAND-ALTERNATIVES.md`).
  *
  * A MULTICALL binary in the busybox/coreutils idiom this tree already uses.
  * Mode is chosen by basename(argv[0]):

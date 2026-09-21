@@ -99,7 +99,7 @@ ByteQueue.prototype.read = function (dst, n) {
 /**
  * @typedef {object} RunModuleOptions
  * @property {Uint8Array | ArrayBuffer} [bytes] - The WASM module bytes.
- * @property {WebAssembly.Module} [module] - A pre-compiled Module (todos/0037:
+ * @property {WebAssembly.Module} [module] - A pre-compiled Module (docs/archive/0037:
  *   the kernel compiles read-only-volume binaries once and structured-clones
  *   the Module into each process worker). C-flavor only — ss modules need
  *   `bytes` (different compile options). One of bytes/module is required.
@@ -350,7 +350,7 @@ function createFileSystem({ fs, ctx }) {
           /* POSIX allows closing std fds. Drop the table entry (further
              use is EBADF) without closing the host process's streams.
              A dup2'd FILE entry on fd 0/1/2 falls through and closes
-             normally (todos/0034). */
+             normally (docs/archive/0034). */
           fdTable[fd] = null;
           return 0;
         }
@@ -378,7 +378,7 @@ function createFileSystem({ fs, ctx }) {
            must hit the file, and a `2>&1`-style alias of the default
            stderr entry must keep hitting the console. split(1) re-points
            fd 1 at each output part — the first program to do so here
-           (todos/0034; readImpl's isStdin check is the same pattern). */
+           (docs/archive/0034; readImpl's isStdin check is the same pattern). */
         if (entry.isStdout || entry.isStderr) {
           const memory = getMemory();
           const buf = new Uint8Array(memory.buffer, buf_ptr, count);
@@ -452,7 +452,7 @@ function createFileSystem({ fs, ctx }) {
       }),
       mkdir: mkdirEnv,
       // See the BlockFS table's note: additive alias so libc can own the
-      // umask-applying mkdir() wrapper (todos/0382).
+      // umask-applying mkdir() wrapper (docs/archive/0382).
       __mkdir_impl: mkdirEnv,
       ftruncate: function (fd, length) {
         if (fd < 0 || fd >= fdTable.length || !fdTable[fd]) { setErrnoName('EBADF'); return -1; }
@@ -750,7 +750,7 @@ function createFileSystem({ fs, ctx }) {
         view.setInt32(pipefd_ptr + 4, writeFd, true);
         return 0;
       },
-      // AF_UNIX sockets (todos/0008) need the brokered kernel — this plain
+      // AF_UNIX sockets (docs/archive/0008) need the brokered kernel — this plain
       // Node-fs env has no process kernel, so the family links but ENOSYSes.
       __sock_socket: function () { setErrnoName('ENOSYS'); return -1; },
       __sock_bind: function () { setErrnoName('ENOSYS'); return -1; },
@@ -801,7 +801,7 @@ function createFileSystem({ fs, ctx }) {
         /* Close newfd if open. The default std entries are never
            closeSync'd (host streams); a dup2'd FILE entry sitting on
            fd 1/2 is — split(1) re-points fd 1 per output part and
-           would otherwise leak a native fd each time (todos/0034). */
+           would otherwise leak a native fd each time (docs/archive/0034). */
         if (newfd < fdTable.length && fdTable[newfd]) {
           const entry = fdTable[newfd];
           if (entry.type === 'pipe') {
@@ -906,7 +906,7 @@ function createFileSystem({ fs, ctx }) {
         mem.setInt32(cols_ptr, process.stdout.columns || 80, true);
         return 0;
       },
-      // Ptys need a kernel (todos/0020); the CLI runtime has none.
+      // Ptys need a kernel (docs/archive/0020); the CLI runtime has none.
       __openpty: function (m_ptr, s_ptr) { void m_ptr; void s_ptr; setErrnoName('ENOSYS'); return -1; },
       __ioctl_tiocswinsz: function (fd, rows, cols) { void fd; void rows; void cols; setErrnoName('ENOTTY'); return -1; },
       usleep: suspendImport(async function (usec) {
@@ -1253,7 +1253,7 @@ var BLOCK_FS = (function () {
   ReadOnlyStore.prototype.flush = function () {};
 
   // Read-only store over a SharedArrayBuffer — the process-side view of the
-  // sealed system volume (todos/0180): the kernel embedder copies the baked
+  // sealed system volume (docs/archive/0180): the kernel embedder copies the baked
   // image into ONE SAB at boot (storeToSab below) and every process worker
   // mounts it locally (createV4 {readonly:true}), so reads under the
   // read-only mount prefix never cross the RPC boundary. Immutable by
@@ -2502,7 +2502,7 @@ var BLOCK_FS = (function () {
     this._alloc = alloc;       // TLSFAllocator / TLSF64Allocator
     this._inodes = inodeTable; // InodeTable / InodeTable128
     this._fmt = fmt || FMT_V3; // version-specific bits (FMT_V3 = original behavior)
-    // Injectable timestamp source (createV4 opts.clock, todos/0249): a
+    // Injectable timestamp source (createV4 opts.clock, docs/archive/0249): a
     // () -> ms-since-epoch function _now() uses instead of Date.now().
     // Must be set BEFORE _createRootDir below — the root inode's times
     // come from _now() too. Null = wall clock (every live volume).
@@ -2515,12 +2515,12 @@ var BLOCK_FS = (function () {
 
     this._lastError = '';
     this._cwd = '/';
-    // Read-only volume (todos/0040): every mutating op returns EROFS, atime
+    // Read-only volume (docs/archive/0040): every mutating op returns EROFS, atime
     // bumps and the /dev self-heal are suppressed. Set by createV4's
     // opts.readonly (which also wraps the store in ReadOnlyStore as a
     // backstop) and by the migration source / legacy-view paths.
     this._readonly = false;
-    // Mount hooks (todos/0026), wired by MountFS when this volume is one of
+    // Mount hooks (docs/archive/0026), wired by MountFS when this volume is one of
     // several in a mount table. _mountOwns(fullPath) -> volume-relative path
     // if this volume owns it, else null; null hook = standalone volume
     // (symlink walk behavior unchanged — the single-volume fast path).
@@ -2575,7 +2575,7 @@ var BLOCK_FS = (function () {
   BlockFS.prototype._now = function () {
     // Date.now() is fine here — this is sync code in a worker. _clock (an
     // injected () -> ms source, createV4 opts.clock) overrides it for the
-    // deterministic system-image bake (todos/0249). Returns the inode's
+    // deterministic system-image bake (docs/archive/0249). Returns the inode's
     // native storage unit: seconds (v3) or milliseconds (v4, timeScale 1000).
     var ms = this._clock ? this._clock() : Date.now();
     return this._fmt.timeScale === 1 ? Math.floor(ms / 1000) : ms;
@@ -2747,7 +2747,7 @@ var BLOCK_FS = (function () {
   // _resolvePath before the walk (logical, not physical — like realpath sans -P).
   BlockFS.prototype._walkPath = function (path, noFollowFinal) {
     if (!this._mountOwns) return this._walkHops(path, !!noFollowFinal, 0);
-    // Mounted volume (todos/0026): a symlink target that leaves this volume
+    // Mounted volume (docs/archive/0026): a symlink target that leaves this volume
     // makes _walkHops throw a __mountEscape. Tag it with the path THIS
     // top-level walk was given (__mountFrom) so MountFS can tell which of an
     // operation's path arguments (or which parent-dir walk) escaped, rewrite
@@ -2791,7 +2791,7 @@ var BLOCK_FS = (function () {
         var dirPath = '/' + parts.slice(0, i).join('/');
         var rest = parts.slice(i + 1).join('/');
         if (this._mountOwns) {
-          // Mounted volume (todos/0026): resolve the target in the FULL
+          // Mounted volume (docs/archive/0026): resolve the target in the FULL
           // namespace. Absolute targets are full-namespace by convention;
           // relative ones are joined under this volume's mount prefix so a
           // '..' can climb over the mount root. If the result still belongs
@@ -2827,7 +2827,7 @@ var BLOCK_FS = (function () {
   // link's directory; on a mounted volume the target resolves in the FULL
   // namespace and a foreign one throws __mountEscape). Returns the next
   // volume-relative resolved path, or null for an empty target. Used by the
-  // open(O_CREAT) final-symlink chase (todos/0375). NB the escape throw is a
+  // open(O_CREAT) final-symlink chase (docs/archive/0375). NB the escape throw is a
   // can't-happen guard there: open's initial FULL walk follows the same
   // chain, so a foreign hop escapes (and MountFS reroutes) before the create
   // branch ever runs — if it fires anyway, MountFS surfaces it loudly.
@@ -2943,7 +2943,7 @@ var BLOCK_FS = (function () {
     var append = !!(flags & 0x400);
     var excl = !!(flags & 0x80);
     // O_DIRECTORY (Linux 0x10000) — the directory-fd substrate of
-    // todos/0400, landed via todos/0442 (the wasip1 preopen must be a REAL
+    // docs/archive/0400, landed via docs/archive/0442 (the wasip1 preopen must be a REAL
     // fd in this table). With the bit set, a read-only open of a directory
     // succeeds as a `dir: true` entry (fstat/close/dup work; read() answers
     // EISDIR; write intent refuses). WITHOUT the bit, a directory target
@@ -2963,7 +2963,7 @@ var BLOCK_FS = (function () {
       // The full walk above only says the chain ends nowhere; without this
       // chase the create branch below would insert a SECOND dirent under
       // the link's own lexical name — a duplicate directory entry, on-disk
-      // corruption (todos/0375). Chase the final-component chain by lstat
+      // corruption (docs/archive/0375). Chase the final-component chain by lstat
       // hops, ELOOP-bounded; O_CREAT|O_EXCL refuses on the symlink itself
       // (POSIX: EEXIST regardless of where it points).
       var hops = 0;
@@ -2981,7 +2981,7 @@ var BLOCK_FS = (function () {
       w = lw;
     }
 
-    // Read-only volume (todos/0040): any write-intent open is EROFS. AFTER
+    // Read-only volume (docs/archive/0040): any write-intent open is EROFS. AFTER
     // the walk: a path that resolves out of this volume via a symlink
     // (/usr/local -> /var/local) must escape to the owning volume, not fail
     // here. (RO volumes carry no /dev, so there is no device-write
@@ -3001,7 +3001,7 @@ var BLOCK_FS = (function () {
       }
       if (wantDir) return this._setErr('ENOTDIR');
       if (excl && create) return this._setErr('EEXIST');
-      // A socket node (todos/0008 rendezvous) is not open()able — POSIX ENXIO.
+      // A socket node (docs/archive/0008 rendezvous) is not open()able — POSIX ENXIO.
       if ((w.ino.mode & S_IFMT) === S_IFSOCK) return this._setErr('ENXIO');
       if ((w.ino.mode & S_IFMT) === S_IFCHR) {
         // Character device: no data extent, O_TRUNC is a no-op. I/O is
@@ -3022,10 +3022,10 @@ var BLOCK_FS = (function () {
       // (MAY_WRITE), never into the access mode. Darwin was measured doing
       // the same. So an O_RDONLY|O_TRUNC open succeeds, empties the file,
       // and hands back a fd that is STILL not write-capable: accmode below
-      // is flags & 3, so write() on it is EBADF (todos/0376).
+      // is flags & 3, so write() on it is EBADF (docs/archive/0376).
       //
       // ftruncate() requiring a writable fd (its `entry.accmode === 0` ->
-      // EINVAL, todos/0376) is NOT an inconsistency with this: POSIX
+      // EINVAL, docs/archive/0376) is NOT an inconsistency with this: POSIX
       // *defines* that one and leaves this one open. Do not "harmonize"
       // them — a program written against Linux would then lose a truncate
       // it was promised. Pinned by tests/blockfs/test_posix.js and leg 11
@@ -3061,7 +3061,7 @@ var BLOCK_FS = (function () {
       //
       // This used to also apply a hardcoded `& ~0o022`, described as "the
       // single-user system has a fixed 022 umask ... there is no per-process
-      // umask in the fs". There is one now (todos/0382): the mask is PROCESS
+      // umask in the fs". There is one now (docs/archive/0382): the mask is PROCESS
       // state and belongs in libc, which applies it before the mode ever
       // reaches this layer. Masking again here would compose the two, so
       // umask(0) could never produce the 0666 POSIX promises. The libc's
@@ -3098,7 +3098,7 @@ var BLOCK_FS = (function () {
 
     var position = append ? w.ino.dataSize : 0;
     this._inoRef(w.inoId);
-    // accmode (todos/0376): the fd carries flags & O_ACCMODE for read()/
+    // accmode (docs/archive/0376): the fd carries flags & O_ACCMODE for read()/
     // write() to enforce — dup/dup2/F_DUPFD share the entry object, so the
     // mode rides every duplicate, like a POSIX open file description.
     var fd = this._allocFd({
@@ -3126,17 +3126,17 @@ var BLOCK_FS = (function () {
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
 
-    // Access mode (todos/0376): an open()-born entry carries flags &
+    // Access mode (docs/archive/0376): an open()-born entry carries flags &
     // O_ACCMODE — O_WRONLY (1) can't read. Entries not born from open()
     // (console stdio, pipe ends — checked by direction below) carry none.
     if (entry.accmode === 1) return this._setErr('EBADF');
 
-    // A directory fd (O_DIRECTORY, todos/0442) has a real extent — raw
+    // A directory fd (O_DIRECTORY, docs/archive/0442) has a real extent — raw
     // dirent bytes — but read(2) on a directory is EISDIR, not a data leak.
     if (entry.dir === true) return this._setErr('EISDIR');
 
     if (entry.type === 'pipe') {
-      // The write end can't read (todos/0376 — same class, fixed direction).
+      // The write end can't read (docs/archive/0376 — same class, fixed direction).
       if (entry.pipeEnd !== 'read') return this._setErr('EBADF');
       if (entry.pipeId !== undefined && this._pipeBroker) {
         // Owner-brokered: may BLOCK (the broker parks this worker on Atomics.wait
@@ -3246,13 +3246,13 @@ var BLOCK_FS = (function () {
     if (sink === 'console') return count;
     var entry = this._fdTable[fd];
 
-    // Access mode (todos/0376): O_RDONLY (0) can't write — this is the
+    // Access mode (docs/archive/0376): O_RDONLY (0) can't write — this is the
     // corruption half: a defensive read-only open used to silently mutate
     // the file it existed to protect.
     if (entry.accmode === 0) return this._setErr('EBADF');
 
     if (entry.type === 'pipe') {
-      // The read end can't write (todos/0376 — same class, fixed direction).
+      // The read end can't write (docs/archive/0376 — same class, fixed direction).
       if (entry.pipeEnd !== 'write') return this._setErr('EBADF');
       // nbyte == 0 on a pipe is unspecified by POSIX; gucOS takes the Linux
       // answer ("null write succeeds", fs/pipe.c): 0 immediately — no EPIPE
@@ -3343,7 +3343,7 @@ var BLOCK_FS = (function () {
     var resolved = this._resolvePath(path);
     // noFollowFinal: a dangling symlink at the target name still EEXISTs
     // (POSIX — mkdir never follows the final symlink); a full-follow walk
-    // answered "doesn't exist" and inserted a DUPLICATE dirent (todos/0375).
+    // answered "doesn't exist" and inserted a DUPLICATE dirent (docs/archive/0375).
     if (this._walkPath(resolved, true)) return this._setErr('EEXIST');
 
     var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
@@ -3355,7 +3355,7 @@ var BLOCK_FS = (function () {
     if (this._readonly) return this._setErr('EROFS');
 
     // Honor the caller's mode, like open()'s create path directly above.
-    // Until todos/0382 this argument was accepted and then DISCARDED — every
+    // Until docs/archive/0382 this argument was accepted and then DISCARDED — every
     // directory came out DEFAULT_DIR_MODE, so mkdir("/x", 0700) silently
     // produced a world-readable 0755. A falsy mode still means "default"
     // (same convention as the file path: the fs RPC turns an absent mode
@@ -3399,7 +3399,7 @@ var BLOCK_FS = (function () {
   // lives in the inode's rdev field. v4 only (v3 inodes have no rdev field).
   BlockFS.prototype.mknod = function (path, mode, dev) {
     var resolved = this._resolvePath(path);
-    // noFollowFinal: same duplicate-dirent guard as mkdir (todos/0375).
+    // noFollowFinal: same duplicate-dirent guard as mkdir (docs/archive/0375).
     if (this._walkPath(resolved, true)) return this._setErr('EEXIST');
     var parentPath = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
     var pw = this._walkPath(parentPath);
@@ -3676,7 +3676,7 @@ var BLOCK_FS = (function () {
     return this._statOf(w);
   };
 
-  // moduleKey (todos/0037; generalized to writable volumes by #188) — the
+  // moduleKey (docs/archive/0037; generalized to writable volumes by #188) — the
   // content-identity token the kernel keys its compiled-wasm-Module spawn
   // cache on, or null for anything that can't carry one (non-regular
   // files, a failed walk). Two kinds, told apart by how they validate,
@@ -3692,7 +3692,7 @@ var BLOCK_FS = (function () {
   //    v4, despite the field spelling nsec): a same-inode, same-size
   //    rewrite landing in the same tick as the cached generation's mtime
   //    would collide — and the failure is SILENT stale code, not an
-  //    error. Tracked as L66 in todos/LIABILITIES.md: accepted because
+  //    error. Tracked as L66 in docs/LIABILITIES.md: accepted because
   //    the window is unreachable through the in-OS path today (every
   //    write→spawn→rewrite step is its own process costing well over a
   //    tick), and because the complete closure — a content-hash key term
@@ -3878,7 +3878,7 @@ var BLOCK_FS = (function () {
     return [readFd, writeFd];
   };
 
-  // AF_UNIX sockets (todos/0008) exist only under the brokered kernel —
+  // AF_UNIX sockets (docs/archive/0008) exist only under the brokered kernel —
   // the in-process fs has no second process to talk to, so the whole
   // family is ENOSYS here. RemoteFS overrides these with kernel RPCs;
   // toWasmEnv dispatches via `this.`, so both transports share the env.
@@ -3941,7 +3941,7 @@ var BLOCK_FS = (function () {
     var entry = this._fdTable[fd];
     if (entry.inoId === undefined) return this._setErr('EBADF');
     // POSIX: ftruncate requires a fd open for writing — EINVAL otherwise
-    // (todos/0376; the same corruption class as write-on-O_RDONLY). BEFORE
+    // (docs/archive/0376; the same corruption class as write-on-O_RDONLY). BEFORE
     // the volume flag, like read()/write(): a readonly volume only hands
     // out O_RDONLY fds, so its ftruncate is EINVAL (Linux agrees — EROFS
     // is the path-op/truncate(2) errno), and the kernel's FS_FTRUNCATE arm
@@ -4060,7 +4060,7 @@ var BLOCK_FS = (function () {
     if ((oldW.ino.mode & S_IFMT) === S_IFDIR) return this._setErr('EPERM');
 
     var newResolved = this._resolvePath(newPath);
-    // noFollowFinal: same duplicate-dirent guard as mkdir (todos/0375);
+    // noFollowFinal: same duplicate-dirent guard as mkdir (docs/archive/0375);
     // POSIX link() never follows newpath's final component.
     if (this._walkPath(newResolved, true)) return this._setErr('EEXIST');
 
@@ -4162,7 +4162,7 @@ var BLOCK_FS = (function () {
   // canonical string, or null with _lastError set. Shared by BlockFS and MountFS
   // (both expose lstat/readlink/getcwd); RemoteFS routes to the kernel's copy of
   // this over ONE FS_REALPATH RPC, so a brokered realpath is never a per-
-  // component RPC storm. (todos/0263)
+  // component RPC storm. (docs/archive/0263)
   function physicalRealpath(fs, input) {
     fs._lastError = null;
     if (typeof input !== 'string' || input.length === 0) { fs._lastError = 'ENOENT'; return null; }
@@ -4493,7 +4493,7 @@ var BLOCK_FS = (function () {
     var writeErr = ctx.writeErr;
     var self = this;
 
-    // Register the fs INSTANCE on the runtime context (todos/0442): sibling
+    // Register the fs INSTANCE on the runtime context (docs/archive/0442): sibling
     // namespaces built later — toWasiPreview1's fd/path family — delegate to
     // this same method surface, and the env object alone does not carry it.
     // Every bootstrap that calls toWasmEnv (BlockFS directly, or REUSED over
@@ -4579,7 +4579,7 @@ var BLOCK_FS = (function () {
       }),
       // __mkdir_impl: the same call under the name compiler.js's libc imports
       // it as, so that libc can own a real mkdir() wrapper applying the
-      // process umask (todos/0382). ADDITIVE — plain `mkdir` above stays,
+      // process umask (docs/archive/0382). ADDITIVE — plain `mkdir` above stays,
       // because that name is the wasm-ld ABI the clang toolchain links
       // against and renaming it would break that sysroot.
       __mkdir_impl: wrap(function (path_ptr, mode) {
@@ -4679,7 +4679,7 @@ var BLOCK_FS = (function () {
         view.setInt32(pipefd_ptr + 4, fds[1], true);
         return 0;
       }),
-      // AF_UNIX sockets (todos/0008): thin marshalling over the sock*
+      // AF_UNIX sockets (docs/archive/0008): thin marshalling over the sock*
       // methods — real on RemoteFS (kernel RPCs), ENOSYS on plain BlockFS.
       __sock_socket: wrap(function (domain, type, protocol) {
         return this.sockSocket(domain, type, protocol);
@@ -4915,7 +4915,7 @@ var BLOCK_FS = (function () {
         // bridge keeps COLS/ROWS current); otherwise fall back to 80x24.
         // Guard on _stdinCtrl, NOT _stdinSab: brokered-mode RemoteFS wires
         // ONLY the winsize words (stdin flows via FS_READ RPCs, no ring), so
-        // a _stdinSab guard left every brokered process at 80x24 (todos/0011).
+        // a _stdinSab guard left every brokered process at 80x24 (docs/archive/0011).
         var rows = 24, cols = 80;
         if (self._stdinCtrl) {
           var c = Atomics.load(self._stdinCtrl, SI_COLS);
@@ -4928,7 +4928,7 @@ var BLOCK_FS = (function () {
         mem.setInt32(cols_ptr, cols, true);
         return 0;
       },
-      // Pty control plane (todos/0020) — real only over a kernel (RemoteFS
+      // Pty control plane (docs/archive/0020) — real only over a kernel (RemoteFS
       // implements openpty/setWinsize as RPCs); in-process BlockFS has no
       // second terminal to speak of, so these answer ENOSYS/ENOTTY.
       __openpty: function (m_ptr, s_ptr) {
@@ -4949,7 +4949,7 @@ var BLOCK_FS = (function () {
       },
 
       // ---- additional POSIX ops ----
-      // realpath(3): PHYSICAL resolution — symlinks followed (todos/0263). For
+      // realpath(3): PHYSICAL resolution — symlinks followed (docs/archive/0263). For
       // in-process BlockFS this.realpathPhysical walks locally; for brokered
       // RemoteFS it is ONE FS_REALPATH RPC resolved kernel-side. On failure we
       // return NULL(0) + errno, matching glibc realpath and the standalone-Node
@@ -4993,7 +4993,7 @@ var BLOCK_FS = (function () {
         return this.readlink(readString(path_ptr), buf, bufsize);
       }),
       // libc fcntl reaches us as __fcntl3(fd, cmd, arg) — the C inline
-      // unpacks its variadic int (todos/0005: the shell's fd-save dance
+      // unpacks its variadic int (docs/archive/0005: the shell's fd-save dance
       // needs a REAL F_DUPFD; before that the C fcntl was a no-op).
       __fcntl3: wrap(function (fd, cmd, arg) {
         // F_DUPFD (0) / F_DUPFD_CLOEXEC (1030; CLOEXEC untracked in v1)
@@ -5025,8 +5025,8 @@ var BLOCK_FS = (function () {
 
   /* ==========================================================================
    * wasi_snapshot_preview1 — the ONE sanctioned second import namespace
-   * (todos/0442; authority: todos/RUST.md §3 rule 1 as amended by the
-   * todos/0418 ruling). Serves upstream-std wasip1 modules (Rust
+   * (docs/archive/0442; authority: docs/RUST.md §3 rule 1 as amended by the
+   * docs/archive/0418 ruling). Serves upstream-std wasip1 modules (Rust
    * wasm32-wasip1) by DELEGATING to the same fs method surface toWasmEnv
    * uses — `this.open`, `this.read`, … — so BlockFS (in-process) and
    * RemoteFS (kernel RPCs) share one shim exactly as they share one env.
@@ -5928,7 +5928,7 @@ var BLOCK_FS = (function () {
       return { fs: rfs, mode: 'legacy-readonly', handles: [leg.handle] };
     }
 
-    // Pass-through for MountFS user volumes (todos/0026): skip the /dev
+    // Pass-through for MountFS user volumes (docs/archive/0026): skip the /dev
     // self-heal on volumes mounted at a non-root prefix.
     var v4opts = opts.noDevNodes ? { noDevNodes: true } : undefined;
     var v4 = await open(v4name, true);
@@ -6027,13 +6027,13 @@ var BLOCK_FS = (function () {
   // create(); v3 stays the default. Formats a fresh store, or loads an existing
   // v4 one (magic + version 4). Used by the migration and the v4 worker path.
   // opts.noDevNodes skips the /dev self-heal — for volumes mounted at a
-  // non-root prefix under MountFS (todos/0026), where /dev is served by the
+  // non-root prefix under MountFS (docs/archive/0026), where /dev is served by the
   // root volume and a /root/dev would just be clutter in $HOME.
-  // opts.readonly (todos/0040) mounts an EXISTING v4 image read-only: every
+  // opts.readonly (docs/archive/0040) mounts an EXISTING v4 image read-only: every
   // mutating op returns EROFS, the store is wrapped in ReadOnlyStore as a
   // backstop, and an unformatted/non-v4 store throws (a readonly mount must
   // never format). This is how the baked system blob is mounted at /usr.
-  // opts.clock (todos/0249): a () -> ms-since-epoch function _now() uses
+  // opts.clock (docs/archive/0249): a () -> ms-since-epoch function _now() uses
   // instead of Date.now() for every inode a/m/c/btime stamp. The system-image
   // bake passes a fixed manifest-derived value so two bakes of an identical
   // tree are byte-identical (content-hash-stable); live volumes never set it.
@@ -6088,7 +6088,7 @@ var BLOCK_FS = (function () {
     return (store.getUint32(SB_FLAGS) & SB_MIGRATED_BIT) !== 0;
   };
 
-  // ---- sealed volumes (todos/0040) ----
+  // ---- sealed volumes (docs/archive/0040) ----
   // A baked read-only blob is SEALED: superblock flags bit 1 + a SHA-256 of
   // every byte after the superblock at SB_SEAL_HASH. mkimage seals at bake
   // time; fsck_v4 recomputes and flags any post-bake mutation. Runtime mounts
@@ -6183,7 +6183,7 @@ var BLOCK_FS = (function () {
   };
 
   // =================================================================
-  // MountFS (todos/0026) — mount table over N BlockFS volumes
+  // MountFS (docs/archive/0026) — mount table over N BlockFS volumes
   // =================================================================
   //
   // Delegates every path operation to the volume owning the longest matching
@@ -6415,7 +6415,7 @@ var BLOCK_FS = (function () {
     return this._dispatch([path], {}, function (vol, rel) { return self._qualifyStat(vol, vol.stat(rel)); });
   };
 
-  // moduleKey (todos/0037, #188): the full-namespace twin of BlockFS's —
+  // moduleKey (docs/archive/0037, #188): the full-namespace twin of BlockFS's —
   // the walk (with symlink escapes, so /bin/ls resolves through the /bin
   // -> /usr/bin link) decides the OWNING volume, and the key kind is that
   // volume's: immutable on read-only, validated on writable (see
@@ -6599,7 +6599,7 @@ var BLOCK_FS = (function () {
     sealVolume: BlockFS.sealVolume,
     verifySeal: BlockFS.verifySeal,
     // The class itself: kernel.js's RemoteFS reuses BlockFS.prototype
-    // .toWasmEnv over its RPC-backed method surface (todos/0009).
+    // .toWasmEnv over its RPC-backed method surface (docs/archive/0009).
     BlockFS: BlockFS,
     MountFS: MountFS,
     MemoryByteStore: MemoryByteStore,
@@ -6632,7 +6632,7 @@ function createPosix({ ctx }) {
   const pid = (ctx && ctx.pid != null) ? ctx.pid : process.pid;
   const ppid = (ctx && ctx.ppid != null) ? ctx.ppid
     : (typeof process.ppid === 'number' ? process.ppid : 0);
-  const livePpid = ctx && ctx.getppid;   // vDSO read (todos/0179): reparent-aware
+  const livePpid = ctx && ctx.getppid;   // vDSO read (docs/archive/0179): reparent-aware
   return {
     [ENV_KEY]: {
       getpid: function () { return pid; },
@@ -6658,7 +6658,7 @@ function createBrowserPosix({ ctx }) {
   // callers that don't thread ids working.
   const pid = (ctx && ctx.pid != null) ? ctx.pid : 1;
   const ppid = (ctx && ctx.ppid != null) ? ctx.ppid : 0;
-  const livePpid = ctx && ctx.getppid;   // vDSO read (todos/0179): reparent-aware
+  const livePpid = ctx && ctx.getppid;   // vDSO read (docs/archive/0179): reparent-aware
   return {
     [ENV_KEY]: {
       getpid: function () { return pid; },
@@ -6690,7 +6690,7 @@ function createBrowserPosix({ ctx }) {
 //
 // Field offsets (wasm32, all i32): __fd_action {op@0,fd@4,arg@8,path@12,mode@16}
 // = 20 bytes; __spawn_spec {path@0,argv@4,envp@8,cwd@12,actions@16,n_actions@20,
-// flags@24,pgid@28,trace@32} = 36 bytes. `trace` (todos/0046) is read ONLY
+// flags@24,pgid@28,trace@32} = 36 bytes. `trace` (docs/archive/0046) is read ONLY
 // under flags bit1 (__SPAWN_TRACE) — binaries built against the 32-byte spec
 // never set that bit, so the extra read can't pick up their stack garbage.
 function readSpawnSpec(ctx, p) {
@@ -6778,7 +6778,7 @@ function createSpawn(ctx, hooks) {
         return 0;
       },
       // Process groups (libc setpgid/getpgid/getpgrp — landed with the
-      // shell port, todos/0005; the kernel RPCs existed since Phase 1).
+      // shell port, docs/archive/0005; the kernel RPCs existed since Phase 1).
       __spawn_setpgid: function (pid, pgid) {
         if (!hooks.setpgid) { ctx.setErrnoName('ENOSYS'); return -1; }
         const r = hooks.setpgid(pid, pgid);
@@ -6791,7 +6791,7 @@ function createSpawn(ctx, hooks) {
         if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
         return r.pgid | 0;
       },
-      // libc setsid() (todos/0179 — the SETSID RPC existed since Phase 1;
+      // libc setsid() (docs/archive/0179 — the SETSID RPC existed since Phase 1;
       // the C surface landed with the vDSO page's mutation-visibility test).
       __spawn_setsid: function () {
         if (!hooks.setsid) { ctx.setErrnoName('ENOSYS'); return -1; }
@@ -6799,14 +6799,14 @@ function createSpawn(ctx, hooks) {
         if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
         return r.sid | 0;
       },
-      // libc getsid() (todos/0043 — pgrep -s 0 resolves its own session).
+      // libc getsid() (docs/archive/0043 — pgrep -s 0 resolves its own session).
       __spawn_getsid: function (pid) {
         if (!hooks.getsid) { ctx.setErrnoName('ENOSYS'); return -1; }
         const r = hooks.getsid(pid);
         if (r && r.errno) { ctx.setErrnoName(r.errno); return -1; }
         return r.sid | 0;
       },
-      // Interval timers (todos/0044): the kernel owns ONE ITIMER_REAL per
+      // Interval timers (docs/archive/0044): the kernel owns ONE ITIMER_REAL per
       // process; ms over the wire (the libc converts timeval <-> ms). The
       // old/current value comes back through out[2] = {value_ms, interval_ms}.
       __setitimer: function (which, valueMs, intervalMs, outPtr) {
@@ -6930,7 +6930,7 @@ function createSpawn(ctx, hooks) {
     };
     // The kernel resolves the fd through the caller's fd table (0020);
     // fds it can't resolve fall back to the process's attached tty, which
-    // keeps hush's high dup'd tty fd (255) working (todos/0005).
+    // keeps hush's high dup'd tty fd (255) working (docs/archive/0005).
     env.__tty_getpgrp = function (fd) {
       if (fd < 0) { ctx.setErrnoName('EBADF'); return -1; }
       const r = hooks.ttyGetpgrp(fd);
@@ -6998,19 +6998,19 @@ function createNullSpawn(ctx) {
    http request bodies). The kernel owns its page layout, so the value is
    derived THERE (kernel.js KP_HOOK_CHUNK, from KP_PAYLOAD_CAP) and rides the
    spawnHooks seam as hooks.payloadChunk — host.js deliberately does not
-   restate the kernel-page layout (todos/0235). Only consulted when a kernel
+   restate the kernel-page layout (docs/archive/0235). Only consulted when a kernel
    lane is actually live, and then the field is REQUIRED: kernel.js and
    host.js ship from one tree, so a missing field is version skew — fail
    loud rather than chunk on a stale guess. */
 function hookPayloadChunk(hooks) {
   const n = hooks && hooks.payloadChunk;
   if (!(n > 0)) {
-    throw new Error('spawnHooks.payloadChunk missing — kernel.js/host.js out of sync (todos/0235)');
+    throw new Error('spawnHooks.payloadChunk missing — kernel.js/host.js out of sync (docs/archive/0235)');
   }
   return n | 0;
 }
 
-/* ---- System clipboard (todos/0090) ----
+/* ---- System clipboard (docs/archive/0090) ----
    __clip_set(fmt, ptr, len) / __clip_get(fmt, ptr, cap) / __clip_has(fmt):
    the C-visible primitives under SDL_SetClipboardText/SDL_GetClipboardText/
    SDL_HasClipboardText (__SDL.c), fileops.h's clip file list, and the win32
@@ -7097,7 +7097,7 @@ function createClipboard(ctx, hooks) {
   } };
 }
 
-/* ---- Egress (todos/0398): gucOS -> host file transfer ----
+/* ---- Egress (docs/archive/0398): gucOS -> host file transfer ----
    __egress(dispo, paths, len): the C-visible primitive under os/egress.h's
    eg_send. `paths` is the path-list text (one absolute path per
    '\n'-terminated line — the FO_CLIP_FMT=2 list shape, built C-side with
@@ -7130,7 +7130,7 @@ function createEgress(ctx, hooks) {
   } };
 }
 
-/* ---- HTTP transport (todos/0172; fd-shaped since todos/0417) ----
+/* ---- HTTP transport (docs/archive/0172; fd-shaped since docs/archive/0417) ----
    The C-visible primitive under the libcurl veneer (0173). Kernel-backed via
    spawnHooks (fetch runs kernel-side; the transfer is an ORDINARY FD whose
    OFD, kind 'http', owns it — so it joins __wait/select beside pipes and
@@ -7247,7 +7247,7 @@ function createHttp(ctx, hooks) {
 // any context where the thread genuinely cannot block (a browser main
 // thread — Atomics.wait is illegal there).
 //
-// Everywhere blocking IS legal the classic loop is FIRST-CLASS (todos/0224):
+// Everywhere blocking IS legal the classic loop is FIRST-CLASS (docs/archive/0224):
 // OS processes run in workers, where SDL_Delay is a cooperative pumpWait
 // sleep — input keeps draining into the wasm event queue and the compositor
 // may park while the app dawdles (createSurfaceSDL's sdlDelay); headless
@@ -7419,14 +7419,14 @@ function createNullSDL(ctx) {
       __sdl_destroy_window: function () {},
       __sdl_set_window_title: function () {},
       __sdl_set_relative_mouse_mode: function () {},
-      __sdl_set_cursor: function () {},                   // no display (todos/0105)
+      __sdl_set_cursor: function () {},                   // no display (docs/archive/0105)
       __sdl_set_window_visible: function () { return -1; },
       __sdl_raise_window: function () { return -1; },
       __sdl_get_window_state: function () { return -1; },
       __sdl_set_window_parent: function () { return -1; },   // no window system (#794)
       __sdl_get_window_viewable: function () { return -1; },
       __sdl_set_window_size: function () { return -1; },  // no window system to resize
-      // Anchored popups + display bounds are OS-WM concepts (todos/0256):
+      // Anchored popups + display bounds are OS-WM concepts (docs/archive/0256):
       // no window system here -> clean failure, the C side sets SDL errors.
       __sdl_create_popup_window: function () { return 0; },
       __sdl_get_display_bounds: function () { return 0; },
@@ -7499,7 +7499,7 @@ function createNullSDL(ctx) {
       // SDL_GetTicks: ms since SDL_Init, full range (C casts to Uint64; no 32-bit
       // wrap). Lazily baseline if a program reads ticks before SDL_Init.
       __sdl_get_ticks: function () { if (sdlTicksBase === null) sdlTicksBase = performance.now(); return performance.now() - sdlTicksBase; },
-      // SDL_Delay (todos/0224): headless contexts CAN block — the same
+      // SDL_Delay (docs/archive/0224): headless contexts CAN block — the same
       // primitive as usleep/nanosleep (Atomics.wait on a never-notified
       // cell) — so the classic while(running){ poll; draw; SDL_Delay(16); }
       // loop runs unmodified under Node CLI / headless tests. No display and
@@ -7511,8 +7511,8 @@ function createNullSDL(ctx) {
         BLOCK_FS.blockingSleepMs(ms);
       },
       // No OS input ring in this flavor — SDL_WaitEvent* falls back to a
-      // nanosleep pace on a 0 return (todos/0161); no kernel WAIT either —
-      // __wait callers fall back to their chunked poll on -2 (todos/0178).
+      // nanosleep pace on a 0 return (docs/archive/0161); no kernel WAIT either —
+      // __wait callers fall back to their chunked poll on -2 (docs/archive/0178).
       __sdl_pump_wait: function () { return 0; },
       __sdl_pump: function () { return 0; },   // no ring — nothing to drain (#485)
       __wait: function () { return -2; },
@@ -7522,7 +7522,7 @@ function createNullSDL(ctx) {
 }
 
 /* ==========================================================================
- * Surface-backed SDL for OS processes (todos/WM.md; kernel side: kernel.js
+ * Surface-backed SDL for OS processes (docs/WM.md; kernel side: kernel.js
  * "WM surfaces"). Selected by runModule when spawnHooks carry the surface
  * ops (i.e. the process runs under kernel.js) and no canvas was injected.
  *
@@ -7550,7 +7550,7 @@ function createNullSDL(ctx) {
  * PCM). Returns the byte count ACCEPTED (partial when the ring is nearly
  * full; the C SDL_AudioStream backlogs the rest — FIFO preserved, never
  * dropped). alignBytes > 1 rounds the accept DOWN to whole frames: the
- * kernel mixer (todos/0017) derives its read position from
+ * kernel mixer (docs/archive/0017) derives its read position from
  * writePos - queuedBytes and needs both to advance by whole frames.
  * writePos advances MASKED modulo capacity — an unbounded Atomics.add
  * wraps the Int32 negative after 2^31 cumulative bytes (~1.5-3h of
@@ -7624,7 +7624,7 @@ const WMEV_QUIT = 0x100, WMEV_WINDOW_RESIZED = 0x206,
       // distinct from QUIT (the close request). word[2] = reason.
       WMEV_POPUP_DISMISSED = 0x7101;
 
-/* CD26 tripwire (mirrors todos/0235's payloadChunk rule): the constants
+/* CD26 tripwire (mirrors docs/archive/0235's payloadChunk rule): the constants
  * above re-declare kernel.js's SH_* / IR_* / WMEV / AU_* SAB layouts —
  * host.js is a standalone module and cannot import them — and drift between
  * the two copies corrupts presents/screenshots/input/audio SILENTLY. The
@@ -7662,7 +7662,7 @@ function assertWmSabLayout(hooks) {
   };
   const theirs = hooks && hooks.wmSabLayout;
   if (!theirs) {
-    throw new Error('spawnHooks.wmSabLayout missing — kernel.js/host.js out of sync (CD26, the todos/0235 shape)');
+    throw new Error('spawnHooks.wmSabLayout missing — kernel.js/host.js out of sync (CD26, the docs/archive/0235 shape)');
   }
   const drift = [];
   (function cmp(a, b, prefix) {
@@ -7682,7 +7682,7 @@ function assertWmSabLayout(hooks) {
                     drift.join(', ') + ' — the two declarations MUST move together');
   }
 }
-// Cursor shape (SDL_SystemCursor) -> CSS `cursor` name (todos/0105). Index is
+// Cursor shape (SDL_SystemCursor) -> CSS `cursor` name (docs/archive/0105). Index is
 // the wire shape; -1 (hidden) maps to 'none'. The kernel derives chrome
 // resize cursors and overlays them over an app's per-surface cursor; the
 // page/canvas just applies the name. os.html carries an identical map (it is
@@ -7695,7 +7695,7 @@ const CURSOR_CSS = [
 ];
 CURSOR_CSS[-1] = 'none';
 
-/* Lazy, optional Dawn probe (todos/WM.md "Headless testing tiers", tier 1):
+/* Lazy, optional Dawn probe (docs/WM.md "Headless testing tiers", tier 1):
  * the `webgpu` package (dawn-gpu/node-webgpu) is a devDependency, NEVER a hard
  * import — stock Node resolves null and webgpu programs see a clean
  * adapter-unavailable (identical to the null backend). Probed only when a
@@ -7712,7 +7712,7 @@ function resolveDawnGpu() {
   return Promise.resolve(dawnGpu);
 }
 
-// Per-device source ring for the kernel audio mixer (todos/0017). 256K is
+// Per-device source ring for the kernel audio mixer (docs/archive/0017). 256K is
 // ~1.5s of 44.1kHz stereo S16 — apps self-pace against much smaller queue
 // targets (doom keeps 200ms), and it is a multiple of every frame size
 // (1..8 bytes), which the kernel requires (frames never straddle the wrap).
@@ -7727,7 +7727,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   let ring = null;                   // { sab, i32, f32, cap } — one per process
   let onConfigure = null;            // flavor hook: WINDOW_RESIZED ring record
 
-  /* ---- audio: per-device source rings into the kernel mixer (todos/0017;
+  /* ---- audio: per-device source rings into the kernel mixer (docs/archive/0017;
    * WM.md "Audio mixing"). Same SAB layout as the standalone ring
    * (createSharedAudioBuffer); the kernel is the consumer instead of the
    * page. `playing` is written HERE (SDL3 devices open paused; resume sets
@@ -7814,7 +7814,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         const d = audioDevices[dev - 1];
         if (d) { hooks.audioClose(d.aid); audioDevices[dev - 1] = null; }
       },
-      // Master mixer gain (todos/0048, kernel AUDIO_GAIN): percent 0..200,
+      // Master mixer gain (docs/archive/0048, kernel AUDIO_GAIN): percent 0..200,
       // negative queries. Older embedder kernels answer ENOSYS -> -1.
       __audio_gain: function (gain) {
         if (typeof hooks.audioGain !== 'function') return -1;
@@ -7848,16 +7848,16 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     const title = titlePtr ? readString(titlePtr) : '';
     const fb = allocFb(w, h, 1);
     // SDL_WINDOW_BORDERLESS (0x10) -> kernel surface flags bit0 (no chrome);
-    // SDL_WINDOW_RESIZABLE (0x20) -> bit2 (todos/0021: the kernel offers
+    // SDL_WINDOW_RESIZABLE (0x20) -> bit2 (docs/archive/0021: the kernel offers
     // resize — drag zones, wmResize — only to surfaces that carry it);
-    // SDL_WINDOW_TRANSPARENT (0x40000000) -> bit3 (todos/0063: per-pixel
+    // SDL_WINDOW_TRANSPARENT (0x40000000) -> bit3 (docs/archive/0063: per-pixel
     // alpha, composited src-over in both composites).
-    // SDL_WINDOW_UTILITY (0x20000) -> bit4 (todos/0281: transient/owned window
+    // SDL_WINDOW_UTILITY (0x20000) -> bit4 (docs/archive/0281: transient/owned window
     // — /bin/wm gives it no taskbar button and skips it when cycling; owned
     // modals like MessageBox/dialogs are never taskbar entries in Win95).
     let kFlags = ((sdlFlags & 0x10) ? 1 : 0) | ((sdlFlags & 0x20) ? 4 : 0) |
                  ((sdlFlags & 0x40000000) ? 8 : 0) | ((sdlFlags & 0x20000) ? 16 : 0) | ((sdlFlags & 8) ? 256 : 0);
-    // SDL_CreatePopupWindow (todos/0256): an anchored child surface — kernel
+    // SDL_CreatePopupWindow (docs/archive/0256): an anchored child surface — kernel
     // flag bit6 + parentSid/dx/dy, implicitly borderless (bit0), and
     // SDL_WINDOW_POPUP_MENU (0x80000) carries the kernel GRAB (bit7, menu
     // arch A2: press-outside-dismisses); SDL_WINDOW_TOOLTIP (0x40000) does
@@ -7889,7 +7889,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     if (!sid || !(lifecycleBySid.get(sid) >= 2)) return -1;
     return lifecycle(sid, 'surfaceSetOwner', ownerSid | 0);
   }
-  /* SDL_GetDisplayBounds (todos/0256): the kernel screen dims off the vDSO
+  /* SDL_GetDisplayBounds (docs/archive/0256): the kernel screen dims off the vDSO
    * page (zero RPCs). Packed (w << 16) | h — dims are capped at 8192 kernel-
    * side, so the pack always fits a positive i32; 0 = no display authority
    * in this flavor (the C side surfaces a clean SDL error). */
@@ -7899,7 +7899,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     if (!scr || !(scr.w > 0) || !(scr.h > 0)) return 0;
     return (scr.w << 16) | scr.h;
   }
-  /* SDL_SetWindowRelativeMouseMode -> SURFACE_SET_FLAGS bit1 (todos/0018).
+  /* SDL_SetWindowRelativeMouseMode -> SURFACE_SET_FLAGS bit1 (docs/archive/0018).
    * The kernel round-trips the flag to the UI bridge (pointer lock) and
    * pushes rel-flagged motion records while the lock is held. Pre-0018
    * embedders lack the hook: the request is a clean no-op (the app keeps
@@ -7914,7 +7914,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       }
     }
   }
-  /* SDL_SetCursor -> SURFACE_SET_CURSOR (todos/0105). The kernel keeps the
+  /* SDL_SetCursor -> SURFACE_SET_CURSOR (docs/archive/0105). The kernel keeps the
    * per-surface cursor shape and OVERLAYS chrome cursors (resize edges) over
    * it, then round-trips the effective cursor to the UI bridge. Pre-0105
    * embedders lack the hook: a clean no-op (the native arrow stays). */
@@ -7924,7 +7924,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       if (h === handle) hooks.surfaceSetCursor(sid, shape | 0);
     }
   }
-  /* Owner-initiated resize (todos/0068, SDL_SetWindowSize): ask the kernel
+  /* Owner-initiated resize (docs/archive/0068, SDL_SetWindowSize): ask the kernel
    * for a new buffer size. The kernel answers asynchronously with the same
    * WINDOW_RESIZED -> configure -> present-ack renegotiation as a WM/drag
    * resize (below), so the app-facing contract is one path: the new size
@@ -7954,7 +7954,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     const r = hooks.surfaceResize(sid, w | 0, h | 0);
     return (r && !r.errno) ? 0 : -1;
   }
-  /* ---- buffer renegotiation (todos/0019) ----
+  /* ---- buffer renegotiation (docs/archive/0019) ----
    * A WINDOW_RESIZED ring record allocates the NEW fb here; the ack (a
    * SURFACE_CONFIGURE RPC, new SAB riding {type:'wm-sabs'} like at create)
    * is gated on the app's first present AT the new size — that frame lands
@@ -7993,7 +7993,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   }
   let staleAcks = 0;   // #790 probe: acks the kernel refused as retired
   function frameStats() { return { staleAcks: staleAcks, flipMisses: wmShmFlipMisses }; }
-  /* Doorbell-on-present (todos/0169): an shm present is SAB-only, so a
+  /* Doorbell-on-present (docs/archive/0169): an shm present is SAB-only, so a
    * parked compositor cannot see it — after every WMSH_SEQ bump, re-read
    * the kernel-page parked flag and post want-frame if set. Cost while
    * armed: one atomic load per present; the message only when parked. Also
@@ -8031,7 +8031,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       }
     }
     wmShmFlip(fb, back);                    // flip under SH_LOCK (#790)
-    ringIfParked();                         // doorbell-on-present (todos/0169)
+    ringIfParked();                         // doorbell-on-present (docs/archive/0169)
     if (fb !== win.fb) ackConfigure(win);   // first new-size frame: ack + swap
     return 0;
   }
@@ -8058,7 +8058,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
           break;
         case WMEV_MOUSEMOTION:
           if (ring.i32[base + 5]) {
-            // Relative record (word[5]=1, todos/0018): [2]/[3] are f32 deltas,
+            // Relative record (word[5]=1, docs/archive/0018): [2]/[3] are f32 deltas,
             // not positions — pointer-lock motion or an injected rel event.
             if (ex.__sdl_push_mouse_motion_rel_event) {
               ex.__sdl_push_mouse_motion_rel_event(handle, ring.f32[base + 2], ring.f32[base + 3], ring.i32[base + 4]);
@@ -8103,7 +8103,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
           break;
         case 0x202: case 0x203: // SDL window shown/hidden
         case WMEV_FOCUS_GAINED: case WMEV_FOCUS_LOST:
-          // The owner focus pair (todos/0256, menu arch A9): SDL3's stock
+          // The owner focus pair (docs/archive/0256, menu arch A9): SDL3's stock
           // SDL_EVENT_WINDOW_FOCUS_GAINED/LOST, delivered per-window.
           if (ex.__sdl_push_window_event) {
             ex.__sdl_push_window_event(handle, type, 0, 0);
@@ -8138,7 +8138,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     }
     return drained;
   }
-  /* Blocking message-loop park (todos/0058 — user32's GetMessage): drain,
+  /* Blocking message-loop park (docs/archive/0058 — user32's GetMessage): drain,
    * and if the ring is dry park on IR_WPOS until the kernel's push
    * notifies (kernel.js _wmPushEvent) or timeoutMs elapses, then drain
    * again. Runs INSIDE a wasm import call, so the drained events are in
@@ -8148,7 +8148,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
    * can pace itself instead of spinning. Wakes can be spurious; the
    * caller re-checks its queues. Processes run in workers, where
    * Atomics.wait is allowed.
-   * NO PARK WHEN THE ENTRY DRAIN PRODUCED EVENTS (todos/0168): events that
+   * NO PARK WHEN THE ENTRY DRAIN PRODUCED EVENTS (docs/archive/0168): events that
    * landed between the caller's last queue check and this call used to be
    * moved into the wasm queue and then slept past for the full timeout —
    * under a 25ms GetMessage chunk that was a bounded hiccup, under wm.c's
@@ -8164,7 +8164,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     // burned the browser's blocked-worker ImageBitmap budget, #551).
     if (flushPresent) flushPresent(timeoutMs >= 15 ? 'force' : 'park');
     // WaitEvent/GetMessage entry = this app is back to waiting on events
-    // (todos/0169): release the kernel-side wantFrame pin so the compositor
+    // (docs/archive/0169): release the kernel-side wantFrame pin so the compositor
     // may park. Gated on a present since the last release — an idle 25ms
     // GetMessage chunker posts nothing, an app that just presented posts
     // exactly once.
@@ -8183,7 +8183,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     }
     return 1;
   }
-  /* Unified multi-source wait (todos/0178) — the __wait import. One
+  /* Unified multi-source wait (docs/archive/0178) — the __wait import. One
    * kernel FS_WAIT RPC over {read fds} ⊕ the input ring ⊕ a timeout;
    * readiness-check and park are atomic KERNEL-side, which is the whole
    * point: this is the only sanctioned way to sleep on more than one
@@ -8195,7 +8195,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
    * (why=2 with the record already consumed by an entry drain) — the
    * caller's contract is re-poll-on-any-return, same as pumpWait.
    * Keeps pumpWait's two entry rules: frame-idle release (0169), and
-   * NO PARK WHEN THE ENTRY DRAIN PRODUCED EVENTS (todos/0168, b136b72) —
+   * NO PARK WHEN THE ENTRY DRAIN PRODUCED EVENTS (docs/archive/0168, b136b72) —
    * events moved into the wasm queue before the kernel scan would
    * otherwise be slept past. */
   function waitMulti(rfdsPtr, nr, ringInterest, timeoutMs) {
@@ -8220,7 +8220,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     if (ringInterest) drainInput();           // ring wake visible at import return
     return resp.why | 0;
   }
-  /* SDL_Delay (todos/0224): OS processes run in workers, where blocking is
+  /* SDL_Delay (docs/archive/0224): OS processes run in workers, where blocking is
    * legal — the classic while(running){ poll; draw; SDL_Delay(16); } corpus
    * loop is FIRST-CLASS here, no restructure-to-callback tax (that tax is
    * real only in the standalone browser runtime; see sdlDelayUnsupported).
@@ -8330,7 +8330,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       f[o + 2] = (b * ia + f[o + 2] * na) | 0;
       f[o + 3] = ta ? (a + f[o + 3] * na) | 0 : 255;
     };
-    // Resize renegotiation (todos/0019): pendingCfg only exists once drainInput
+    // Resize renegotiation (docs/archive/0019): pendingCfg only exists once drainInput
     // delivered the RESIZED event (created in the same drain iteration that
     // queues it and re-derives the C-side window surface in place). ensureFb
     // then adopts the pending dims at the next RenderClear — the renderer
@@ -8863,7 +8863,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     let legacySid = 0;                 // last-created window (legacy tail only)
     /* The gpu-transport present tail (raw webgpu.h wgpuSurfacePresent and the
      * SDL renderer's flush land here): snapshot the given canvas and hand the
-     * frame to the kernel (todos/WM.md, spike S1).
+     * frame to the kernel (docs/WM.md, spike S1).
      *
      * Producer-side backpressure (ticket #484): each present here is a fresh
      * ~w*h*4-byte GPU ImageBitmap plus a fire-and-forget postMessage, and the
@@ -8874,7 +8874,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
      * the browser GPU process within seconds, killing the whole tab. Clamp
      * at the producer: at most ONE transferToImageBitmap per kernel vsync
      * tick — the same compositor rAF that consumes the mailbox
-     * (hooks.vsyncSeq, todos/0100/0167) — with a wall-clock interval as the
+     * (hooks.vsyncSeq, docs/archive/0100/0167) — with a wall-clock interval as the
      * no-advertisement fallback. Mailbox semantics unchanged (newest wins):
      * a clamped present ships nothing, and the canvas — which still holds
      * that frame — is HELD so the freshest frame is never lost: it re-ships
@@ -8902,7 +8902,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     const shipFrame = function (sid, cnv) {
       try {
         const bmp = cnv.transferToImageBitmap();
-        // gpu-transport resize ack (todos/0019): the first bitmap at the
+        // gpu-transport resize ack (docs/archive/0019): the first bitmap at the
         // pending size acks FIRST, so the kernel geometry is already the
         // new size when this frame lands (no one-frame scaled draw).
         const win = fbByHandle.get(handleBySid.get(sid));
@@ -8998,7 +8998,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     // (requestAdapter → requestDevice → configure), historically kicked
     // lazily at the app's first SDL_CreateRenderer — but OS SDL apps may
     // legally BLOCK in their main loop (sdlDelay is a real Atomics.wait
-    // sleep, todos/0224), so once main() starts this worker's event loop
+    // sleep, docs/archive/0224), so once main() starts this worker's event loop
     // never turns again and the chain can neither resolve nor reject;
     // rdrPipelines stayed null and every present hit the drop-pre-device
     // branch (verified: a setTimeout queued at create_renderer never fires).
@@ -9055,7 +9055,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       fbByHandle.set(handle, { sid: s.sid, fb: s.fb, w: w, h: h, serial: 1 });
       return handle;
     };
-    // SDL_CreatePopupWindow (todos/0256): an anchored child of an existing
+    // SDL_CreatePopupWindow (docs/archive/0256): an anchored child of an existing
     // window — registered in the SAME per-handle tables, so presents,
     // events, destroy and owner-resize all ride the ordinary per-window
     // paths. Deliberately does NOT repoint legacySid (a popup is never the
@@ -9094,7 +9094,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
       const win = fbByHandle.get(handle);
       return windowViewable(win && win.sid);
     };
-    env.__sdl_get_display_bounds = displayBounds;   // (todos/0256)
+    env.__sdl_get_display_bounds = displayBounds;   // (docs/archive/0256)
     // CPU software-present path: shm transport, no GPU dependency (see
     // shmPresent). The WebGPU renderer keeps the bitmap path via onPresent.
     env.__sdl_update_window_surface = function (handle, pixelsPtr, w, h, pitch) {
@@ -9143,7 +9143,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
     env.__wait = waitMulti;           // unified multi-source wait (0178)
     env.__sdl_delay = sdlDelay;       // cooperative worker sleep (0224) —
                                       // overrides inner's standalone-page throw
-    // Resize request (todos/0019): allocate the new shm SAB and resize the
+    // Resize request (docs/archive/0019): allocate the new shm SAB and resize the
     // canvas that presents THIS sid (per-window binding, A4) — the SDL
     // renderer draws at canvas size, and a webgpu.h app's own
     // wgpuSurfaceConfigure re-sizes it again (idempotent). Unbound sids keep
@@ -9178,7 +9178,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         });
       });
     };
-    // Vsync broadcast (todos/0100, wired by todos/0167): when the kernel
+    // Vsync broadcast (docs/archive/0100, wired by docs/archive/0167): when the kernel
     // advertises a real frame clock (compositor rAF → vsyncTick), pace the
     // frame loop by awaiting the kernel-page tick word — phase-aligned with
     // the composite that samples our presents, and parked for free while
@@ -9252,7 +9252,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
   return {
     setMainLive: setMainLive,        // armed by runModule around the wasm entry (#551/#712)
     getAnimationFrameFunc: function () { return animationFrameFunc; },
-    // Vsync broadcast (todos/0100): when the kernel advertises a real frame
+    // Vsync broadcast (docs/archive/0100): when the kernel advertises a real frame
     // clock (browser compositor rAF → vsyncTick), pace the frame loop by
     // awaiting the kernel-page tick word — phase-aligned with the composite
     // that samples our presents, and parked for free while the tab is
@@ -9284,7 +9284,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         /* Tightly-packed RGBA rows (src may carry copyTextureToBuffer's 256B
          * row padding) -> back buffer -> mailbox flip, mirroring shmPresent —
          * including the renegotiation gate: a Dawn app that reconfigured its
-         * surface to the pending size acks through here (todos/0019). */
+         * surface to the pending size acks through here (docs/archive/0019). */
         /* #712: the main-live guard for this transport does NOT live here —
          * this function runs inside shmPresentTail's mapAsync continuation,
          * i.e. only after the wasm stack unwound, so mainLive is false by
@@ -9306,7 +9306,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
               base + row * fb.w * 4);
           }
           wmShmFlip(fb, back);              // flip under SH_LOCK (#790)
-          ringIfParked();                   // doorbell-on-present (todos/0169)
+          ringIfParked();                   // doorbell-on-present (docs/archive/0169)
           if (fb !== win.fb) ackConfigure(win);
         },
       },
@@ -9321,7 +9321,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         handleBySid.set(s.sid, windows.length);
         return windows.length;
       },
-      // SDL_CreatePopupWindow (todos/0256): anchored child, same per-handle
+      // SDL_CreatePopupWindow (docs/archive/0256): anchored child, same per-handle
       // tables — presents/events/destroy/owner-resize ride the ordinary
       // per-window paths (see the browser flavor's twin above).
       __sdl_create_popup_window: function (parentHandle, dx, dy, w, h, flags) {
@@ -9357,7 +9357,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         const win = windows[handle - 1];
         return windowViewable(win && win.sid);
       },
-      __sdl_get_display_bounds: displayBounds,   // (todos/0256)
+      __sdl_get_display_bounds: displayBounds,   // (docs/archive/0256)
       __sdl_destroy_window: function (handle) {
         const win = windows[handle - 1];
         if (!win) return;
@@ -9372,7 +9372,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         if (win) hooks.surfaceSetTitle(win.sid, titlePtr ? readString(titlePtr) : '');
       },
       __sdl_set_relative_mouse_mode: setRelativeMouse,
-      __sdl_set_cursor: setCursor,          // per-surface cursor (todos/0105)
+      __sdl_set_cursor: setCursor,          // per-surface cursor (docs/archive/0105)
       __sdl_set_window_size: function (handle, w, h) {
         const win = windows[handle - 1];
         return win ? requestResize(win.sid, w, h) : -1;
@@ -9414,7 +9414,7 @@ function createSurfaceSDL({ ctx, hooks, proc }) {
         return bytes.length;
       },
       // Audio: real source rings into the kernel mixer in both flavors
-      // (todos/0017) — see buildAudioEnv above.
+      // (docs/archive/0017) — see buildAudioEnv above.
       // SDL 2D renderer (SDL_Render*): the software rasterizer over each
       // window's shm surface (headless/Node has no GPU renderer at all).
     }, audioEnv, swRenderer),
@@ -9517,7 +9517,7 @@ function createCanvasGPU(canvas) {
  */
 function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyWindow, onPresent, vsyncCapable }) {
   const { readString, getMemory, getExports } = ctx;
-  // onPresent (todos/WM.md gpu transport): called after every frame actually
+  // onPresent (docs/WM.md gpu transport): called after every frame actually
   // reaches the canvas (software blit or renderer flush) — the OS surface
   // backend hooks transferToImageBitmap + kernel handoff here.
 
@@ -9976,19 +9976,19 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
         win.title = title;
         if (notifyWindow) notifyWindow({ type: 'sdl-title', title: title });
       },
-      // SDL_SetWindowRelativeMouseMode (todos/0018): the page owns the DOM, so
+      // SDL_SetWindowRelativeMouseMode (docs/archive/0018): the page owns the DOM, so
       // carry the request out — it arms click-to-pointer-lock on the canvas and
       // switches mousemove to movementX/Y descriptors while locked.
       __sdl_set_relative_mouse_mode: function (handle, enabled) {
         if (notifyWindow) notifyWindow({ type: 'sdl-relative-mouse', enabled: !!enabled });
       },
-      // SDL_SetCursor (todos/0105): the standalone page owns its canvas, so
+      // SDL_SetCursor (docs/archive/0105): the standalone page owns its canvas, so
       // apply the CSS cursor directly (shape -1 = hide). The OS flavor
       // overrides this to route the shape through the kernel instead.
       __sdl_set_cursor: function (handle, shape) {
         if (canvas && canvas.style) canvas.style.cursor = CURSOR_CSS[shape] || 'default';
       },
-      // SDL_SetWindowSize (todos/0068): only the kernel-surface flavor can
+      // SDL_SetWindowSize (docs/archive/0068): only the kernel-surface flavor can
       // renegotiate a buffer; the standalone page's canvas is the page's.
       __sdl_set_window_visible: function () { return -1; },
       __sdl_raise_window: function () { return -1; },
@@ -9996,7 +9996,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_set_window_parent: function () { return -1; },   // no window system (#794)
       __sdl_get_window_viewable: function () { return -1; },
       __sdl_set_window_size: function () { return -1; },
-      // Anchored popups + display bounds are OS-WM concepts (todos/0256):
+      // Anchored popups + display bounds are OS-WM concepts (docs/archive/0256):
       // the standalone page has ONE canvas -> clean failure, C sets errors.
       __sdl_create_popup_window: function () { return 0; },
       __sdl_get_display_bounds: function () { return 0; },
@@ -10270,7 +10270,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       },
 
       // The ONE flavor where SDL_Delay genuinely can't be honoured
-      // (todos/0224 scoped the old uniform throw down to here): the
+      // (docs/archive/0224 scoped the old uniform throw down to here): the
       // standalone-browser callback model paces frames via rAF, main() must
       // return, and input/presents ride the message loop — blocking would
       // freeze the page even where Atomics.wait is technically legal. Fails
@@ -10280,9 +10280,9 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
       __sdl_delay: function () { sdlDelayUnsupported(); },
       // No OS input ring in this flavor (events are pushed by page listeners,
       // and the main thread must never block) — SDL_WaitEvent* falls back to
-      // a nanosleep pace on a 0 return (todos/0161), which itself fails loud
+      // a nanosleep pace on a 0 return (docs/archive/0161), which itself fails loud
       // on a main thread that cannot Atomics.wait. No kernel WAIT either —
-      // __wait callers fall back to their chunked poll on -2 (todos/0178).
+      // __wait callers fall back to their chunked poll on -2 (docs/archive/0178).
       __sdl_pump_wait: function () { return 0; },
       __sdl_pump: function () { return 0; },   // no ring — events are page-pushed (#485)
       __wait: function () { return -2; },
@@ -10389,7 +10389,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
     },
     pushMouseMotionRelEvent: function (handle, dx, dy, state) {
       const fn = getExports().__sdl_push_mouse_motion_rel_event;
-      if (fn) fn(handle, dx, dy, state | 0);   // pointer-lock deltas (todos/0018)
+      if (fn) fn(handle, dx, dy, state | 0);   // pointer-lock deltas (docs/archive/0018)
     },
     pushMouseWheelEvent: function (handle, x, y, direction) {
       const fn = getExports().__sdl_push_mouse_wheel_event;
@@ -10410,7 +10410,7 @@ function createBrowserSDL({ canvas, ctx, sharedAudioBuffer, notifyAudio, notifyW
  * export (__wgpu_call_*_cb) which rebuilds the by-value WGPUStringView and calls
  * the user's callback through its table index. Frames run on the shared SDL rAF
  * loop (wgpuSetMainLoopCallback -> __sdl_set_animation_frame_func). The canvas
- * is the SAME OffscreenCanvas the SDL backend gets. See todos/WEBGPU.md.
+ * is the SAME OffscreenCanvas the SDL backend gets. See docs/WEBGPU.md.
  * ========================================================================== */
 
 /* Enum int <-> WebGPU JS string maps. Values mirror webgpu.h exactly. */
@@ -10538,7 +10538,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface
   const { readString, getMemory, getExports } = ctx;
   /* GPU acquisition: navigator.gpu synchronously when present (browser);
    * otherwise an injected async resolver — the OS headless flavor's lazy Dawn
-   * probe (todos/WM.md tier 1). gpuNow latches once the resolver settles so the
+   * probe (docs/WM.md tier 1). gpuNow latches once the resolver settles so the
    * sync paths keep working. */
   let gpuNow = (typeof navigator !== 'undefined' && navigator.gpu) ? navigator.gpu : null;
   function gpuPromise() {
@@ -10605,7 +10605,7 @@ function createBrowserWebGPU({ canvas, ctx, notifyWindow, resolveGpu, shmSurface
   /* ---- shm present tail (Dawn / headless OS): the "swapchain" is a plain
    * GPUTexture; present = copyTextureToBuffer readback -> the SDL window's shm
    * SAB, flipped mailbox-style — the kernel compositor cannot tell Dawn output
-   * from a CPU app (todos/WM.md "The two axes"). Usage/mode literals are the
+   * from a CPU app (docs/WM.md "The two axes"). Usage/mode literals are the
    * WebGPU spec constants (Dawn's globals are not installed). */
   function shmPresentTail(s) {
     if (!s.tex || !s.device || s.pending) return;  /* mailbox: drop while a readback is in flight */
@@ -11483,7 +11483,7 @@ const SDL_WEB = (function () {
        SDL_GetKeyFromScancode(scancode, modstate, true), so Shift+a => SDLK_A
        (65), plain a => 97, Shift+1 => '!' (33). DOM e.key is exactly that
        produced character. Do NOT "fix" this to unshifted SDL2 semantics — see
-       todos/SDL3.md (audit false positive) and tests/browser/
+       docs/SDL3.md (audit false positive) and tests/browser/
        sdl-shifted-keysym-check.mjs, which pins this. */
     if (typeof e.key === 'string' && e.key.length === 1) return e.key.charCodeAt(0);
     /* Astral chars (host IME emoji etc.) arrive as one surrogate pair; the
@@ -11572,7 +11572,7 @@ const SDL_WEB = (function () {
       const c = canvasCoords(canvas, e, logical);
       return { kind: 'mousemove', x: c.x, y: c.y, state: buttonMask(e) };
     },
-    /* Pointer-locked motion (todos/0018): movementX/Y are CSS-pixel deltas;
+    /* Pointer-locked motion (docs/archive/0018): movementX/Y are CSS-pixel deltas;
      * scale them to logical SDL pixels with the same letterbox math as
      * canvasCoords so sensitivity doesn't change with the CSS zoom. */
     mouseMoveRelMsg: function (canvas, e, logical) {
@@ -12057,11 +12057,11 @@ async function runSsModule(bytes, opts) {
  * No DWARF, no side table.
  *
  * Both sections are read off the `WebAssembly.Module`, NOT off the module
- * bytes: the kernel's module cache (todos/0037) structured-clones a compiled
+ * bytes: the kernel's module cache (docs/archive/0037) structured-clones a compiled
  * Module and drops the bytes, and `WebAssembly.Module.customSections()` still
  * works on the clone. Symbolication therefore costs no extra transfer.
  *
- * HONEST SHAPE (todos/PRINCIPLES.md, Principle 2). This reports only what it
+ * HONEST SHAPE (docs/PRINCIPLES.md, Principle 2). This reports only what it
  * can actually derive, and says so when it cannot:
  *   - no `name` section  -> frames are printed as `wasm-function[N]`, with a
  *     note naming `cc -g` as the fix. No name is ever invented.
@@ -12252,7 +12252,7 @@ function deliverTrapReport(text, ctx, writeErr) {
 
 async function runModule({
   bytes,
-  // Pre-compiled Module (todos/0037): skips the parse+compile below. The
+  // Pre-compiled Module (docs/archive/0037): skips the parse+compile below. The
   // kernel ships one for read-only-volume binaries — compiled once
   // kernel-side, structured-cloned per spawn (Modules clone; Instances
   // don't). ss-flavored modules are never shipped this way (they recompile
@@ -12280,7 +12280,7 @@ async function runModule({
   // Absent → falls back to process.pid (Node) / 1 (browser).
   pid,
   ppid,
-  // Optional LIVE ppid getter (todos/0179): kernel-spawned processes pass a
+  // Optional LIVE ppid getter (docs/archive/0179): kernel-spawned processes pass a
   // vDSO-page read so getppid() tracks orphan reparenting to init; a null
   // return falls back to the static ppid above.
   getppid,
@@ -12295,7 +12295,7 @@ async function runModule({
   // Wall-clock ceiling in ms (#184): >0 arms a deadline checked at the env
   // import choke (every import call, throttled), so an I/O-looping module
   // that overruns dies with a named error instead of burning cores for days
-  // (the todos/0332 orphan pair: ~70 CPU-hours). CLI-only in practice — the
+  // (the docs/archive/0332 orphan pair: ~70 CPU-hours). CLI-only in practice — the
   // Node CLI defaults it ON for non-interactive stdin; embedders (kernel
   // process-worker, browser, boot.js) never set it and are untouched. A
   // pure-compute loop that calls no imports stays uninterruptible, the same
@@ -13361,8 +13361,8 @@ async function runModule({
     'EINVAL': 22, 'ENFILE': 23, 'EMFILE': 24, 'ENOTTY': 25, 'EFBIG': 27,
     'ENOSPC': 28, 'ESPIPE': 29, 'EROFS': 30, 'EPIPE': 32, 'EDOM': 33,
     'ERANGE': 34, 'ENAMETOOLONG': 36, 'ENOSYS': 38, 'ENOTEMPTY': 39,
-    'ELOOP': 40,   // symlink cycle — realpathPhysical (todos/0263) is the first setter
-    // Socket family (todos/0008) — numbers match <errno.h> in the libc.
+    'ELOOP': 40,   // symlink cycle — realpathPhysical (docs/archive/0263) is the first setter
+    // Socket family (docs/archive/0008) — numbers match <errno.h> in the libc.
     'ENOTSOCK': 88, 'EDESTADDRREQ': 89, 'EPROTOTYPE': 91, 'EPROTONOSUPPORT': 93,
     'EOPNOTSUPP': 95, 'EAFNOSUPPORT': 97, 'EADDRINUSE': 98,
     'ENETUNREACH': 101,   // net bridge configured but unreachable (ticket #349)
@@ -13659,7 +13659,7 @@ async function runModule({
       __clock_ns_lo: function () {
         return clockNsLatchLo;
       },
-      /* getentropy(2) backing (todos/0325 Group B). A HOST import rather
+      /* getentropy(2) backing (docs/archive/0325 Group B). A HOST import rather
          than a read of /dev/urandom: entropy is a host capability, and
          routing it through a device node makes a security-relevant
          primitive depend on filesystem layout. That is not hypothetical —
@@ -13775,7 +13775,7 @@ async function runModule({
     sdl = createBrowserSDL({ canvas: getBrowserSDL, ctx: ctx, sharedAudioBuffer: sharedAudioBuffer, notifyAudio: notifyAudio, notifyWindow: notifyWindow });
   }
   // OS process (kernel.js spawnHooks carry the surface ops) with no injected
-  // canvas: SDL windows become kernel surfaces (todos/WM.md) — WebGPU onto a
+  // canvas: SDL windows become kernel surfaces (docs/WM.md) — WebGPU onto a
   // worker-local OffscreenCanvas + ImageBitmap handoff in the browser, shm
   // framebuffer pixels headless.
   if (!sdl && spawnHooks && typeof spawnHooks.surfaceCreate === 'function') {
@@ -13809,7 +13809,7 @@ async function runModule({
   const hasGpu = (typeof navigator !== 'undefined' && navigator.gpu);
   // OS surface backend (createSurfaceSDL): the webgpu binding rides its config —
   // browser flavor shares the worker-local canvas + ImageBitmap present tail;
-  // headless flavor gets the lazy Dawn probe + shm readback tail (todos/0016).
+  // headless flavor gets the lazy Dawn probe + shm readback tail (docs/archive/0016).
   const wCfg = (sdl && sdl.webgpuConfig) || null;
   const webgpu = wCfg
     ? createBrowserWebGPU({ canvas: wCfg.canvas || null, ctx: ctx, notifyWindow: notifyWindow,
@@ -13826,15 +13826,15 @@ async function runModule({
   const spawnImports = spawnHooks ? createSpawn(ctx, spawnHooks) : createNullSpawn(ctx);
   Object.assign(imports[ENV_KEY], spawnImports[ENV_KEY]);
 
-  /* ---- System clipboard (todos/0090): kernel slot via spawnHooks, or a
+  /* ---- System clipboard (docs/archive/0090): kernel slot via spawnHooks, or a
      process-local slot with the same semantics when there's no kernel. */
   Object.assign(imports[ENV_KEY], createClipboard(ctx, spawnHooks || null)[ENV_KEY]);
 
-  /* ---- Egress (todos/0398): gucOS -> host file transfer via the kernel's
+  /* ---- Egress (docs/archive/0398): gucOS -> host file transfer via the kernel's
      EGRESS RPC; ENOSYS (fail-loud, no local fallback) with no kernel. */
   Object.assign(imports[ENV_KEY], createEgress(ctx, spawnHooks || null)[ENV_KEY]);
 
-  /* ---- HTTP transport (todos/0172): kernel fetch via spawnHooks; ENOSYS
+  /* ---- HTTP transport (docs/archive/0172): kernel fetch via spawnHooks; ENOSYS
      (fail-loud) with no kernel. Under the libcurl veneer (0173) + /bin/code. */
   Object.assign(imports[ENV_KEY], createHttp(ctx, spawnHooks || null)[ENV_KEY]);
 
@@ -13999,7 +13999,7 @@ async function runModule({
     return (read === str.length) ? 1 : 0;
   };
 
-  /* ---- Kernel signal delivery (todos/KERNEL.md Phase 2) ----
+  /* ---- Kernel signal delivery (docs/KERNEL.md Phase 2) ----
      With a kernel attached (spawnHooks.sigpoll), every env import return is
      a SAFE POINT: claim the deliverable pending signals off the kernel page
      and run the C handlers through the module's __sig_dispatch export.
@@ -14053,7 +14053,7 @@ async function runModule({
     };
   }
 
-  /* ---- wasi_snapshot_preview1 (todos/0442) ----
+  /* ---- wasi_snapshot_preview1 (docs/archive/0442) ----
      The ONE sanctioned second import namespace (RUST.md §3 rule 1 as
      amended by the 0418 ruling), served beside "c" for wasip1 std modules.
      Built ONLY when the module imports it, and only over the BlockFS-model
@@ -14186,7 +14186,7 @@ async function runModule({
   if (ctx.bindSigDispatch) ctx.bindSigDispatch(instance.exports);
   if (onReady) onReady({ sdl: sdl, instance: instance });
 
-  /* wasip1 entry (todos/0442; RUST.md §2 amendment): a command module that
+  /* wasip1 entry (docs/archive/0442; RUST.md §2 amendment): a command module that
      imports wasi_snapshot_preview1 and exports `_start` (and no `main`)
      plays crt0 ITSELF — wasm-ld's synthesized _start runs the ctors, calls
      main, runs the dtors — and pulls argv/envp through args_get/
@@ -14544,7 +14544,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   var blockFSPath = null;
   // --max-seconds=N (#184): wall-clock ceiling for the module. Defaults ON
   // (3600s) when stdin is not a TTY — the benchmark/scripted shape, where an
-  // overrun means an orphaned lane child burning cores unnoticed (todos/0332:
+  // overrun means an orphaned lane child burning cores unnoticed (docs/archive/0332:
   // two of them, ~70 CPU-hours over 2.5 days). Interactive runs (a human at a
   // TTY, who can ^C) default to no ceiling. 0 disables explicitly.
   var maxSeconds = (typeof process.stdin.isTTY !== 'undefined' && process.stdin.isTTY) ? 0 : 3600;

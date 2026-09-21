@@ -1,10 +1,10 @@
-/* wmctl.c — /bin/wmctl, xdotool-as-a-syscall (todos/0014; WM.md "Agent
+/* wmctl.c — /bin/wmctl, xdotool-as-a-syscall (docs/archive/0014; WM.md "Agent
  * control channel"). One connection per invocation to the kernel's WM
  * endpoint (wm_proto.h); unsubscribed, so the stream carries only replies.
  *
  *   wmctl list                        windows: SID PID GEOM DST Z FLAGS TITLE
  *   wmctl wait COND ARGS... [MS]      block until an observable WM condition
- *                                     holds (todos/0083) — replaces the
+ *                                     holds (docs/archive/0083) — replaces the
  *                                     `sleep N` guess-waits in the e2e/browser
  *                                     drivers; MS (default 15000) is a FAILURE
  *                                     deadline (exit 1 on timeout), not a sync
@@ -25,32 +25,32 @@
  *   wmctl move SID X Y
  *   wmctl resize SID W H              asks the client; applies at its ack
  *   wmctl scale SID W H               sets a fixed-size window's on-screen
- *                                     dst rect (todos/0024); app oblivious
- *   wmctl max SID                     toggle maximize/restore (todos/0025) —
+ *                                     dst rect (docs/archive/0024); app oblivious
+ *   wmctl max SID                     toggle maximize/restore (docs/archive/0025) —
  *                                     the title double-click gesture; policy
  *                                     lives in /bin/wm, so this needs one
- *   wmctl cycle [DIR]                 cycle focus (todos/0032) — the Alt+Tab
+ *   wmctl cycle [DIR]                 cycle focus (docs/archive/0032) — the Alt+Tab
  *                                     chord's event; DIR -1 reverses (the
  *                                     previous-window toggle); needs a WM
- *   wmctl menu                        toggle the Start menu (todos/0078) —
+ *   wmctl menu                        toggle the Start menu (docs/archive/0078) —
  *                                     the Ctrl+Esc chord's event; needs a WM
- *   wmctl snap left|right|up|down     Aero Snap the focused window (todos/
+ *   wmctl snap left|right|up|down     Aero Snap the focused window (docs/
  *                                     0095) — the Win+arrow chord's event
  *                                     (halves / maximize / restore-or-
  *                                     minimize); needs a WM
  *   wmctl idle                        print ms since the last real input
- *                                     (todos/0096 — the kernel's idle clock
+ *                                     (docs/archive/0096 — the kernel's idle clock
  *                                     the screensaver policy polls)
  *   wmctl saver                       raise the configured screensaver now
- *                                     (todos/0096) — the Control Panel
+ *                                     (docs/archive/0096) — the Control Panel
  *                                     Preview's event; needs a WM
- *   wmctl sysmenu                     open the window system menu (todos/
+ *   wmctl sysmenu                     open the window system menu (docs/
  *                                     0102) on the FOCUSED window — the
  *                                     Alt+Space chord's event; needs a WM
  *   wmctl overview                    toggle the window overview / Exposé
- *                                     (todos/EXPOSE) — the Ctrl+Alt+E chord's
+ *                                     (docs/EXPOSE) — the Ctrl+Alt+E chord's
  *                                     event; needs a WM
- *   wmctl layer SID L                 pin to a z layer (todos/0038): -1
+ *   wmctl layer SID L                 pin to a z layer (docs/archive/0038): -1
  *                                     bottom, 0 normal, 1 top; z ops never
  *                                     cross layers (list flags: T/B)
  *   wmctl key SID SCANCODE [KEYSYM [MOD]]      key press (down+up); an
@@ -62,15 +62,15 @@
  *   wmctl click SID X Y [BUTTON]               click (down+up), local coords
  *   wmctl dblclick SID X Y [BUTTON]            two clicks on one connection
  *                                     (fast enough for client double-click
- *                                     detection — todos/0029 desktop icons)
- *   wmctl hover SID X Y               absolute motion injection (todos/0063
+ *                                     detection — docs/archive/0029 desktop icons)
+ *   wmctl hover SID X Y               absolute motion injection (docs/archive/0063
  *                                     — drives hover UI like Aero Peek)
- *   wmctl wheel SID DY                mouse-wheel injection (todos/0210):
+ *   wmctl wheel SID DY                mouse-wheel injection (docs/archive/0210):
  *                                     DY in NOTCHES, + scrolls up; the
  *                                     event's position is the last tracked
  *                                     motion, so hover first
  *   wmctl relmove SID DX DY           relative motion (pointer-lock deltas)
- *   wmctl sdown|smove|sup X Y [BTN]   SCREEN-coordinate injection (todos/
+ *   wmctl sdown|smove|sup X Y [BTN]   SCREEN-coordinate injection (docs/
  *                                     0095) through the kernel's full
  *                                     hit-test/chrome path — what a real
  *                                     mouse does: title drags, edge snap,
@@ -96,13 +96,13 @@
  *                                     to a surface region — the region-scoped
  *                                     settle for never-idle pages
  *   wmctl thumb SID [MAXW MAXH] [FILE]         downscaled window thumbnail
- *                                     (todos/0063 Aero Peek; default 96x72
+ *                                     (docs/archive/0063 Aero Peek; default 96x72
  *                                     box; aspect-fit, never upscaled), PNG
- *   wmctl glass 0|1                   Aero glass tier toggle (todos/0063) —
+ *   wmctl glass 0|1                   Aero glass tier toggle (docs/archive/0063) —
  *                                     browser compositor only; the headless
  *                                     composite/goldens never change
  *
- * The win32 agent tree (todos/0058; wm_agent.h — served per-process by
+ * The win32 agent tree (docs/archive/0058; wm_agent.h — served per-process by
  * user32 on /run/win32/agent.<pid>.sock, discovered by directory scan):
  *
  *   wmctl tree                        dump every win32 app's HWND tree
@@ -115,7 +115,7 @@
  *   wmctl settext LABEL TEXT          set it (WM_SETTEXT)
  *   wmctl wait label|nolabel LABEL [MS]   block until a widget with that
  *                                     label exists / is gone in ANY app
- *                                     (todos/0154 — over the agent tree, so
+ *                                     (docs/archive/0154 — over the agent tree, so
  *                                     it sees in-surface control state the
  *                                     kernel window list can't: a dialog's
  *                                     listbox, an EDIT, a MessageBox button)
@@ -148,7 +148,7 @@
 
 static int fail(const char *msg) { fprintf(stderr, "wmctl: %s\n", msg); return 1; }
 
-/* A refused command: name the kernel's REAL cause (todos/0242 — wmp_cmd /
+/* A refused command: name the kernel's REAL cause (docs/archive/0242 — wmp_cmd /
  * wmp_consume_err put the R_ERR errno in errno). ENODEV keeps the old
  * "needs a WM" hint: policy gestures refuse when no WM is subscribed. */
 static int failop(const char *op) {
@@ -211,7 +211,7 @@ static int usage(void) {
     return 2;
 }
 
-/* ---- the win32 agent tree (todos/0058; wm_agent.h) ----
+/* ---- the win32 agent tree (docs/archive/0058; wm_agent.h) ----
  * Scan /run/win32 for agent sockets; one request per connection. Actions
  * take the FIRST app that accepts the label; tree dumps them all. */
 
@@ -319,7 +319,7 @@ static int settext_one(int fd, const char *name, void *ctx) {
     return 1;
 }
 
-/* ---- agent-tree waits (todos/0154) ----
+/* ---- agent-tree waits (docs/archive/0154) ----
  * A single AQ_GETTEXT probe against one app: does LABEL resolve here, and
  * (optionally) does its text contain SUBSTR? Reuses the label resolver that
  * `wmctl click LABEL`/`gettext` already share, so a wait keys on the SAME
@@ -416,7 +416,7 @@ static int32_t sym_from_scancode(int32_t sc) {
     return sc | 0x40000000;
 }
 
-/* Float flavor for the fractional operands (wheel notches, todos/0210). */
+/* Float flavor for the fractional operands (wheel notches, docs/archive/0210). */
 static float need_f(const char *op, const char *what, const char *s) {
     char *end;
     float v = strtof(s, &end);
@@ -428,8 +428,8 @@ static float need_f(const char *op, const char *what, const char *s) {
 }
 
 /* The 9-char FLAGS column (shared by `list` and `wait`): f m b r R A, a T/B
- * slot for pinned z-layers (todos/0038), then U for a transient/owned modal
- * (todos/0281 — no taskbar button, skipped by cycling). Kept in one place so
+ * slot for pinned z-layers (docs/archive/0038), then U for a transient/owned modal
+ * (docs/archive/0281 — no taskbar button, skipped by cycling). Kept in one place so
  * the two readers never drift. The final H marks an application-hidden surface. */
 static void rec_flags(const wmp_rec *r, char flags[10]) {
     memcpy(flags, "---------", 9);
@@ -446,7 +446,7 @@ static void rec_flags(const wmp_rec *r, char flags[10]) {
     flags[9] = 0;
 }
 
-/* ---- event-based waits (todos/0083) ----
+/* ---- event-based waits (docs/archive/0083) ----
  * Poll WMP_LIST on the open connection until a condition holds, replacing
  * the `sleep N` guess-waits that littered the e2e/browser drivers. The
  * timeout is a FAILURE deadline (exit 1), not a sync point. */
@@ -587,7 +587,7 @@ static int do_wait(int fd, int argc, char **argv) {
     }
 }
 
-/* wmctl wait label|nolabel LABEL [MS] / wait text LABEL SUBSTR [MS] (todos/
+/* wmctl wait label|nolabel LABEL [MS] / wait text LABEL SUBSTR [MS] (docs/
  * 0154) — poll the win32 agent tree (NOT the kernel window list) until a
  * widget with LABEL exists / is gone / contains SUBSTR. In-surface control
  * state (a dialog's listbox, an EDIT's text, a MessageBox's buttons) that the
@@ -631,7 +631,7 @@ static int do_list(int fd) {
         char flags[10];
         rec_flags(&r, flags);          /* [6] layer (0038), [7] transient (0281) */
         r.title[31] = 0;
-        char dst[32] = "-";            /* scaled viewport (todos/0024), or - */
+        char dst[32] = "-";            /* scaled viewport (docs/archive/0024), or - */
         if (r.dst_w != r.w || r.dst_h != r.h)
             snprintf(dst, sizeof dst, "%dx%d", r.dst_w, r.dst_h);
         printf("%d\t%d\t%dx%d+%d+%d\t%s\t%d\t%s\t%s\n",
@@ -642,7 +642,7 @@ static int do_list(int fd) {
 
 /* Read an R_SHOT payload (sid, w, h; then w*h*4 rgba) and write it as an
  * RGBA PNG (#657, via the vendored libpng+zlib) — shared by shot and thumb
- * (todos/0063). The payload's alpha bytes are carried VERBATIM: transparent
+ * (docs/archive/0063). The payload's alpha bytes are carried VERBATIM: transparent
  * surfaces (WMP_F_ALPHA) keep their per-pixel alpha, opaque surfaces write
  * 255 by contract (host.js's software renderer forces it; the browser
  * compositor's src-alpha blend already depends on it), and the kernel's
@@ -720,7 +720,7 @@ static int do_shot(int fd, const char *what, const char *file,
     return shot_to_png(fd, file, crop);
 }
 
-/* Aero Peek thumbnail (todos/0063): a downscaled window as PNG. */
+/* Aero Peek thumbnail (docs/archive/0063): a downscaled window as PNG. */
 static int do_thumb(int fd, int32_t sid, int32_t mw, int32_t mh, const char *file) {
     int32_t a[3] = { sid, mw, mh };
     wmp_hdr h;
@@ -737,7 +737,7 @@ int main(int argc, char **argv) {
     if (argc < 2) return usage();
     const char *cmd = argv[1];
 
-    /* Agent-tree ops (todos/0058) talk to apps, not the kernel endpoint. */
+    /* Agent-tree ops (docs/archive/0058) talk to apps, not the kernel endpoint. */
     if (!strcmp(cmd, "tree")) return do_agent(cmd, NULL, NULL);
     if (!strcmp(cmd, "gettext")) {
         if (argc < 3) return usage();
@@ -747,7 +747,7 @@ int main(int argc, char **argv) {
         if (argc < 4) return usage();
         return do_agent(cmd, argv[2], argv[3]);
     }
-    /* Agent-tree waits (todos/0154) also talk to apps, not the kernel. */
+    /* Agent-tree waits (docs/archive/0154) also talk to apps, not the kernel. */
     if (!strcmp(cmd, "wait") && argc >= 3 &&
         (!strcmp(argv[2], "label") || !strcmp(argv[2], "nolabel") ||
          !strcmp(argv[2], "text")))
@@ -762,7 +762,7 @@ int main(int argc, char **argv) {
     if (fd < 0) return fail("cannot reach /run/wm.sock (no kernel WM endpoint?)");
 
     if (!strcmp(cmd, "list")) return do_list(fd);
-    if (!strcmp(cmd, "wait")) return do_wait(fd, argc, argv);   /* todos/0083 */
+    if (!strcmp(cmd, "wait")) return do_wait(fd, argc, argv);   /* docs/archive/0083 */
     if (!strcmp(cmd, "seq")) {          /* kernel frame counter (ticket #484):
                                            the present RATE instrument — two
                                            reads a known interval apart give
@@ -789,14 +789,14 @@ int main(int argc, char **argv) {
         return do_shot(fd, argv[2], argc > 3 ? argv[3] : NULL,
                        argc > 4 ? crop : NULL);
     }
-    if (!strcmp(cmd, "cycle")) {        /* window cycling (todos/0032) */
+    if (!strcmp(cmd, "cycle")) {        /* window cycling (docs/archive/0032) */
         int32_t a[1] = { argc > 2 ? need_i32("cycle", "DIR", argv[2]) : 1 };
         return wmp_cmd(fd, WMP_CYCLE, a, 1) ? failop("cycle") : 0;
     }
-    if (!strcmp(cmd, "menu")) {         /* Start menu toggle (todos/0078) */
+    if (!strcmp(cmd, "menu")) {         /* Start menu toggle (docs/archive/0078) */
         return wmp_cmd(fd, WMP_MENU, NULL, 0) ? failop("menu") : 0;
     }
-    if (!strcmp(cmd, "snap")) {         /* Aero Snap (todos/0095) — the
+    if (!strcmp(cmd, "snap")) {         /* Aero Snap (docs/archive/0095) — the
                                            Win+arrow chord's event on the
                                            focused window */
         if (argc < 3) return usage();
@@ -823,7 +823,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (!strcmp(cmd, "cursor")) {       /* the effective cursor at a screen
-                                           point (todos/0105) — chrome overlay
+                                           point (docs/archive/0105) — chrome overlay
                                            + per-surface client cursor */
         if (argc < 4) return usage();
         wmp_hdr h;
@@ -854,7 +854,7 @@ int main(int argc, char **argv) {
                                            FOCUSED window */
         return wmp_cmd(fd, WMP_SYSMENU, NULL, 0) ? failop("sysmenu") : 0;
     }
-    /* Screen-coordinate injection (todos/0095): the kernel's raw pointer
+    /* Screen-coordinate injection (docs/archive/0095): the kernel's raw pointer
      * path — hit test, chrome, title drags, snap zones — so headless tests
      * drive what a real mouse does. No SID argument by design. */
     if (!strcmp(cmd, "sdown") || !strcmp(cmd, "smove") || !strcmp(cmd, "sup")) {
@@ -900,7 +900,7 @@ int main(int argc, char **argv) {
         a[0] = 0;
         return wmp_cmd(fd, WMP_INJECT_WMKEY, a, 5) ? failop(cmd) : 0;
     }
-    if (!strcmp(cmd, "glass")) {        /* Aero glass tier (todos/0063) */
+    if (!strcmp(cmd, "glass")) {        /* Aero glass tier (docs/archive/0063) */
         if (argc < 3) return usage();
         int32_t a[1] = { need_i32("glass", "TIER", argv[2]) };
         return wmp_cmd(fd, WMP_GLASS, a, 1) ? failop("glass") : 0;
@@ -1003,21 +1003,21 @@ int main(int argc, char **argv) {
         int32_t a[3] = { sid, need_i32(cmd, "W", argv[3]), need_i32(cmd, "H", argv[4]) };
         return wmp_cmd(fd, WMP_RESIZE, a, 3) ? failop(cmd) : 0;
     }
-    if (!strcmp(cmd, "scale")) {        /* viewport scaling (todos/0024) */
+    if (!strcmp(cmd, "scale")) {        /* viewport scaling (docs/archive/0024) */
         if (argc < 5) return usage();
         int32_t a[3] = { sid, need_i32(cmd, "W", argv[3]), need_i32(cmd, "H", argv[4]) };
         return wmp_cmd(fd, WMP_SET_DST, a, 3) ? failop(cmd) : 0;
     }
-    if (!strcmp(cmd, "max")) {          /* maximize toggle (todos/0025) */
+    if (!strcmp(cmd, "max")) {          /* maximize toggle (docs/archive/0025) */
         int32_t a[1] = { sid };
         return wmp_cmd(fd, WMP_ACTIVATE, a, 1) ? failop(cmd) : 0;
     }
-    if (!strcmp(cmd, "layer")) {        /* z-layer pin (todos/0038) */
+    if (!strcmp(cmd, "layer")) {        /* z-layer pin (docs/archive/0038) */
         if (argc < 4) return usage();
         int32_t a[2] = { sid, need_i32(cmd, "LAYER", argv[3]) };
         return wmp_cmd(fd, WMP_SET_LAYER, a, 2) ? failop(cmd) : 0;
     }
-    if (!strcmp(cmd, "thumb")) {        /* Aero Peek thumbnail (todos/0063):
+    if (!strcmp(cmd, "thumb")) {        /* Aero Peek thumbnail (docs/archive/0063):
                                            thumb SID [MAXW MAXH] [FILE] —
                                            argc 4 means FILE, argc >= 5 means
                                            the dims lead (0 = kernel default) */
@@ -1036,21 +1036,21 @@ int main(int argc, char **argv) {
                                : sym_from_scancode(sc);       /* #676 */
         int32_t mod = argc > 5 ? need_i32(cmd, "MOD", argv[5]) : 0;
         int32_t a[5] = { sid, cmd[3] != 'u', sc, sym, mod };
-        /* keydown/keyup (todos/0077): one edge only — a HELD modifier for
+        /* keydown/keyup (docs/archive/0077): one edge only — a HELD modifier for
          * a following click/drag needs the down without the up. */
         if (wmp_cmd(fd, WMP_INJECT_KEY, a, 5)) return failop(cmd);
         if (cmd[3]) return 0;                    /* keydown / keyup: done */
         a[1] = 0;
         return wmp_cmd(fd, WMP_INJECT_KEY, a, 5) ? failop(cmd) : 0;
     }
-    if (!strcmp(cmd, "hover")) {        /* absolute motion (todos/0063) */
+    if (!strcmp(cmd, "hover")) {        /* absolute motion (docs/archive/0063) */
         if (argc < 5) return usage();
         int32_t x = f32bits((float)need_i32(cmd, "X", argv[3]));
         int32_t y = f32bits((float)need_i32(cmd, "Y", argv[4]));
         int32_t a[6] = { sid, 0 /* move */, x, y, 0, 0 };
         return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
-    if (!strcmp(cmd, "wheel")) {        /* wheel notches (todos/0210): +up.
+    if (!strcmp(cmd, "wheel")) {        /* wheel notches (docs/archive/0210): +up.
                                            The wheel event's position is the
                                            LAST tracked motion — hover first. */
         if (argc < 4) return usage();
@@ -1058,7 +1058,7 @@ int main(int argc, char **argv) {
         int32_t a[6] = { sid, 3 /* wheel */, f32bits(0.0f), dy, 0, 0 };
         return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
-    if (!strcmp(cmd, "relmove")) {      /* relative motion (todos/0018) */
+    if (!strcmp(cmd, "relmove")) {      /* relative motion (docs/archive/0018) */
         if (argc < 5) return usage();
         int32_t dx = f32bits((float)need_i32(cmd, "DX", argv[3]));
         int32_t dy = f32bits((float)need_i32(cmd, "DY", argv[4]));
@@ -1088,7 +1088,7 @@ int main(int argc, char **argv) {
         int32_t a[6] = { sid, cmd[0] == 'd' ? 1 : 2, x, y, btn, 0 };
         return wmp_cmd(fd, WMP_INJECT_POINTER, a, 6) ? failop(cmd) : 0;
     }
-    if (!strcmp(cmd, "drag")) {         /* press-move-release (todos/0077):
+    if (!strcmp(cmd, "drag")) {         /* press-move-release (docs/archive/0077):
                                            down at (X1,Y1), button-held motion
                                            through the midpoint to (X2,Y2), up
                                            there — the desktop marquee / icon-

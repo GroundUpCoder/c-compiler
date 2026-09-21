@@ -3,14 +3,14 @@
 // Runs the whole BlockFS test suite. Pass --long for the deeper fuzz pass.
 //   node tests/blockfs/run.js [--long] [-j N] [--filter=S] [--resume] ...
 //
-// Engine: tests/lib/suite-runner.js (todos/0081) — parallel by default
+// Engine: tests/lib/suite-runner.js (docs/archive/0081) — parallel by default
 // (every file is an independent in-process MemoryByteStore world), per-file
 // logs + checkpointed summary.json in build/test-blockfs/.
 const path = require('path');
 const os = require('os');
 const { runSuite, parseSuiteArgs, usage, assertMemberRegistry } = require('../lib/suite-runner.js');
 
-// Cross-tree preflight (todos/0341) — artifactDir below is resolved from this
+// Cross-tree preflight (docs/archive/0341) — artifactDir below is resolved from this
 // file's location, so a cross-tree launch overwrites another tree's
 // build/test-blockfs/summary.json with a run it never made.
 require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/blockfs/run.js' });

@@ -1,6 +1,6 @@
 # NetSurf demo pages
 
-The acceptance ladder from `todos/NETSURF-JS.md` §6, and — since the
+The acceptance ladder from `docs/NETSURF-JS.md` §6, and — since the
 `netsurf-demos` package — the pages gucOS ships to users.
 
 ## Shape: `pages/`, one folder per demo, nothing inline
@@ -94,7 +94,7 @@ Rungs 4–5 need **Lane B**, the mutation → re-box → reflow → repaint brid
 | `stopwatch/` | a `setInterval` writing a plain `<div>`'s `textContent` moves the number **on screen**, and `createElement`+`appendChild` adds a visible lap row.  Neither is a form control nor a canvas — nothing about them repainted before Lane B |
 | `todo/` | `removeChild` unpaints a row, and the counter re-renders both its **text** and its **class** (an attribute change that has to re-select styles, not just re-lay-out) |
 
-Rung 6 needs **Lane C**, the UI event coverage (todos/0289), plus the
+Rung 6 needs **Lane C**, the UI event coverage (docs/archive/0289), plus the
 `events/` page that lane added to state what the browser now delivers
 (legs 9–11, with leg 11 as the A/B baseline built with the events compiled
 out):
@@ -107,7 +107,7 @@ out):
 `plasma/` (leg 12) is the headline canvas demo: a 320x200 demoscene plasma
 animating from `setInterval` alone, palette-switched by click.  It proves
 nothing new about the engine — it exists so a user who opens ONE page sees
-real-time graphics with no interaction at all (todos/0425: the paint demo
+real-time graphics with no interaction at all (docs/archive/0425: the paint demo
 used to open blank, and a user who only clicked reported it broken).  The
 `paint/` page opens with a generated 512x512 scene for the same reason,
 and both carry the pill-palette rule (see demos.js `PILL`).
@@ -121,7 +121,7 @@ work.
 
 Every one of these was hit while building the demos, so a page here must
 assert its own output (a console sentinel or a pixel), never assume a
-binding works.  The full audit is in `todos/NETSURF-JS.md` §5.
+binding works.  The full audit is in `docs/NETSURF-JS.md` §5.
 
 - **A global whose name collides with a Window IDL attribute is silently
   swallowed.**  `var frames = document.getElementById('frames')` leaves
@@ -145,7 +145,7 @@ binding works.  The full audit is in `todos/NETSURF-JS.md` §5.
   **Fixed by Lane C**: mousedown/mousemove/mouseup (with coordinates),
   dblclick, keyup, input/change, a cancelable submit, focus/blur and wheel
   all fire.  What is still absent: `mouseover`/`mouseout`/`mouseenter`/
-  `mouseleave` and `focusin`/`focusout` (todos/0317).
+  `mouseleave` and `focusin`/`focusout` (docs/archive/0317).
 - ~~`keydown` is fired at the document ROOT, not at the focused element.~~
   ~~And Enter arrives with `event.key === null`.~~  **Both fixed by Lane
   C**: keys go to the focused element and bubble from there (so a

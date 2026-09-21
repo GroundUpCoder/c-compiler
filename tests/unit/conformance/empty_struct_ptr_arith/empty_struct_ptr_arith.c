@@ -4,7 +4,7 @@
 // clamped EVERY zero-size pointee to 1, but only void/function types are
 // the GNU stride-1 extension; an empty struct is genuinely size 0:
 // indexing lands on the same address and a pointer difference is 0.
-// Bug-hunt G23 (todos/0227).
+// Bug-hunt G23 (docs/archive/0227).
 // C11: 6.5.6 additive operators + the GNU zero-size-struct extension.
 // EXPECT: matches gcc/clang -O0 (clang's own folding of the zero-size
 // difference is unstable across -O levels — gcc documents 0; every shape

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// wasmscan.js — a minimal, dependency-free wasm reader for todos/0332.
+// wasmscan.js — a minimal, dependency-free wasm reader for docs/archive/0332.
 //
 // There is no wabt on this machine (wasm2wat/wasm-objdump/wasm-dis are all
 // absent and package managers are forbidden), so this is the disassembly

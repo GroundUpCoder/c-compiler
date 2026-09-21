@@ -1,4 +1,4 @@
-%% 09-builds.mgp - learn MagicPoint on gucOS, deck 9 of 10 (todos/0202).
+%% 09-builds.mgp - learn MagicPoint on gucOS, deck 9 of 10 (docs/archive/0202).
 %% Progressive reveal (%pause), column layout (%mark/%again), super/
 %% subscripts (%sup/%sub/%setsup).
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"

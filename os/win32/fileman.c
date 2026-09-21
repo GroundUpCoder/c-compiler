@@ -1,13 +1,13 @@
-/* fileman.c — the file manager (todos/0048, desktop apps wave 1).
+/* fileman.c — the file manager (docs/archive/0048, desktop apps wave 1).
  *
  * A Win32 veneer app over plain POSIX dir calls: a path EDIT + Go/Up/
  * Open/With buttons on top, a LISTBOX of the directory below.
  * Double-click (or the Open button) activates the selection with wm.c's
- * activate() semantics (todos/0066, keep in step): directories navigate,
+ * activate() semantics (docs/archive/0066, keep in step): directories navigate,
  * a runnable file (`\0asm` wasm / `#!` script — the kernel spawn
  * dispatch, through symlinks) spawns with its own pgroup + the desktop
  * env, anything else opens through the openwith associations
- * (os/openwith.h, todos/0072 — extension map, then default.gui). The
+ * (os/openwith.h, docs/archive/0072 — extension map, then default.gui). The
  * "With" button is the picker: a small window with the command EDIT
  * (prefilled with the effective association) + an "Always" checkbox
  * that persists it via ow_set. Children are reaped WNOHANG off the idle
@@ -19,7 +19,7 @@
  * without pixels. Built ANSI — POSIX paths are bytes here; no UTF-16
  * boundary to cross.
  *
- * File operations (todos/0092): right-click is the primary trigger — a
+ * File operations (docs/archive/0092): right-click is the primary trigger — a
  * row gets Open / Open With / Cut / Copy / Rename / Delete / Properties
  * (Explorer-style, the row under the pointer is selected first), the
  * empty pane gets Paste / New Folder / Refresh — over the 0091
@@ -32,7 +32,7 @@
  * cut/copy/paste crosses fileman instances AND the desktop — paste
  * moves (cut, slot cleared after) or duplicates (copy, "Copy of"
  * uniquifier on clash). Delete confirms via MessageBox and sends to the
- * Recycle Bin (todos/0093 — shell32's SHFileTrash over the fileops.h
+ * Recycle Bin (docs/archive/0093 — shell32's SHFileTrash over the fileops.h
  * /root/.recycle store); Shift+Del bypasses to a confirmed PERMANENT
  * delete, and inside the store itself (browsing /root/.recycle/files)
  * every delete is permanent. In the store the row menu swaps to
@@ -40,7 +40,7 @@
  * sidecar-recorded original path, prompting to replace an occupied one —
  * and the pane menu gains Empty Recycle Bin (confirmed; grayed when
  * empty). Every op surfaces failure as strerror(errno) in a MessageBox
- * (EROFS under /usr fails clean, todos/0040). Rename is a small dialog
+ * (EROFS under /usr fails clean, docs/archive/0040). Rename is a small dialog
  * window (the "Open with" picker pattern; Enter commits, Esc cancels),
  * refusing overwrite (EEXIST). Properties is a stat() MessageBox. */
 
@@ -60,7 +60,7 @@
 #include "../launch.h"
 #include "../listdir.h"
 #include "../openwith.h"
-#include "../egress.h"               /* row-menu Download (todos/0398) */
+#include "../egress.h"               /* row-menu Download (docs/archive/0398) */
 
 #define ID_PATH 100
 #define ID_GO   101
@@ -99,7 +99,7 @@
 #define IDM_REVERSE   323
 #define IDM_HIDDEN    324
 #define IDM_BACK      325            /* Alt+Left history back (0106) */
-#define IDM_DOWNLOAD  326            /* egress to the host (todos/0398) */
+#define IDM_DOWNLOAD  326            /* egress to the host (docs/archive/0398) */
 
 #define WM_FSCHANGE (WM_APP + 1)     /* cwd changed on disk (FS_WATCH wake) */
 
@@ -134,7 +134,7 @@ static char g_rn_file[800];          /* the file it targets */
 static HACCEL g_accel;               /* F2/Del/^C/^X/^V (listbox focus only) */
 
 /* Launching rides ../launch.h's shared ladder (spawn_path/launch_assoc/
- * launch_activate, todos/0239+0240) — fileman passes its own kid counter
+ * launch_activate, docs/archive/0239+0240) — fileman passes its own kid counter
  * and "fileman" as the diagnostic prefix. */
 
 /* ---- listing ---- */
@@ -350,7 +350,7 @@ static void push_back(void) {
     snprintf(g_back[g_nback++], sizeof g_back[0], "%s", g_cwd);
 }
 
-/* FS_WATCH auto-refresh (ticket #75 / todos/0123): ONE watch fd on the
+/* FS_WATCH auto-refresh (ticket #75 / docs/archive/0123): ONE watch fd on the
  * cwd, re-armed per navigation, riding user32's RegisterFdWake seam — the
  * fd joins GetMessage's unified WAIT and a readable episode posts
  * WM_FSCHANGE. External create/delete/rename in the cwd — including an
@@ -481,7 +481,7 @@ static void open_selected(void) {
     if (!sel_path(full, sizeof full, &isdir)) return;
     /* Dirs navigate IN-PLACE — fileman's flavor of the shared ladder's
      * directory policy, peeled here off the listing's isdir (no extra
-     * stat). The rest is launch.h's activate() ladder (todos/0240): no
+     * stat). The rest is launch.h's activate() ladder (docs/archive/0240): no
      * MRU push (wm-only), and a dangling row's failed stat still falls
      * through to its association. */
     if (isdir) { navigate(full); return; }
@@ -502,7 +502,7 @@ static void edit_selected(void) {
     launch_assoc(cmd, full, &g_nkids, "fileman");
 }
 
-/* ---- the "Open with" picker (todos/0072) ----
+/* ---- the "Open with" picker (docs/archive/0072) ----
  * A small second top-level window: the command EDIT prefilled with the
  * file's effective association, an "Always" checkbox (BS_AUTOCHECKBOX)
  * that persists the pick via ow_set — under the file's extension key, or
@@ -542,7 +542,7 @@ static LRESULT CALLBACK ow_wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (cmd[0]) {
                 if (IsDlgButtonChecked(h, ID_OW_ALWAYS)) {
                     char key[32];
-                    /* "Always" must not silently not-persist (todos/0234):
+                    /* "Always" must not silently not-persist (docs/archive/0234):
                      * report a store-write failure, then still do the
                      * one-shot open — that part works regardless. */
                     if (ow_set(ow_key_for(g_ow_file, key, sizeof key)
@@ -581,7 +581,7 @@ static void with_selected(void) {
                               g_win, NULL, NULL, NULL);
 }
 
-/* ---- file operations (todos/0092) ----
+/* ---- file operations (docs/archive/0092) ----
  * All over shell32's SHFile* helpers (the shared os/fileops.h core);
  * failure surfaces as strerror(errno) in a MessageBox and the listing
  * refreshes after every mutation. */
@@ -613,7 +613,7 @@ static void clip_selected(int cut) {
     if (cnt && SHClipSetFiles(cut, pv, cnt) != 0) op_error("clip", pv[0]);
 }
 
-/* Download (todos/0398): egress every selected row's path through the ONE
+/* Download (docs/archive/0398): egress every selected row's path through the ONE
  * transfer seam — the kernel materializes one artifact (a lone file's
  * bytes, or one store-only zip for a directory / multi-selection) and the
  * embedder performs the host-side act. Failure surfaces as
@@ -657,7 +657,7 @@ static void paste_here(void) {
 
 /* Browsing the trash store itself? (Exactly files/ — a directory INSIDE a
  * trashed dir is ordinary territory; per-entry restore only makes sense at
- * the top, todos/0093.) */
+ * the top, docs/archive/0093.) */
 static int in_trash(void) { return strcmp(g_cwd, SHTrashFilesDir()) == 0; }
 
 /* Delete (0093): the plain path sends to the Recycle Bin; `perm` (the
@@ -1029,7 +1029,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_FSCHANGE:
         /* FS_WATCH wake (ticket #75): user32 already drained the watch fd
          * and coalesced the episode into one message — just re-list, with
-         * the selection carried by name (todos/0123). */
+         * the selection carried by name (docs/archive/0123). */
         refill_keep_selection();
         return 0;
     case WM_TIMER:

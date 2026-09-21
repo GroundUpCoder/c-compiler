@@ -3,7 +3,7 @@
 Game Boy Advance emulator using the [mGBA](https://github.com/mgba-emu/mgba)
 core (**v0.10.5**, upstream commit `26b7884`) with an SDL3 frontend written
 against mGBA's `mCore` interface. Installed as `/bin/mgba` and the default
-`.gba` handler (todos/0112; `0072` openwith store points `gba` here). This is
+`.gba` handler (docs/archive/0112; `0072` openwith store points `gba` here). This is
 the **GBA** leg — the platform Peanut-GB (`/bin/gameboy`) and SameBoy
 (`/bin/sameboy`) can't reach. It is **additive**: `.gb`/`.gbc` still default to
 SameBoy, which stays the more accurate GB/GBC choice.

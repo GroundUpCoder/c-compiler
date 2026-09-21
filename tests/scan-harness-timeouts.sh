@@ -1,5 +1,5 @@
 #!/bin/sh
-# todos/0369 — step 2, the STATIC half: every fixed timeout in the test
+# docs/archive/0369 — step 2, the STATIC half: every fixed timeout in the test
 # HARNESS layer. Run from the repo root; classify the hits by hand (the
 # classification of the current population lives in
 # logs/2026-07-28/0369-timeout-survey.md).
@@ -24,7 +24,7 @@
 # is under the same positive control).
 HARNESS="tests/run.js tests/run.py tests/run-unit.js tests/flake.js
   tests/kernel/run.js tests/host/run.js tests/blockfs/run.js
-  tests/todos/run.js tests/ext/run.js tests/browser/os-sweep.mjs"
+  tests/liabilities/run.js tests/browser/os-sweep.mjs"
 grep -nE '(setTimeout|setInterval)[[:space:]]*\(|AbortSignal\.timeout|Atomics\.wait[[:space:]]*\(|[Tt]imeout[A-Za-z_]*[[:space:]]*[:=]|[A-Z_]*TIMEOUT[A-Z_]*[[:space:]]*[:=]|_MS[[:space:]]*=[[:space:]]*[0-9]|_SECS?[[:space:]]*=[[:space:]]*[0-9]|Date\.now\(\)[[:space:]]*\+[[:space:]]*[0-9]' \
   $HARNESS tests/lib/*.js
 grep -rn '"timeoutMs"' tests/unit --include=config.json

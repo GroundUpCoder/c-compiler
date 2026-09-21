@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// #182 (todos/0437) — NetSurf REAL NETWORKING: the gucOS http/https fetcher
+// #182 (docs/archive/0437) — NetSurf REAL NETWORKING: the gucOS http/https fetcher
 // (vendor/netsurf/gucos/httpfetch.c) over the kernel HTTP transport, driven
 // end to end in a booted OS against a live local HTTP server.
 //
@@ -79,7 +79,7 @@
 // fetcher for the scheme); it cannot be a permanent leg because the
 // fetcher registers at compile time.  v1 descopes are asserted nowhere
 // here by design: multipart POST answers a loud FETCH_ERROR naming
-// todos/0433 (unit-visible in the fetcher source), cookies cannot work in
+// docs/archive/0433 (unit-visible in the fetcher source), cookies cannot work in
 // direct browser mode (fetch forbidden-header rules), auth has no UI.
 //
 // Run: node tests/kernel/test_netsurf_http_e2e.js

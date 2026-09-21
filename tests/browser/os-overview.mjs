@@ -1,4 +1,4 @@
-// EXPOSE (todos/EXPOSE-MISSION-CONTROL.md) browser acceptance: the window
+// EXPOSE (docs/EXPOSE-MISSION-CONTROL.md) browser acceptance: the window
 // overview / Exposé with the REAL WebGPU compositor, a real mouse + keyboard.
 // This is the leg the headless e2e (test_overview_e2e.js) CANNOT cover: the
 // browser compositor's overview pass drawing LIVE, seq-gated miniatures —

@@ -67,7 +67,7 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 // ---- leg 1 (RED control): critical fake refuses before anything runs ----
 {
   const sumBefore = statOrNull(path.join(outDir, 'summary.json'));   // null — no run yet
-  const r = gate(['todos'], { CC_HOST_HEALTH_FAKE: fakePath('crit', CRITICAL) });
+  const r = gate(['liabilities'], { CC_HOST_HEALTH_FAKE: fakePath('crit', CRITICAL) });
   const err = String(r.stderr);
   check('leg 1: refused at exit 2 with the [host-health] marker',
     r.status === 2 && err.includes('[host-health] REFUSING'), { status: r.status, tail: err.slice(-300) });
@@ -90,7 +90,7 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 
 // ---- leg 2: healthy fake runs normally ----------------------------------
 {
-  const r = gate(['todos'], { CC_HOST_HEALTH_FAKE: fakePath('ok', HEALTHY) });
+  const r = gate(['liabilities'], { CC_HOST_HEALTH_FAKE: fakePath('ok', HEALTHY) });
   check('leg 2: healthy fake → gate runs, exit 0', r.status === 0,
     { status: r.status, tail: (String(r.stdout) + String(r.stderr)).slice(-300) });
   const s = readSummary();
@@ -100,7 +100,7 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 
 // ---- leg 3: the REAL host, no fake — the on-box quiet direction ---------
 {
-  const r = gate(['todos']);
+  const r = gate(['liabilities']);
   check('leg 3: real-host preflight stays quiet on this box (exit 0)', r.status === 0,
     { status: r.status, tail: String(r.stderr).slice(-300) });
   const s = readSummary();
@@ -109,7 +109,7 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 
 // ---- leg 4: the escape hatch runs UNGUARDED but recorded ----------------
 {
-  const r = gate(['todos'], { CC_HOST_HEALTH_FAKE: fakePath('crit2', CRITICAL), CC_NO_HOST_HEALTH: '1' });
+  const r = gate(['liabilities'], { CC_HOST_HEALTH_FAKE: fakePath('crit2', CRITICAL), CC_NO_HOST_HEALTH: '1' });
   check('leg 4: CC_NO_HOST_HEALTH=1 runs a "critical" host to completion', r.status === 0,
     { status: r.status, tail: String(r.stderr).slice(-200) });
   check('leg 4: the disablement is announced', String(r.stdout).includes('DISABLED by CC_NO_HOST_HEALTH=1'));
@@ -121,7 +121,7 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 
 // ---- leg 5: warn tier proceeds loudly -----------------------------------
 {
-  const r = gate(['todos'], { CC_HOST_HEALTH_FAKE: fakePath('warn', WARN) });
+  const r = gate(['liabilities'], { CC_HOST_HEALTH_FAKE: fakePath('warn', WARN) });
   check('leg 5: warn fake → gate still runs, exit 0', r.status === 0, r.status);
   check('leg 5: the warning is loud and names the tier',
     String(r.stdout).includes('[host-health] WARNING') && /warn tier/.test(String(r.stdout)),
@@ -136,15 +136,15 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 // and passed only because the sticky last element papered over the
 // off-by-one — the third vacuous control of this ticket; the seam now
 // throws on exhaustion and reports under-consumption at exit, so a wrong
-// map cannot pass): (1) preflight, (2) hostStart, (3) todos before,
-// (4) todos after, (5) netsurf-patch before ← CRITICAL → truncate,
+// map cannot pass): (1) preflight, (2) hostStart, (3) liabilities before,
+// (4) liabilities after, (5) netsurf-patch before ← CRITICAL → truncate,
 // (6) summary end sample.
 {
   const arr = fakePath('midrun', [HEALTHY, HEALTHY, HEALTHY, HEALTHY, CRITICAL, HEALTHY]);
-  const r = gate(['todos', 'netsurf-patch'], { CC_HOST_HEALTH_FAKE: arr });
+  const r = gate(['liabilities', 'netsurf-patch'], { CC_HOST_HEALTH_FAKE: arr });
   const out = String(r.stdout);
   check('leg 6: truncated gate exits nonzero (rule 5 stays red)', r.status === 1, r.status);
-  check('leg 6: suite 1 ran and passed', out.includes('━━━ todos suite'));
+  check('leg 6: suite 1 ran and passed', out.includes('━━━ liabilities suite'));
   check('leg 6: suite 2 NEVER started (no banner)', !out.includes('━━━ netsurf-patch suite'));
   check('leg 6: the truncation is loud and names the reason',
     out.includes('[host-health] TRUNCATING') && /memory pressure level 4/.test(out));
@@ -152,7 +152,7 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
     !String(r.stderr).includes('exhausted') && !String(r.stderr).includes('FAKE UNDER-CONSUMED'),
     String(r.stderr).slice(-200));
   const s = readSummary();
-  const row1 = s.results.find((x) => x.suite === 'todos');
+  const row1 = s.results.find((x) => x.suite === 'liabilities');
   const row2 = s.results.find((x) => x.suite === 'netsurf-patch');
   check('leg 6: 🔴 the truncated row is literally fail/host-degraded/DID NOT RUN',
     !!row2 && row2.status === 'fail' && row2.reason === 'host-degraded'
@@ -168,18 +168,18 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 // ---- leg 6b (#725 CP3 finding 2): a critical AFTER-row sample stops -----
 // the run — a degraded state the gate OBSERVED AND RECORDED must never be
 // ignored just because the next row's fresh sample might read healthy.
-// Map: (1) preflight H, (2) hostStart H, (3) todos before H, (4) todos
+// Map: (1) preflight H, (2) hostStart H, (3) liabilities before H, (4) liabilities
 // after CRITICAL → truncate the remainder, (5) summary end sample.
 {
   const arr = fakePath('afterrow', [HEALTHY, HEALTHY, HEALTHY, CRITICAL, HEALTHY]);
-  const r = gate(['todos', 'netsurf-patch'], { CC_HOST_HEALTH_FAKE: arr });
+  const r = gate(['liabilities', 'netsurf-patch'], { CC_HOST_HEALTH_FAKE: arr });
   const out = String(r.stdout);
   check('leg 6b: after-row critical truncates — gate exits nonzero', r.status === 1, r.status);
   check('leg 6b: suite 2 never started', !out.includes('━━━ netsurf-patch suite'));
   check('leg 6b: exact map (seam quiet)', !String(r.stderr).includes('exhausted')
     && !String(r.stderr).includes('FAKE UNDER-CONSUMED'), String(r.stderr).slice(-200));
   const s = readSummary();
-  const row1 = s.results.find((x) => x.suite === 'todos');
+  const row1 = s.results.find((x) => x.suite === 'liabilities');
   const row2 = s.results.find((x) => x.suite === 'netsurf-patch');
   check('leg 6b: the COMPLETED row keeps its own honest result (it really ran)',
     !!row1 && row1.status === 'pass' && row1.host.after.pressure === 4, row1 && row1.status);
@@ -252,8 +252,8 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 // The red control for the vacuous-control class: a control whose sample map
 // is WRONG must go red, not pass off a sticky value.
 {
-  // Too FEW elements: the third sample() call (todos before) must throw.
-  const r = gate(['todos'], { CC_HOST_HEALTH_FAKE: fakePath('short', [HEALTHY, HEALTHY]) });
+  // Too FEW elements: the third sample() call (liabilities before) must throw.
+  const r = gate(['liabilities'], { CC_HOST_HEALTH_FAKE: fakePath('short', [HEALTHY, HEALTHY]) });
   check('leg 8: an exhausted fake array crashes the gate loudly',
     r.status === 1 && String(r.stderr).includes('array exhausted after 2 sample(s)'),
     { status: r.status, tail: String(r.stderr).slice(-200) });
@@ -261,7 +261,7 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
     String(r.stderr).includes('sticky last element would have hidden this'));
   check('leg 8: the crashed gate released its lock', !fs.existsSync(path.join(outDir, '.gate-lock')));
   // Too MANY elements: unconsumed remainder is reported at exit.
-  const r2 = gate(['todos'], { CC_HOST_HEALTH_FAKE: fakePath('long', Array(12).fill(HEALTHY)) });
+  const r2 = gate(['liabilities'], { CC_HOST_HEALTH_FAKE: fakePath('long', Array(12).fill(HEALTHY)) });
   check('leg 8: an under-consumed fake array is reported at exit',
     r2.status === 0 && /FAKE UNDER-CONSUMED: 7 of 12 elements unused/.test(String(r2.stderr)),
     { status: r2.status, tail: String(r2.stderr).slice(-200) });
@@ -269,7 +269,7 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 
 // ---- leg 7: unmeasured never refuses ------------------------------------
 {
-  const r = gate(['todos'], { CC_HOST_HEALTH_FAKE: fakePath('unm', { measured: false }) });
+  const r = gate(['liabilities'], { CC_HOST_HEALTH_FAKE: fakePath('unm', { measured: false }) });
   check('leg 7: unmeasured host → gate runs (absence never refuses)', r.status === 0, r.status);
   check('leg 7: the unmeasured state is said out loud',
     String(r.stdout).includes('instruments unmeasured'));

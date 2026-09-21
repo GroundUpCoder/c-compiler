@@ -1,7 +1,7 @@
 'use strict';
 
 // `inline` is a property of the FUNCTION, not of one declaration of it
-// (C11 6.7.4p1) — todos/0328. It reaches the WAST inliner as
+// (C11 6.7.4p1) — docs/archive/0328. It reaches the WAST inliner as
 // `fnMeta.inlineHint`, which swaps the 64-node calleeCap for the 256-node
 // hintCalleeCap, so a spelling that loses the specifier silently produces
 // different codegen. Before the fix, `isInline` came from each

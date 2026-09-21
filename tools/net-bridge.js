@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// net-bridge.js — the Tier 2.5 HTTP bridge (ticket #349; todos/NETWORK.md).
+// net-bridge.js — the Tier 2.5 HTTP bridge (ticket #349; docs/NETWORK.md).
 //
 // A single-file, dependency-free localhost proxy that gives the in-browser
 // OS generic HTTP egress: the kernel worker's fetch is CORS-gated by the
@@ -12,7 +12,7 @@
 //   node tools/net-bridge.js [--port=8199] [--allow-origin=ORIGIN[,ORIGIN...]]
 //                            [--quiet]
 //
-// This is NOT todos/NETWORK.md Tier 4's `tools/net-relay.js` (the reserved
+// This is NOT docs/NETWORK.md Tier 4's `tools/net-relay.js` (the reserved
 // name for the unbuilt raw-TCP websockify relay). The bridge speaks HTTP
 // only — request in, response out, one hop — and shares no wire format
 // with the relay design.

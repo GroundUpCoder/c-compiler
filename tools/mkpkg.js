@@ -14,7 +14,7 @@
 //     openwith: { "<ext>": "<cmd>" },       // /etc/openwith delta keys
 //     commands: { "<name>": "<cmd>" },      // /etc/cmdalt claim lines: this
 //                                           //   package provides dispatched
-//                                           //   command <name> (todos/0338)
+//                                           //   command <name> (docs/archive/0338)
 //     menu:  [ { group, entry, cmd } ],     // /etc/menu/<group>/<entry>
 //     fonts: [ "<rel>" ],                   // /etc/fonts/fallback face lines
 //     srclib: { include: ["<dir>"],         // source-lib §3.1: header +
@@ -105,7 +105,7 @@
 // Before it, a build REPLACED the repo: the index was rewritten to exactly
 // this invocation's names and the orphan prune deleted every payload the
 // fresh index did not name — not a bleeding wound day to day (the deploy
-// default builds the full superset, todos/0337), but the reason the superset
+// default builds the full superset, docs/archive/0337), but the reason the superset
 // workaround was LOAD-BEARING: any independent publisher would have silently
 // destroyed every entry it did not itself build.
 //
@@ -117,7 +117,7 @@
 // from both the view and the store is a LOUD exit 1 naming --prune as the
 // deliberate-removal path — never a silently-404ing index row.
 //
-// ---- one repo per writer: --pool and the concurrency guard (todos/0388) ----
+// ---- one repo per writer: --pool and the concurrency guard (docs/archive/0388) ----
 //
 // Additive publish does not change the interleave hazard: index.json + pool/
 // are still one unit, two concurrent writers still race mid-read, and the
@@ -150,8 +150,8 @@ const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
 
-// Cross-tree preflight (todos/0341, extended by #142): writes dist/packages/
-// in its own tree (and --prune deletes payloads there — todos/0388, #580), so
+// Cross-tree preflight (docs/archive/0341, extended by #142): writes dist/packages/
+// in its own tree (and --prune deletes payloads there — docs/archive/0388, #580), so
 // a foreign-cwd launch would rewrite another tree's package repo.
 require(path.join(__dirname, '../tests/lib/tree-guard.js'))
   .assertSameTree(__dirname, { label: 'tools/mkpkg.js' });
@@ -174,7 +174,7 @@ let allowDowngrade = false;
 let baselineFile = null;
 let baselineUrl = null;
 let noBaseline = false;
-// ---- native siblings (todos/0416; RUST.md §3 rule 4) ----------------------
+// ---- native siblings (docs/archive/0416; RUST.md §3 rule 4) ----------------------
 // A NATIVE SIBLING is an out-of-repo producer of prebuilt payloads: one
 // repository builds the binaries and publishes an `out-image/overlay.json`
 // (overlay@1) manifest with a per-file sha256; this repository CONSUMES it
@@ -224,7 +224,7 @@ let pkgDir = path.join(ROOT, 'packages');
 // contributes <root>/packages/*.json with its asset paths resolving against
 // that root. c-compiler (ROOT + pkgDir above) is the implicit source 0.
 const defsRoots = [];
-// The shared payload store (todos/0388). null = the classic layout, where the
+// The shared payload store (docs/archive/0388). null = the classic layout, where the
 // store IS <out>/pool and this tool owns it outright.
 let poolStore = null;
 const requested = [];
@@ -275,7 +275,7 @@ if (baselineChoices !== 1) {
 }
 const log = quiet ? () => {} : (m) => process.stderr.write('[mkpkg] ' + m + '\n');
 
-/* ---- one writer per out dir (todos/0388) --------------------------------
+/* ---- one writer per out dir (docs/archive/0388) --------------------------------
  * `index.json` + `pool/` are one replaceable unit, so two concurrent builds of
  * the same dir interleave into a repo that belongs to neither. Refuse LOUDLY
  * rather than produce one — a base-vs-base interleave yields a plausible index
@@ -480,7 +480,7 @@ for (const n of names) {
   }
 }
 
-/* ---- overlay ⟷ packages/ drift gate (todos/0337) --------------------------
+/* ---- overlay ⟷ packages/ drift gate (docs/archive/0337) --------------------------
  * Standing rule: EVERY app a sibling builds must be reachable through gucman.
  * The sibling overlay is the producer of record, so its executable payloads —
  * the `/usr/bin/*` entries — are the authoritative demand list, and each one
@@ -564,7 +564,7 @@ for (const p of enabled) driftCheck(p);
 
 /* ---- package-input freshness (the 0082 idea, scoped to one package) ----
  * The scan itself is os-common's newestPkgInput — extracted there
- * (todos/0363) so tests/host/test_bakeinput_sources.js can drive it against
+ * (docs/archive/0363) so tests/host/test_bakeinput_sources.js can drive it against
  * a synthetic tree, exactly like its twin newestBakeInput. This wrapper
  * binds this tool's context: the repo ROOT (the toolchain inputs), the
  * definition's OWNING source (#612 — its pkgDir and asset root), and the
@@ -782,7 +782,7 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
   for (const cmd of Object.keys(bin)) {
     if (!pkg.files[bin[cmd]]) throw new Error(`package '${name}': bin ${cmd} -> ${bin[cmd]} names no package file`);
   }
-  // todos/0338: a `bin` command must not be a name the BASE IMAGE dispatches.
+  // docs/archive/0338: a `bin` command must not be a name the BASE IMAGE dispatches.
   // The fat bake's claim() throw catches this for FOLDED packages only — a
   // `requires`-gated definition (every *-clang variant) is never folded, so
   // without this check it would build clean and then plant
@@ -798,13 +798,13 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
     if (dispatched.includes(cmd)) {
       throw new Error(`package '${name}': bin ${cmd} would shadow the base image's ` +
         `command dispatcher at /usr/bin/${cmd} — declare ` +
-        `"commands": { ${JSON.stringify(cmd)}: "<your bin command>" } instead (todos/0338)`);
+        `"commands": { ${JSON.stringify(cmd)}: "<your bin command>" } instead (docs/archive/0338)`);
     }
   }
   for (const ext of Object.keys(pkg.openwith || {})) {
     if (!bin[pkg.openwith[ext]]) throw new Error(`package '${name}': openwith ${ext} -> ${pkg.openwith[ext]} names no bin command`);
   }
-  // `commands` (todos/0338): dispatched command names this package claims —
+  // `commands` (docs/archive/0338): dispatched command names this package claims —
   // gucman appends `<name>\t/usr/local/bin/<cmd>` to /etc/cmdalt at install
   // and deletes exactly that line at remove. A ROLE name (`python`) is a
   // claim; an IMPLEMENTATION name (`micropython`) is a `bin` entry.
@@ -984,7 +984,7 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
   // Drop superseded payloads — but ONLY when this build owns the store. Under
   // --pool another repo's already-published index may still reference the older
   // sha, and its hardlinked view would be the only thing keeping the bytes
-  // alive; a shared store is append-only (todos/0388).
+  // alive; a shared store is append-only (docs/archive/0388).
   if (!sharedPool) {
     for (const old of fs.readdirSync(poolDir)) {
       if (old !== file && old.startsWith(name + '_') && old.endsWith('.pkg.tar.gz')) {
@@ -1004,7 +1004,7 @@ async function buildPackage(name, poolDir, sharedPool, synth) {
   return entryFor(file, sha, gz.length);
 }
 
-/* Materialize <out>/pool as a hardlinked view of exactly `live` (todos/0388).
+/* Materialize <out>/pool as a hardlinked view of exactly `live` (docs/archive/0388).
  * Hardlinks, so N repos sharing a store cost one inode each and no bytes; the
  * payload name is content-addressed, so an identical name is identical bytes
  * and copyFileSync is an equally correct fallback where linking is refused. */

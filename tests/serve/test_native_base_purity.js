@@ -1,5 +1,5 @@
 // Guardrail (a) — BASE PURITY (CLANG-CPP-EPIC Part II §7; generalized to the
-// native-sibling seam by todos/0416). The invariant that keeps "base gucOS
+// native-sibling seam by docs/archive/0416). The invariant that keeps "base gucOS
 // ships ZERO clang and ZERO Rust" true by CONSTRUCTION: a package definition
 // carrying `requires: "native-sibling:<producer>"` (the gate field of the
 // *-clang / *-rust packages) is EXCLUDED from every default enumeration —

@@ -1,6 +1,6 @@
 {
   "name": "sent",
-  "description": "suckless sent presentation tool, display layer ported Xlib/Xft -> SDL + freetype + libpng (todos/0119)",
+  "description": "suckless sent presentation tool, display layer ported Xlib/Xft -> SDL + freetype + libpng (docs/archive/0119)",
   "deps": [
     "../freetype/lib.json",
     "../libpng/lib.json"

@@ -1,5 +1,5 @@
 // idlemeter.mjs — measure browser-tab CPU cost of an idle gucOS desktop
-// (todos/IDLE-POWER.md "Baseline" stage; re-run after Stage 3 and Stage 4).
+// (docs/IDLE-POWER.md "Baseline" stage; re-run after Stage 3 and Stage 4).
 //
 // Boots os.html in the sweep's WebGPU-flagged Chromium, settles on VT2, and
 // samples the WHOLE Chromium process tree's cumulative CPU time (`ps

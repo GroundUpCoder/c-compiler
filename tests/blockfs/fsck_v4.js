@@ -16,7 +16,7 @@ const TLSF_POOL_OFFSET = SUPERBLOCK_SIZE + TLSF_META_SIZE; // 8448
 // superblock (v4): 64-bit inode-table extent at 16; cap 24; next-id 28; root 32
 const SB_MAGIC = 0, SB_VERSION = 4, SB_FLAGS = 8;
 const SB4_INODE_EXTENT = 16, SB4_INODE_CAP = 24, SB_NEXT_INODE_ID = 28, SB_ROOT_INODE = 32;
-// Sealed blob (todos/0040): flags bit 1 + SHA-256 of bytes [256, size) at 36.
+// Sealed blob (docs/archive/0040): flags bit 1 + SHA-256 of bytes [256, size) at 36.
 const SB_SEALED_BIT = 2, SB_SEAL_HASH = 36;
 
 // TLSF64 meta offsets (relative to TLSF_META_BASE)
@@ -56,7 +56,7 @@ function fsck(store) {
   const version = u32(SB_VERSION);
   if (version !== VERSION) { err(`unsupported format version ${version} (fsck_v4 knows ${VERSION})`); return problems; }
 
-  // ---- Pass 0b: sealed-volume integrity (todos/0040) ----
+  // ---- Pass 0b: sealed-volume integrity (docs/archive/0040) ----
   // A baked read-only blob carries a content hash; ANY post-bake mutation
   // (a bug writing through the readonly guard, an accidental rw mount)
   // changes some byte after the superblock and breaks the seal.
@@ -169,7 +169,7 @@ function fsck(store) {
     seenDirs.add(ino);
     const d = live.get(ino);
     if (!d || !d.isDir || d.extentOffset === 0) return;
-    const names = new Set(); // name uniqueness (todos/0375)
+    const names = new Set(); // name uniqueness (docs/archive/0375)
     let pos = 0, g = 0;
     while (pos < d.dataSize) {
       if (++g > 1e6) { err(`dir ${ino}: entry walk exceeded guard`); break; }
@@ -182,7 +182,7 @@ function fsck(store) {
         const name = new TextDecoder().decode(bytes(d.extentOffset + pos + 6, nameLen));
         if (name !== '.' && name !== '..') {
           if (nameLen === 0) err(`dir ${ino}: empty entry name`);
-          // Duplicate names (todos/0375): every path op resolves by first
+          // Duplicate names (docs/archive/0375): every path op resolves by first
           // match, so a second same-named dirent is unreachable-but-live
           // corruption — unlink removes the wrong one and "resurrects" the
           // other. The O_CREAT-through-dangling-symlink bug minted these.

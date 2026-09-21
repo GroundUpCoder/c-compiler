@@ -1,7 +1,7 @@
 {
   "bin": true,
   "name": "coreutils",
-  "description": "busybox coreutils as one multicall binary; /bin names are symlinks to it (todos/0010)",
+  "description": "busybox coreutils as one multicall binary; /bin names are symlinks to it (docs/archive/0010)",
   "deps": ["libbb-core.json"],
   "sources": [
     "port/multicall_main.c",

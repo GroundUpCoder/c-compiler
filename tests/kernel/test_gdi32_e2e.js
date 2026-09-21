@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 0057 acceptance, headless: the win32 gdi32 drawing subset (os/win32/,
-// design todos/WIN32.md) renders a Petzold-style WM_PAINT scene into an shm
+// design docs/WIN32.md) renders a Petzold-style WM_PAINT scene into an shm
 // surface, bit-exact, through os/boot.js. Covers:
 //   - `gdidemo selftest`: memory-DC GDI semantics in-OS (right/bottom
 //     exclusivity, LineTo endpoint exclusion, ROP2 XOR, clip, BitBlt overlap
@@ -47,7 +47,7 @@ function sessionA() {
     // windowed stderr to its OWN file (never /tmp/st.err — the selftest leg
     // deliberately emits a win32: report and the #318 pin asserts it)
     'gdidemo 2>/tmp/win.err &',
-    // Boot barrier (todos/0154): wait for the window to be listed, then for a
+    // Boot barrier (docs/archive/0154): wait for the window to be listed, then for a
     // presented frame (seq>=1) so the shot captures a painted scene, not a blank
     // surface — replaces the `sleep 4` guess at wasm boot + freetype + first paint.
     'wmctl wait win "GDI Demo" 10000',

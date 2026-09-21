@@ -1,5 +1,5 @@
 #!/bin/sh
-# todos/0332 — build and run the four diag_reloop.c cells.
+# docs/archive/0332 — build and run the four diag_reloop.c cells.
 #
 #   sh mk-reloop.sh <out-dir> [compiler.js] [steps]
 #

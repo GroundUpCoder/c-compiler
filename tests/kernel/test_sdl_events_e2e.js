@@ -135,7 +135,7 @@ int main(void) {
     SDL_Window *w = SDL_CreateWindow("evbox", 64, 48, 0);
     if (!w) { printf("NOWIN\\n"); return 3; }
     got.type = 0;
-    chk("create-steal FOCUS_GAINED arrives (todos/0256)",
+    chk("create-steal FOCUS_GAINED arrives (docs/archive/0256)",
         SDL_WaitEventTimeout(&got, 2000) == 1 && got.type == SDL_EVENT_WINDOW_FOCUS_GAINED);
     const bool *ks = SDL_GetKeyboardState(NULL);
     printf("INJECT\\n");

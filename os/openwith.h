@@ -1,4 +1,4 @@
-/* openwith.h — file associations, ONE policy in ONE place (todos/0072).
+/* openwith.h — file associations, ONE policy in ONE place (docs/archive/0072).
  *
  * Header-only by design: the image manifest's `c` entries are single-source
  * compiles, so the resolver is static functions shared by textual inclusion
@@ -38,7 +38,7 @@
 #define OW_CMD_MAX   256
 
 /* "Runnable" = the kernel can exec it: a wasm binary (`\0asm`) or a `#!`
- * script (shebang exec, todos/0065) — the same peek the kernel spawn path
+ * script (shebang exec, docs/archive/0065) — the same peek the kernel spawn path
  * does. fopen follows symlinks, so a link to a binary is runnable too. */
 static int ow_is_runnable(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -91,7 +91,7 @@ static void ow_resolve(const char *path, int gui, char *cmd, size_t sz) {
     snprintf(cmd, sz, "%s", gui ? "term vi" : "vi");
 }
 
-/* The GUI text-EDITOR command (the context menus' "Edit" row, todos/0202):
+/* The GUI text-EDITOR command (the context menus' "Edit" row, docs/archive/0202):
  * always the `default.gui` entry — deliberately NOT the extension
  * association, which is the VIEWER (Edit on a .mgp deck must open the text
  * editor, not the presentation). Same no-store fallback as ow_resolve. */
@@ -113,7 +113,7 @@ static int ow_set(const char *key, const char *cmd) {
  * bare word; prog gets the spawnable program path (a bare word resolves
  * through /usr/local/bin:/bin, the canonical PATH). Returns argc, or 0.
  *
- * The splitter itself lives in cfgstore.h since todos/0338 — a store value
+ * The splitter itself lives in cfgstore.h since docs/archive/0338 — a store value
  * is an argv prefix in every store, and cmdalt appends N arguments where
  * this appends one path. This is the reserve = 1 wrapper: the loop bound
  * maxargs - reserve - 1 IS the old maxargs - 2, and cfg_resolve_prog is the

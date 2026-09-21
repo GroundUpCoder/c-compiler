@@ -1,5 +1,5 @@
 'use strict';
-// tests/lib/tree-guard.js — the harness's CROSS-TREE preflight (todos/0341):
+// tests/lib/tree-guard.js — the harness's CROSS-TREE preflight (docs/archive/0341):
 // refuse to run a harness copy that lives in a DIFFERENT git tree than the cwd
 // it was launched from.
 //
@@ -16,7 +16,7 @@
 // — or copies one absolute path out of a doc, a wrapper, or a kickoff line —
 // writes into MAIN, silently, from any cwd. That is how two stray PNGs landed
 // in ~/git/c-compiler from a lane working in ~/worktree/c-compiler/fix-0316
-// (the dated artifact behind todos/0341), and it has happened more than once.
+// (the dated artifact behind docs/archive/0341), and it has happened more than once.
 //
 // So the fix is the missing CHECK, not a change to the resolution: assert the
 // script's tree and the cwd's tree are the same git tree, and fail loud if not.
@@ -46,10 +46,10 @@
 // probe watchdogs, so it is doubly spoken for).
 
 // SCOPE — the seven top-level TEST runners (tests/run.js, run-unit.js,
-// flake.js, blockfs/kernel/host/todos run.js, browser/os-sweep.mjs), and —
-// since #142 (todos/0357) — the writing entry points: os/boot.js and the
+// flake.js, blockfs/kernel/host/liabilities run.js, browser/os-sweep.mjs), and —
+// since #142 (docs/archive/0357) — the writing entry points: os/boot.js and the
 // tools/ writers (mkimage.js, mkpkg.js, os-drive.mjs + os-drive-headless.mjs,
-// win32rc.js, win32ports.js, mksounds.js, mkmpgenhdr.js, build-libc-ext.js,
+// win32rc.js, win32ports.js, mksounds.js, mkmpgenhdr.js,
 // mkgif.js, mkwebfixtures.js, mkgit2srclib.js; libcprobe/probe.js opted in
 // earlier). The #142 survey measured every harness spawn of those entry
 // points before guarding them: suite-runner children run with cwd inside the
@@ -94,7 +94,7 @@ function checkTree(scriptDir, cwd) {
 
 function message(r, label) {
   const who = label ? `${label} ` : '';
-  return '\n\x1b[1m\x1b[31m━━━ cross-tree launch REFUSED (todos/0341) ━━━\x1b[0m\n'
+  return '\n\x1b[1m\x1b[31m━━━ cross-tree launch REFUSED (docs/archive/0341) ━━━\x1b[0m\n'
     + `  script tree : ${r.scriptTree}\n`
     + `  cwd tree    : ${r.cwdTree || '(none — cwd is not inside a git tree)'}\n`
     + `  cwd         : ${r.cwd}\n\n`

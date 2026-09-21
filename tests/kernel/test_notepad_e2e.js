@@ -10,7 +10,7 @@
 //     "commdlg_FindReplace" message protocol end to end
 //   - comctl32: the status bar (SB_SETPARTS/SB_SETTEXTW; parts join in
 //     WM_GETTEXT), self-parking at the client bottom
-//   - the clipboard: Select All + Copy -> the kernel slot (todos/0090;
+//   - the clipboard: Select All + Copy -> the kernel slot (docs/archive/0090;
 //     read back via /bin/clip)
 //   - MB_YESNOCANCEL: the has-been-modified prompt shows Yes/No/Cancel
 //   - ShellExecuteW: File > New Window spawns a second notepad (the
@@ -45,7 +45,7 @@ function section(out, name) {
 
 // The comdlg32/FindReplace/prompt dialogs are all real modal WM windows, and
 // EDIT/clipboard content is agent-queryable — so every sleep here converts to a
-// window/label/text wait or a bounded clip poll (todos/0154). clip content is
+// window/label/text wait or a bounded clip poll (docs/archive/0154). clip content is
 // multi-line, so poll for a distinctive substring landing in it.
 const waitClipHas = (s) =>
   `for i in $(seq 1 120); do clip -o 2>/dev/null | grep -q "${s}" && break; sleep 0.05; done`;
@@ -150,7 +150,7 @@ const out = boot([
   'clip -o',
   'echo',
   'echo ==cut',
-  // CRLF round-trip (todos/0210): gucOS is POSIX — the EDIT strips \r at
+  // CRLF round-trip (docs/archive/0210): gucOS is POSIX — the EDIT strips \r at
   // every text-in path (EM_SETHANDLE is notepad's load), and a pure-LF
   // buffer makes notepad's WriteText a verbatim write (its \r\n scan never
   // fires), so save keeps LF. The buffer is modified (BEE): the save prompt
@@ -182,7 +182,7 @@ const out = boot([
   'echo ==setcr',
   'wmctl gettext EDIT:0',
   'echo ==cut',
-  // ---- the built-in WS_VSCROLL scrollbar (todos/0210) ----
+  // ---- the built-in WS_VSCROLL scrollbar (docs/archive/0210) ----
   // Geometry: at 400x300 the EDIT fills surface y=20 (under the menu)
   // down to the status bar's top edge; the status-bar height is
   // FONT-DERIVED (0229 — 28px for the 14px stock font), so SBY (the
@@ -240,7 +240,7 @@ const out = boot([
   'echo ==thumbdrag',
   'wmctl gettext msctls_statusbar32:0',
   'echo ==cut',
-  // ---- WM_MOUSEWHEEL scrolls the EDIT (todos/0210): 3 lines/notch ----
+  // ---- WM_MOUSEWHEEL scrolls the EDIT (docs/archive/0210): 3 lines/notch ----
   // The wheel event carries the LAST tracked mouse position — hover over
   // the EDIT first so user32's pump hit-tests the wheel to it.
   'TD="$(wmctl gettext msctls_statusbar32:0)"',
@@ -368,7 +368,7 @@ check('title tracks the saved name',
   section(out, 'list2'));
 
 /* Open + status bar */
-// gucOS is POSIX (todos/0210): the EDIT strips the \r notepad's loader
+// gucOS is POSIX (docs/archive/0210): the EDIT strips the \r notepad's loader
 // re-adds (ReplaceNewLines normalizes to CRLF before EM_SETHANDLE), so the
 // buffer — and everything downstream of WM_GETTEXT — is pure LF.
 check('Open loaded readme.txt into the EDIT (LF, \\r stripped)',
@@ -387,7 +387,7 @@ check('Select All + Copy filled the clipboard slot',
   section(out, 'clip').trim() === 'alpha BEE\ngamma BEE delta',
   JSON.stringify(section(out, 'clip')));
 
-/* CRLF round-trip (todos/0210) */
+/* CRLF round-trip (docs/archive/0210) */
 const crlfLoad = section(out, 'crlfload');
 check('CRLF file loads with every \\r stripped (EM_SETHANDLE path)',
   !crlfLoad.includes('\r') && crlfLoad.trim() === 'cr one\ncr two\ncr three',
@@ -400,7 +400,7 @@ check('WM_SETTEXT strips \\r\\n and lone \\r (agent settext path)',
   section(out, 'setcr').trim() === 'st one\nst two\nst three',
   JSON.stringify(section(out, 'setcr')));
 
-/* the built-in WS_VSCROLL scrollbar (todos/0210) */
+/* the built-in WS_VSCROLL scrollbar (docs/archive/0210) */
 const sbp = parseB64Png(section(out, 'sbshot'));
 check("EDIT scrollbar shot decodes as a valid PNG", sbp.w > 0 && sbp.h > 0, `x`);
 // The channel paints COLOR_SCROLLBAR gray (192,192,192) where an unscrolled
@@ -437,7 +437,7 @@ const dragLine = +((section(out, 'thumbdrag').match(/Line (\d+),/) || [])[1] || 
 check('thumb drag scrolls to the bottom of the document',
   dragLine >= 60, 'line=' + dragLine + ' pgdn=' + pgdnLine);
 
-/* WM_MOUSEWHEEL scrolls the EDIT (todos/0210) */
+/* WM_MOUSEWHEEL scrolls the EDIT (docs/archive/0210) */
 const wheelUp = +((section(out, 'wheelup').match(/Line (\d+),/) || [])[1] || 0);
 check('wheel scrolls 3 lines per notch (2 notches up = -6 lines)',
   wheelUp === dragLine - 6, 'wheelup=' + wheelUp + ' drag=' + dragLine);

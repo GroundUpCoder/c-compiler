@@ -36,7 +36,7 @@ function section(out, name) {
 }
 
 // The hub and each applet are real top-level WM windows, and the volume STATIC
-// is agent-queryable, so every sleep converts to a window/text wait (todos/0154)
+// is agent-queryable, so every sleep converts to a window/text wait (docs/archive/0154)
 // — except the WM_TIMER clock tick, which is genuinely waiting for a wall-clock
 // second to pass (a timing subject, 0083 rule). Config writes land in a file
 // after the WM_COMMAND, so poll the file for the expected state.
@@ -168,7 +168,7 @@ const out = boot([
   'NSID=$(wmctl list | grep "Network Properties$" | sed "s/[^0-9].*//")',
   'wmctl close $NSID',
   'wmctl wait nowin "Network Properties" 6000',
-  // the Default Programs applet (todos/0338 + todos/0130's picker leg): the
+  // the Default Programs applet (docs/archive/0338 + docs/archive/0130's picker leg): the
   // COMMAND half — which implementation a dispatched name runs. This image
   // is the FAT fixture, so micropython is folded and its `commands` claim
   // sits ahead of the baked cpython-clang suggestion in /usr/share/cmdalt.
@@ -282,7 +282,7 @@ check('Display applet opens with the density radios (+ the 0049 wallpaper note)'
   /text='Automatic \(default\)'/.test(tree4) &&
   /text='Native \(1x\)'/.test(tree4) &&
   /text='Densest \(0\.5x\)'/.test(tree4) &&
-  /todos\/0049/.test(tree4), tree4.slice(0, 800));
+  /docs\/archive\/0049/.test(tree4), tree4.slice(0, 800));
 const CLOCK_RE = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/;
 const clock1 = (section(out, 'tree4').match(CLOCK_RE) || [''])[0];
 const clock2 = (section(out, 'tree5').match(CLOCK_RE) || [''])[0];
@@ -313,7 +313,7 @@ const dp2 = section(out, 'dp2');
 check('Automatic writes an explicit zoom auto (replacing, not appending)',
   /^zoom\tauto$/m.test(dp2) && !/0\.5/.test(dp2), dp2);
 
-// -- Default Programs (todos/0338 + the 0130 picker leg) --
+// -- Default Programs (docs/archive/0338 + the 0130 picker leg) --
 const dpg1 = section(out, 'dpg1');
 check('Default Programs applet opens with both lists and the buttons',
   /class=CplDefProg [^\n]*text='Default Programs'/.test(dpg1) &&

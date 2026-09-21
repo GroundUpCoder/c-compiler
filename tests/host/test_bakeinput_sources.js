@@ -1,6 +1,6 @@
 'use strict';
 // The 0082 bake-input closure must cover a project's OUT-OF-DIRECTORY
-// sources/includes, not just its `deps` (todos/0354).
+// sources/includes, not just its `deps` (docs/archive/0354).
 //
 // `newestBakeInput` expanded a project through `deps` and walked the project's
 // own directory — nothing else. buildProject also pulls TUs in through
@@ -24,7 +24,7 @@
 //      all of them. Leg B is the standing sweep: a bin.json that starts
 //      reaching into a new tree tomorrow is caught here, not by a re-audit.
 //
-// Plus the twin's red control (todos/0363): newestPkgInput — mkpkg's
+// Plus the twin's red control (docs/archive/0363): newestPkgInput — mkpkg's
 // package-payload freshness gate, extracted to os-common so it can be pointed
 // at a synthetic tree — gets one leg PER INPUT CLASS it claims to cover
 // (definition, toolchain, project dir, deps recursion, external sources,
@@ -317,7 +317,7 @@ check('every escaping source/include in the manifest closure is covered', () => 
     'these project inputs live outside their project dir and the scan never saw them');
 });
 
-/* ---- leg C: newestPkgInput, synthetic tree (todos/0363) ----------------
+/* ---- leg C: newestPkgInput, synthetic tree (docs/archive/0363) ----------------
  * One package definition exercising every input class the scan claims to
  * cover. Each check makes ONE file the unambiguous newest on disk and
  * asserts the scan finds exactly it — so a scan with that input class

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Egress end-to-end (todos/0398): the gucOS -> host file transfer seam,
+// Egress end-to-end (docs/archive/0398): the gucOS -> host file transfer seam,
 // proven WITHOUT a browser — the point of the design's headless twin. A
 // REAL C program (os/egress.h -> __egress -> kernel EGRESS RPC) names
 // paths; the kernel materializes ONE artifact per call and hands it to the

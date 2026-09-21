@@ -1,4 +1,4 @@
-// Presentation tools browser acceptance (todos/0119): boot the reference OS
+// Presentation tools browser acceptance (docs/archive/0119): boot the reference OS
 // page in headless Chromium, run the two seeded slide tools from the shell,
 // and assert their pixels through the real compositor:
 //   - /bin/sent (vendor/sent, suckless sent on SDL): demo.sent slide 1 is

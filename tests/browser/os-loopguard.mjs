@@ -99,7 +99,7 @@ try {
   // paste from the PREVIOUS host write (the pid-blind freshness window),
   // silently compiling fixture N from source N-1 — the refusal legs then
   // misattributed the wrong program's behavior. A stale paste now fails
-  // HERE, naming the real cause (todos/0171: make the failure point at
+  // HERE, naming the real cause (docs/archive/0171: make the failure point at
   // its cause). The three sources have pairwise-distinct byte counts.
   await page.evaluate((src) => navigator.clipboard.writeText(src), DELAY_C);
   await page.keyboard.type('pbpaste > /root/delay.c && cc /root/delay.c -o /root/delayloop && echo CC1-O""K Z1=$(wc -c < /root/delay.c)\r');
@@ -180,7 +180,7 @@ try {
 
   // ---- Only the process died: desktop composites, compositor healthy,
   // shell answers, and a callback-model GPU app still runs fine. NB the
-  // compositor is ON-DEMAND (todos/0169) — it parks on an idle desktop —
+  // compositor is ON-DEMAND (docs/archive/0169) — it parks on an idle desktop —
   // so composite-side liveness is measured WHILE the callback app
   // presents, not on the idle desktop after the refusals.
   check('no device loss from either refusal', after.deviceLosses === 0, after);

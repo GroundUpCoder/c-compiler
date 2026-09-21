@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// tests/netsurf/run.js — the `netsurf-patch` suite (todos/0423): the offline
+// tests/netsurf/run.js — the `netsurf-patch` suite (docs/archive/0423): the offline
 // half of the vendor/netsurf patch-record invariant.
 //
 // `vendor/netsurf/update.sh`'s header claims the committed trees are
@@ -21,7 +21,7 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-// Cross-tree preflight (todos/0341) — cases run with `cwd: ROOT`, so a
+// Cross-tree preflight (docs/archive/0341) — cases run with `cwd: ROOT`, so a
 // main-tree copy launched from a worktree would otherwise validate MAIN's
 // patch record and report it as yours.
 require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/netsurf/run.js' });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Lane D acceptance (win32 source-lib design §6, todos/OS.md): the additive
+// Lane D acceptance (win32 source-lib design §6, docs/OS.md): the additive
 // "add default desktop icons" reconcile.
 //
 //   - foldDesktopDefaults (os-common.js) bakes the manifest's /root/Desktop

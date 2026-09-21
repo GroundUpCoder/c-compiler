@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// strace e2e (todos/0046): the real /bin/strace in the booted OS via
+// strace e2e (docs/archive/0046): the real /bin/strace in the booted OS via
 // os/boot.js. Acceptance from the todo item: `strace cat FILE` shows
 // open/read/write/close and the exit; the child's exit status propagates;
 // a signal-delivering run shows the arrival marker in the RPC stream

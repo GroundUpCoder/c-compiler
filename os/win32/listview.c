@@ -1,5 +1,5 @@
-/* listview.c — SysListView32 (report view) + SysHeader32 (todos/0370,
- * design todos/SOFTWARE-NATIVE.md §3). One facility per TU, the menucore.c
+/* listview.c — SysListView32 (report view) + SysHeader32 (docs/archive/0370,
+ * design docs/SOFTWARE-NATIVE.md §3). One facility per TU, the menucore.c
  * precedent; registered by comctl32's InitCommonControls[Ex] via
  * __comctl_register_listview (win32_internal.h).
  *
@@ -1456,7 +1456,7 @@ static LRESULT lv_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case LVM_GETEXTENDEDLISTVIEWSTYLE:
         return st->ex;
 
-    /* ---- the agent surface (todos/0370) ---- */
+    /* ---- the agent surface (docs/archive/0370) ---- */
     case WM_GETTEXT: {
         /* Content, row-per-line (the LISTBOX convention extended): header
          * line first, subitems " | "-joined, "> " marks selected rows. */

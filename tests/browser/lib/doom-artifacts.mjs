@@ -5,9 +5,8 @@
 //
 // build-doom.mjs runs `node compiler.js vendor/doom/bin.json -o www/doom.html`,
 // so the emitted page is a function of:
-//   - compiler.js, plus the two siblings it reads at emit time: host.js
-//     (inlined into every single-file HTML bundle) and libc-ext.js (optional
-//     extension libc sources merged into the stdlib when present);
+//   - compiler.js, plus the sibling it reads at emit time: host.js
+//     (inlined into every single-file HTML bundle);
 //   - vendor/doom/bin.json and everything it names: the src/ and Nuked-OPL3/
 //     translation units and the bundled data/doom1.wad (dataFiles);
 //   - build-doom.mjs itself (its flags shape the output).
@@ -32,7 +31,6 @@ export function doomFreshnessSpec() {
     inputs: [
       path.join(ROOT, 'compiler.js'),
       path.join(ROOT, 'host.js'),
-      path.join(ROOT, 'libc-ext.js'),
       path.join(DOOM, 'bin.json'),
       { dir: path.join(DOOM, 'src'),        match: /\.[ch]$/ },
       { dir: path.join(DOOM, 'Nuked-OPL3'), match: /\.[ch]$/ },

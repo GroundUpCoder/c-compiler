@@ -1,6 +1,6 @@
-/* open.c — /bin/open, the terminal-context opener (todos/0072).
+/* open.c — /bin/open, the terminal-context opener (docs/archive/0072).
  *
- * `open FILE` launches FILE the activate() way (todos/0066), but with the
+ * `open FILE` launches FILE the activate() way (docs/archive/0066), but with the
  * TERMINAL default: a runnable file (wasm magic / #! script, through
  * symlinks) spawns directly; anything else resolves through the openwith
  * associations (openwith.h — extension map first, then default.term, vi

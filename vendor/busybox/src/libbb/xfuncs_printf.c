@@ -282,7 +282,7 @@ off_t FAST_FUNC xlseek(int fd, off_t offset, int whence)
 }
 
 /* WASM PORT: formerly guarded out; the libc grew mkstemp() for sed -i
- * (todos/0010). */
+ * (docs/archive/0010). */
 int FAST_FUNC xmkstemp(char *template)
 {
 	int fd = mkstemp(template);

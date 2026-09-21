@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The host ticket bridge end-to-end (ticket #451; todos/NETWORK.md "The
+// The host ticket bridge end-to-end (ticket #451; docs/NETWORK.md "The
 // ticket bridge").
 //
 // The point under test is the ISOLATION INVARIANT: the in-OS client

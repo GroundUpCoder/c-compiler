@@ -1,4 +1,4 @@
-/* Minimal cairo-test.h shim (todos/0061): just enough of the upstream test
+/* Minimal cairo-test.h shim (docs/archive/0061): just enough of the upstream test
  * harness interface that the vendored upstream test .c files compile
  * UNMODIFIED. CAIRO_TEST registers a case struct the runner links against
  * by name; the real harness's target machinery is replaced by runner.c

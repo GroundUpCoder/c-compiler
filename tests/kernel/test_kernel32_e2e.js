@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 0059 acceptance, headless: the win32 kernel32/advapi32/wide-CRT veneer
-// (os/win32/, design todos/WIN32.md) over the real OS through os/boot.js.
+// (os/win32/, design docs/WIN32.md) over the real OS through os/boot.js.
 //   - `k32demo` self-checks the whole surface in-OS (files, seek/size,
 //     dirs, wildcard find, file mapping, Global/Local/Heap/Virtual,
 //     UTF-16<->UTF-8, wsprintf/_stscanf/strsafe, tick/QPC/date-format,
@@ -13,7 +13,7 @@
 //     CreateProcess leg produces the same bytes + exit code.
 //   - persistence: a SECOND boot of the same image still sees the
 //     registry hive ($HOME/.win32reg) — `k32demo reg-persist`.
-//   - sharing (todos/0288): TWO live processes with overlapping
+//   - sharing (docs/archive/0288): TWO live processes with overlapping
 //     lifetimes both keep their registry writes, in either exit order —
 //     `k32demo reg-race`. The hive is one file shared by every win32
 //     app, so a flush reload-merges instead of rewriting from the
@@ -148,7 +148,7 @@ function sessionB() {
     out.slice(-200));
 }
 
-/* ---- session C: two live processes share the hive (todos/0288) ----
+/* ---- session C: two live processes share the hive (docs/archive/0288) ----
  *
  * `k32demo reg-race FIRST SECOND` spawns two agents that BOTH take their
  * hive snapshot and mutate it before EITHER flushes, then releases them in

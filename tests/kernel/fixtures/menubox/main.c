@@ -1,4 +1,4 @@
-/* menubox — the Spike-1 anchored-child acceptance fixture (todos/0256,
+/* menubox — the Spike-1 anchored-child acceptance fixture (docs/archive/0256,
  * menu-uniform architecture). A winbox-class SDL app that exercises the
  * whole kernel primitive through the stock SDL3 popup API, with NO user32
  * and NO menu code:

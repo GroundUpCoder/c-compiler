@@ -19,7 +19,7 @@ const path = require('path');
 const os = require('os');
 
 const ROOT = path.resolve(__dirname, '..');
-// Cross-tree preflight (todos/0341) — every path below hangs off ROOT, which is
+// Cross-tree preflight (docs/archive/0341) — every path below hangs off ROOT, which is
 // this file's own location, not the cwd. Guard the launch, not the 127 sites.
 if (isMainThread) require('./lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/run-unit.js' });
 const UNIT_DIR = path.join(__dirname, 'unit');
@@ -138,7 +138,7 @@ function workerMain() {
   const runModule = require(path.join(ROOT, 'host.js'));
   const BLOCK_FS = runModule.BLOCK_FS;
 
-  // --wast-inline differential mode (todos/0214): mutate the pass
+  // --wast-inline differential mode (docs/archive/0214): mutate the pass
   // defaults once per worker, before any compile.
   const wastMode = workerData && workerData.wastInline;
   if (wastMode === 'off') {
@@ -401,12 +401,12 @@ function workerMain() {
     const id = td.config.knownBug;
     if (result.status === 'fail') {
       return { name: td.name, status: 'xfail', knownBug: id,
-               msg: `XFAIL KNOWN-BUG ${id} (todos/${id}) — pinned; expected-vs-actual below:\n${result.msg || ''}` };
+               msg: `XFAIL KNOWN-BUG ${id} (docs/${id}) — pinned; expected-vs-actual below:\n${result.msg || ''}` };
     }
     return { name: td.name, status: 'xpass', knownBug: id,
              msg: `XPASS: KNOWN-BUG ${id} now PASSES — the bug appears FIXED. Remove ` +
                   `"knownBug" from ${td.name}/config.json to convert this into a permanent ` +
-                  `regression guard (todos/${id}).` };
+                  `regression guard (docs/${id}).` };
   }
 
   parentPort.on('message', async (td) => {
@@ -460,7 +460,7 @@ function parseArgs(argv) {
         '\n' +
         '  --wast-inline=off|on|max\n' +
         '            The WAST inliner+tree-shake differential knob\n' +
-        '            (todos/0201/0214): off = both passes disabled, on = the\n' +
+        '            (docs/archive/0201/0214): off = both passes disabled, on = the\n' +
         '            shipped defaults (same as omitting the flag), max =\n' +
         '            aggressive budgets (calleeCap/hintCalleeCap 2048,\n' +
         '            callerGrowth 16000). The corpus must be green under all\n' +

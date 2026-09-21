@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// EXPOSE (todos/EXPOSE-MISSION-CONTROL.md) acceptance, headless: the window
+// EXPOSE (docs/EXPOSE-MISSION-CONTROL.md) acceptance, headless: the window
 // overview / Exposé through the REAL /bin/wm + /bin/wmctl via os/boot.js.
 // Covers: `wmctl overview` ENTERS (the kernel composites live miniatures, seen
 // in `wmctl shot screen` — the deterministic CPU branch that makes this test

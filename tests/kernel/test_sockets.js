@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// AF_UNIX socket semantics (todos/0008) without wasm: fake workers over a
+// AF_UNIX socket semantics (docs/archive/0008) without wasm: fake workers over a
 // BROKERED kernel, the test playing the process side of the kernel-page
 // protocol (test_pipes.js pattern — see there and test_kernel.js for the
 // plumbing rationale). Protocol rule the test respects: a process with a

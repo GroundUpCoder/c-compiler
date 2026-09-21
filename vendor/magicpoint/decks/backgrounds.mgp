@@ -1,4 +1,4 @@
-%% backgrounds.mgp - gucOS MagicPoint showcase (todos/0185): %bgrad
+%% backgrounds.mgp - gucOS MagicPoint showcase (docs/archive/0185): %bgrad
 %% gradients (directions, palettes). The parameter walk-through follows
 %% upstream sample/gradation.mgp; the pages here are ours.
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"

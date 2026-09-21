@@ -1,5 +1,5 @@
 /* spawn_helpers.c — libbb's spawn()/xspawn()/spawn_and_wait() over the
- * vfork-on-__spawn shim (todos/0035).
+ * vfork-on-__spawn shim (docs/archive/0035).
  *
  * Upstream these live in libbb/vfork_daemon_rexec.c, which drags in the
  * kbuild applet tables (busybox.h, NUM_APPLETS.h) for its NOFORK/NOEXEC

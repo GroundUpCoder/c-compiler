@@ -1,0 +1,374 @@
+# gucOS — a WebAssembly-native OS in a browser tab
+
+The OS's name is **gucOS** (groundupcoder OS) — the docs/archive/0114 sweep renamed
+every live surface (boot page, os-release, /proc/version builder token,
+Start-menu band, saver marquee) off the old wasm-os
+placeholder; historical logs/done items keep the old name as the record.
+
+## Goal (repo north star)
+
+A full-fledged, almost-POSIX environment with a GUI and window manager that is
+**WebAssembly native**: every binary is a real wasm module produced by this
+compiler, running well as wasm — not an emulation of some other machine. It
+should feel like a complete OS living in a browser tab, with persistence.
+
+The core is the compiler (`compiler.js`), which advertises C11 and implements
+substantial earlier-C compatibility plus selected newer/GNU/custom Wasm
+extensions. Its explicit language boundaries include VLA, complex arithmetic,
+atomics and C threads; this is not a complete standards-conformance claim. Everything else in the repo serves that goal: `host.js` is the
+kernel-ish layer, BlockFS is the disk, vendored ports are the userland.
+
+"Almost POSIX" is deliberate: `fork()` is the one POSIX primitive we do not
+plan to implement faithfully (see the decision below). Everything else is fair
+game.
+
+**Current primary epic (jku, 2026-08-04): game development inside gucOS.**
+The proof of the north star is a person developing real games in C + SDL3,
+with gcode, inside gucOS itself — see `docs/GAMEDEV-EPIC.md`. All current
+work batches fall under that epic; a CPython+pygame twin epic is queued
+behind it.
+
+**Agent-friendly by construction.** The environment must be as drivable by AI
+agents as by humans, at every layer, without a separate automation bolt-on:
+
+- **Headless-first**: the whole OS runs under Node (kernel.js + host.js +
+  worker_threads) with no browser — `tests/kernel/` already boots it this
+  way. The reference os/ build keeps a headless boot mode (tty on stdio) so
+  an agent can drive the shell with pipes and exit codes.
+- **The tty bridge is dumb bytes in/bytes out** — a scripted bridge (what the
+  kernel tests use) IS the agent interface; xterm.js is just the human skin
+  over the same protocol.
+- **Screenshots without a display**: compositor surfaces use readable pixel
+  transports (shm framebuffer first), so "screenshot surface X" is a kernel
+  op that works headlessly — deterministic pixels for graphics testing.
+  WebGPU content falls back to GPU readback or Playwright against the real
+  page (always available as the outer loop).
+- **Semantic window access**: the kernel routes all input and owns the
+  surface list, so the WM protocol exposes an agent control channel — list
+  windows/geometry, focus, send keys, click, screenshot — usable from
+  outside (test harness) and inside the OS (a wmctl binary), like
+  xdotool-as-a-syscall. Target look for the WM is Windows-95-ish window
+  management (overlapping windows, decorations, taskbar) — which is also a
+  good agent target: discrete widgets, deterministic layout.
+
+**Dev-experience first: a buggy program must never take down the platform**
+(jku, 2026-08-04). gucOS is a place people (and agents) write and run their own
+C programs, so the platform is judged by what happens when those programs are
+wrong. The motivating incident: a textbook-legal SDL3 render loop with no
+`SDL_Delay` presented at ~2,100 fps, never drained its input ring (unclosable
+window), and flooded the browser GPU frame transport until the whole tab died.
+The program was naive; the crash was ours. The platform's answer to userland
+misbehavior, in order of preference:
+
+1. **Absorb** — make the pathological pattern harmless by construction, at the
+   seam the resource crosses (e.g. backpressure/coalescing on the present
+   transport: mailbox semantics already say "newest frame wins", so enforce it
+   at the *producer* where the queue cannot grow). If a legal program can
+   exhaust a platform resource, that is a missing clamp, not a user error.
+2. **Surface** — when a program is doing something legal but self-harming,
+   make it observable: kernel-side per-process diagnostics (present rate,
+   undrained input ring, ring drops) that a human or agent can read, and a
+   visible warning path rather than silence.
+3. **Contain** — when a program is genuinely unresponsive (e.g. ignores a
+   close request because it never pumps events), the kernel force-quits THAT
+   process with a legible reason ("not responding"), Windows-style — never
+   lets one process wedge or crash the OS itself.
+
+A tab/compositor crash caused by userland behavior is always a platform bug,
+whatever the program did. When a fix can live either in "tell users to write
+better programs" (docs, examples) or in the platform (clamp, diagnose,
+contain), prefer the platform.
+
+**API honesty** (jku, 2026-08-04): *better to not implement at all, or ship
+a clearly custom API, than to incorrectly implement or lie with a standard
+API's name.* An absent symbol fails loud at link time; a subtly-divergent
+implementation under a standard name silently poisons ports, tests, and
+dogfooding. Scoped-but-honest subsets are fine when the boundary is explicit
+(SDL_ttf's classic API without `TTF_Text`; the VLA "real or absent, never
+faked" ruling is prior art).
+
+## Non-goals
+
+- **Not an emulator.** tinyemu booting Linux is a compiler stress test, not the
+  product. The product is native wasm binaries against a native wasm kernel.
+- **Not a Linux ABI.** We own the libc (it lives inside `compiler.js`), so we
+  can shape the syscall surface to fit the substrate instead of translating a
+  foreign one. Ports get patched at the source level, like any new Unix.
+- **Not multi-user (for now).** Single root user; uid/gid plumbing exists in
+  stubs (`getpwnam` returns root) and can grow later if ever needed.
+
+## Decision: posix_spawn is the process primitive, not fork/exec
+
+**Status: decided. Don't re-litigate without new evidence.**
+
+The process model (already implemented — `host.js` `createSpawn`,
+`compiler.js` `<spawn.h>`/`<unistd.h>`) is *owner-brokered spawn*: the host
+(main thread) is the kernel; each `posix_spawn()` loads a named `.wasm` image
+into a fresh worker with its own linear memory. fd inheritance is declarative
+(`dup2`/`open`/`close` file actions), `waitpid`/`kill` block via
+SAB + Atomics.wait, and `popen`/`system` are built on top. `fork`/`execve`
+exist as always-failing stubs so configure-style probes fail cleanly.
+
+Why not real fork? Every serious attempt to emulate fork on a substrate that
+doesn't have it validates the choice:
+
+- **WSL1** implemented fork via NT pico processes over the NT kernel's native
+  copy-on-write address-space cloning (`NtCreateProcess` machinery from the old
+  POSIX subsystem). It worked and was still the slowest, most painful part of
+  WSL1 — fork-heavy workloads (shell scripts, `./configure`) crawled.
+- **WSL2** is Microsoft's verdict on that experiment: stop translating, ship a
+  real Linux kernel in a VM. We can't (and don't want to) take that exit — it's
+  the "emulate another system" path this project explicitly rejects.
+- **Cygwin** fakes fork on Win32 by spawning a fresh child and copying the
+  parent's memory/handles into it. Notoriously slow and fragile.
+- **WASIX/Wasmer** shows fork *is* possible in wasm — snapshot the linear
+  memory, rewind the stack via asyncify into a new instance. But it's
+  expensive, needs whole-program stack instrumentation, and breaks around
+  external state (open GPU handles, DOM, host-side fd objects).
+
+Unlike WSL1/Cygwin, we control userspace: the libc is ours and ports are
+patched at source. `posix_spawn` + `popen` + `system` covers the overwhelming
+majority of real software; the rest gets a small patch (this is exactly how
+the shell port should handle subshells — see Phase 1).
+
+**The native primitive is `__spawn(struct __spawn_spec *)`, not posix_spawn.**
+The spec (path, argv, envp, **cwd**, declarative fd_actions, pgroup) is the
+OS's real process-creation interface — deliberately CreateProcess-class
+rather than POSIX-class (posix_spawn can't even set the child's cwd; ours
+can). `posix_spawn`/`posix_spawnp`/`popen`/`system` are thin C facades over
+it, and the spec rides as JSON over the kernel RPC, so it GROWS BY FIELD:
+suspended spawn (CREATE_SUSPENDED — cheap now that job control has the
+STOPPED state), rlimits, inheritance masks, and later WM surface binding
+(Phase 3) extend the spec — never a parallel primitive, never a fork.
+Port patches (the shell, anything vfork-shaped) should target `__spawn`'s
+declarative model: child-side setup dances (dup2/close, setpgid) become
+spec fields, which also kills their classic races (the kernel assigns
+pgid atomically at spawn).
+
+**Possible future mitigations** (only if a port genuinely needs them):
+1. *fork+exec idiom lowering*: a `fork()` immediately followed by `exec*()` in
+   the child is semantically a spawn; a source-level or libc-level shim could
+   cover the common idiom.
+2. *Snapshot fork*: linear memory is trivially copyable; a real `fork()` for
+   the rare program that computes in the child (shell subshells, daemons)
+   could be built on memory snapshot + JSPI/stack-switching. Big project, low
+   priority, and per-port patching is almost always cheaper.
+
+## Current implementation (source checked 2026-09-07)
+
+This table describes the local source, not a deployment or a fresh gate result.
+`os/image.json` owns image/package membership and version; `tests/run.js full`
+owns the current validation scope. Avoid mirroring line counts, test counts or
+SDL coverage percentages here: they drift independently of capability.
+
+| Pillar | Implementation and authoritative reference |
+|---|---|
+| Compiler | C to WebAssembly in `compiler.js`, with bundled headers/libc and source linking. Real ports live under `vendor/`; regression tests under `tests/unit/` and `tests/ast/`. `CONFORMANCE-REMAINING.md` is a historical findings register, not a conformance certificate. |
+| Persistence | BlockFS and MountFS on OPFS in the browser, file-backed storage headlessly; read-only sealed `/usr` plus writable root, independent fsck and differential/dual-instance fuzzing (`tests/blockfs/`). |
+| Processes | Owner-brokered spawn, kernel fd tables, pipes, signals, tty/job control and worker isolation (`KERNEL.md`). Faithful fork/exec is outside the chosen model. Startup failures and runtime faults are distinguished; traps and aborts report caller information when metadata is present. |
+| Terminal | Kernel tty and ptys, browser xterm bridge on VT1, and the windowed wasm `/bin/term` (`os/term/`); `os/boot.js` exposes the same OS on stdio. |
+| Reference build | `os/os.html` boots in a browser; `os/boot.js` is the headless twin. Both use `os/os-common.js` and the same image manifest. `cc hello.c && ./a.out` builds and runs in-OS. Source-built distribution binaries include names and source locations; direct developer builds opt in with `-g`/`-g2`. |
+| Shell and coreutils | BusyBox hush plus a multicall coreutils binary and manifest-declared applet links (`vendor/busybox/`, `os/image.json`). Pipelines, redirects, command substitution, interactive editing and shell control flow use the spawn substrate. |
+| Threads | Deferred indefinitely (`logs/2026-07-07/threads-atomics-deferral.md`). Processes are the parallelism unit; the compiler declares `__STDC_NO_ATOMICS__` and `__STDC_NO_THREADS__`. |
+| Graphics and audio | SDL3 subset with per-window software/GPU rendering, WebGPU bindings, kernel audio mixing and browser playback. `os/doc/sdl-api-index.md` lists actual SDL symbols; `os/doc/sdl-gucos.md` explains loop/backend contracts. Browser OS requires WebGPU; headless GPU rendering uses the optional Dawn tier. |
+| Window manager | Kernel-owned surfaces and input, WebGPU browser compositor (`os/compositor.js`), wasm `/bin/wm` policy and `/bin/wmctl` semantic control. Multi-window taskbar, resize/scale/maximize, menus and desktop are implemented. Surface, thumbnail and screen captures include GPU pixels through readback; headless composition is independently available (`WM.md`, kernel/browser suites). |
+| Networking | AF_UNIX IPC and HTTP through kernel fetch/curl are implemented. Browser HTTP follows CORS unless a bridge is configured. General AF_INET remains tracked by `NETWORK.md`; this is not Linux socket ABI compatibility. |
+| Editors | BusyBox vi on the tty, the windowed sedit C editor (`os/sedit/`), and Notepad are manifest/package-managed. C/H GUI associations select sedit; gcode provides the in-OS agent workflow. See `os/doc/` and the editor/browser tests. |
+
+## Reference build: `os/` in this repo
+
+The OS ships as a self-contained reference page in this repo — external apps
+(the c/ app) become consumers of the same parts, not keepers of the only
+kernel.
+
+**Multi-file source page, no build step** (the repo's discipline), served by
+`serve.js` — which already sends the COOP/COEP headers that
+SharedArrayBuffer requires. That requirement also settles an architectural
+question: a truly standalone single-file `os.html` opened from `file://` can
+never get SABs, so the served multi-file page IS the natural reference form.
+A single-file packaging mode (inline everything + a pre-baked BlockFS image)
+can come later as a distribution convenience; it is not the dev setup.
+
+Layout and load graph:
+
+```
+os/os.html            thin boot shim (UI bridge): xterm + canvas + input
+  ├─ vendor/xterm/…   terminal widget (main thread)
+  └─ new Worker ──► kernel worker
+        ├─ kernel.js      process table, signals, tty discipline (KERNEL.md)
+        ├─ host.js        for BLOCK_FS (store access — SyncAccessHandle is
+        │                 worker-only, which is WHY the kernel is a worker)
+        ├─ compiler.js    backs the __compile hook → /bin/cc works in-browser
+        └─ createWorker ──► process workers (one per pid)
+              └─ host.js + the process's .wasm image
+```
+
+- `os.html` stays thin on purpose: everything with logic lives in
+  kernel.js/host.js/os-common.js so it's testable under Node
+  (`tests/kernel/`); the page is just DOM glue plus the `window.__osOut`/
+  `__osState` agent probe. Process workers boot from `os/process-worker.js`
+  (the browser twin of kernel.js's Node BOOT_SOURCE), created by the kernel
+  worker's `createWorker` capability.
+- **First boot** (implemented, docs/archive/0004; volumes reshaped by
+  docs/archive/0026 then docs/archive/0040): the kernel worker mounts TWO
+  BlockFS volumes on OPFS under a host.js **MountFS** — a WRITABLE root
+  volume at `/` (`os-root.v5.img`; /etc, /var, /tmp, /root, /dev, /run)
+  and a READ-ONLY baked system blob at `/usr` (`os-system.v5.img`;
+  merged-usr `/bin → /usr/bin`, `/usr/local → /var/local`, EROFS on
+  writes) — longest-prefix routing, cross-volume rename/link → EXDEV,
+  mount points EBUSY, symlinks resolved in the FULL namespace via the
+  volume-side `_mountOwns` escape hook. The blob is baked from
+  `os/image.json`'s `system` section, which maps paths to **C sources
+  compiled at bake time by the repo's own cc driver**
+  (`os/os-common.js`), not pre-built wasm URLs: no build step, the repo
+  discipline — offline via `tools/mkimage.js`, or on demand (headless
+  boot.js bakes when the blob's `/usr/share/os-release` is older than
+  the manifest; the browser fetches a prebaked `os/os-system.img` if
+  served, else bakes in-worker). The `user` section (game data, Desktop
+  links) seeds ONCE onto a freshly created root volume. **Upgrade =
+  swap the blob**; user territory is never written by an upgrade;
+  factory reset = wipe /etc + /var. Design + settled decisions:
+  `docs/DISK-IMAGE.md`.
+- **Headless twin** (the agent-first requirement): `os/boot.js` boots the
+  same kernel + manifest under plain Node — file-backed store, tty on
+  stdio — so `echo 'ls /' | node os/boot.js` drives the OS with pipes and
+  exit codes. `tests/kernel/test_os_boot.js` scripts it;
+  `tests/browser/os-boots.mjs` drives the real page in headless Chromium.
+- **pid 1**: busybox hush (`/bin/sh`), the real shell port and live boot
+  program. It exercises the spawn, pipe, signal, tty, and job-control
+  substrate delivered by kernel Phases 1–4.
+
+## Roadmap
+
+Sequencing principle: **shell before window manager.** The shell is the
+keystone app — it forces spawn composition, pipes, signals, tty semantics and
+job control to become real, and a good terminal environment already *feels*
+like an OS. The WM then lands on proven process infrastructure.
+
+### Phase 1 — Shell + the tty/signal layer it needs
+
+The single highest-leverage project in the repo. **The substrate is DONE**
+(kernel.js Phases 1–4, `docs/archive/0001–0004` + `0009`; design in
+`docs/KERNEL.md`); the shell port (`docs/archive/0005`) is its acceptance test.
+
+- ~~Port a real shell~~ DONE (0005): busybox hush in its NOMMU
+  configuration — every fork-shaped site maps onto `__spawn` through the
+  journaling vfork shim (`vendor/busybox/port/`); subshells/`$( )` re-exec
+  `/bin/sh` with serialized state (upstream's own NOMMU machinery).
+  `popen()`/`system()` lit up as predicted. The kernel needed NO
+  workarounds — the acceptance criterion held.
+- ~~Signals~~ DONE (0001): safe-point delivery, SIGPEND on the kernel page,
+  EINTR/SA_RESTART, default actions, SIGCHLD, ordered exit handshake.
+- ~~termios/tty~~ DONE (0002): kernel-object tty, full termios, canonical/
+  raw + echo, VINTR→SIGINT to the fg pgroup, TIOCGWINSZ + SIGWINCH.
+- ~~Job control~~ DONE (0003): pgroups, fg/bg via tcsetpgrp, stop/cont
+  (cooperative park at safe points), WUNTRACED/WCONTINUED, SIGTTIN. Pipes
+  as kernel OFDs with real blocking + SIGPIPE landed with it.
+- ~~select over pipes/tty/files~~ DONE (0009/0003, kernel-side readiness).
+- ~~Coreutils~~ DONE (0010): busybox multicall `/bin/coreutils` + symlinks
+  (ls cat cp mv rm mkdir rmdir head tail wc sort pwd true false ln touch
+  basename dirname grep egrep fgrep sed echo printf test `[` kill).
+- ~~REPLs~~ DONE (0036): `/bin/lua`, `micropython` (now a package with script and stdlib support;
+  see `vendor/micropython/README.md`), `/bin/sqlite3` seeded from their vendor bin.json projects;
+  piped use EOF-exits cleanly, interactive use works at the hush prompt
+  and over ptys (`tests/kernel/test_repl_pty_e2e.js`). sqlite3's
+  file-backed journal fsync exposed and fixed the brokered-fs fsync crash
+  (FS_FSYNC RPC).
+- Small enablers as they come up: `poll`, `mmap` (at least MAP_ANON;
+  file-backed can be read-copy at first).
+
+Exit criteria: open the tab, land in a shell over BlockFS; pipelines, Ctrl-C,
+an editor, and `cc hello.c && ./a.out` all work. That's already "an OS in a
+tab" for terminal people.
+
+### Phase 2 — Threads and atomics — DEFERRED indefinitely (2026-07-07)
+
+**Deferred; decision + full rationale in
+`logs/2026-07-07/threads-atomics-deferral.md`.** Short form:
+processes are the parallelism unit (posix_spawn already gives multi-core
+parallelism); no vendored or planned port needs pthreads; the cost — a
+second shared-memory instantiation model, real TLS, libc-wide thread-safety
+obligations, per-thread syscall channels, signals × threads — is a permanent
+tax out of proportion to any current benefit. Don't re-litigate without a
+port that hard-requires pthreads. The sketch below is kept for that
+eventuality.
+
+- wasm shared memory + threads proposal: shared `WebAssembly.Memory`, worker
+  pool as threads, `_Atomic` codegen onto wasm atomics, `_Thread_local` for
+  real, futex-based `pthread_mutex`/`cond` via Atomics.wait/notify.
+- Decide the SDL threading policy at the same time (`docs/SDL3.md` open
+  question) — likely: main-thread-only rendering, worker threads for compute.
+- Note the interaction with the spawn model: *processes* stay
+  separate-memory/separate-worker; *threads* share one memory. The two are
+  orthogonal and compose.
+
+### Phase 3 — Compositor, window manager, GUI apps
+
+**Implemented; design history (2026-07-07, docs/archive/0007): `docs/WM.md`.**
+Rendering backend and present transport remain separate axes, with per-process
+WebGPU devices, kernel-worker compositing and headless tiers.
+The original sketch below is historical context, not an unstarted queue:
+
+- **Compositor in the host**: each GUI process renders into an offscreen
+  surface (shared-memory framebuffer or WebGPU texture); the host composites
+  surfaces onto the canvas and routes input to the focused surface. SDL3's
+  present path already does the single-surface version of this.
+- **Window manager as a client** (policy out of the kernel): a wasm app that
+  speaks a small control protocol — enumerate/move/resize/focus/decorate.
+  Could even be an SDL app itself.
+- **Client protocol**: a per-process surface handle + event queue; SDL3's
+  `SDL_CreateWindow` becomes "create a surface" instead of "own the canvas",
+  so **every existing SDL vendor app (doom, quake, snake, gameboy) becomes a
+  windowed app for free**. That's the acceptance test.
+- **Toolkit** (later): either a C widget toolkit over SDL, or the `docs/DOM.md`
+  bytecode route for HTML-native apps, or both. Terminal apps + SDL apps carry
+  the environment a long way first.
+
+### Phase 4 — Networking and the long tail
+
+- ~~AF_UNIX~~ DONE (docs/archive/0008): stream sockets as OFDs over the pipe
+  machinery, S_IFSOCK rendezvous nodes in BlockFS, `<sys/socket.h>`/
+  `<sys/un.h>` in the libc, poll/select integration. The "trivial — pipes
+  with names in BlockFS" prediction held (design: `docs/KERNEL.md`
+  "AF_UNIX sockets"). IPC for the WM protocol and multiplexers is unlocked.
+- Sockets + HTTP, remaining — **designed 2026-07-09, `docs/NETWORK.md`**
+  (the tier model): loopback AF_INET fully in-kernel (0052), the
+  curl-easy HTTP facade over kernel fetch (0053), getaddrinfo via DoH,
+  and a pluggable localhost websockify relay for arbitrary hosts (0054).
+  SOCK_DGRAM/SCM_RIGHTS/O_NONBLOCK stay on-demand (v1 non-goals,
+  recorded in KERNEL.md) — none is a web limitation, purely scope.
+- Locale/wchar beyond the current minimal level, as ports demand.
+
+## Open questions
+
+- ~~Stopping/suspending a process~~ DECIDED + DONE (0003): cooperative
+  suspension at safe points (KP_FLAGS.STOP, parked in the kernel client at
+  RPC entry / sigpoll); SIGKILL (worker.terminate) is the backstop.
+- ~~Signal delivery granularity~~ DECIDED (0001): safe-point polling;
+  pure-compute loops are uninterruptible by design in v1, SIGKILL still
+  works; `--signal-polls` (loop back-edge checks) recorded as a future
+  compiler flag if a port demands it.
+- ~~Shell choice~~ DECIDED + DONE (0005): busybox hush. The NOMMU
+  reasoning held up exactly — ash's Kconfig gates on `!NOMMU` (hard fork
+  dependency) while hush's vfork+re-exec-self machinery mapped onto
+  `__spawn` with three patched call sites and a journaling shim
+  (`vendor/busybox/README.md` has the full patch table).
+- ~~Surface transport for the compositor~~ DECIDED (0007, `docs/WM.md`):
+  transport is a per-surface property invisible to apps — GPU-side bitmap
+  handoff in the browser (the dma-buf analog), SAB framebuffer for
+  headless/CPU-present, per-window DOM canvas reserved as the zero-copy
+  escape hatch. Apps render with their own real per-worker WebGPU device;
+  no GPU virtualization.
+- ~~Who owns the xterm tty~~ DECIDED for v1 (0007, `docs/WM.md`):
+  xterm.js is the page-side VT1 bridge. The wasm terminal app
+  (SDL + pty + freetype) is implemented as `/bin/term` (docs/archive/0020).
+- **msvc extensions**: which ones are actually worth it (`__declspec`?
+  `#pragma pack` already?) — driven by ports, not speculation.
+- **Multi-tab**: docs/archive/0045 (LANDED 2026-07-09) locks the disk to ONE
+  kernel — a Web Lock named after the OPFS image pair, taken in
+  kernel-worker.js before any mount; the losing tab gets a guard
+  screen + Retry. "Seats v2" — extra tabs as remote seats over
+  clone-based transports (os.html is already a postMessage bridge;
+  SABs don't cross agent clusters; SharedWorker blocked by
+  SyncAccessHandle being dedicated-worker-only) — sketched in the 0045
+  item, unscheduled.

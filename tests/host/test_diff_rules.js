@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 'use strict';
-// todos/0362 regression guard — the diff→suite RULES closure for the two
+// docs/archive/0362 regression guard — the diff→suite RULES closure for the two
 // whole-estate files must keep selecting the real-world-C corpus.
 //
 // WHY: the `^compiler\.js$` rule used to select ['unit','kernel','blockfs',
 // 'host'] under a rationale claiming "every wasm binary" — no run.py category
-// but `unit`, so `--diff` on todos/0356's miscompile (caught ONLY by
+// but `unit`, so `--diff` on docs/archive/0356's miscompile (caught ONLY by
 // micropython-upstream, `unit` green) would have gone green and affirmatively
 // reported the change as covered. A rule whose prose overstates its list reads
 // as a considered scope decision, which is why this is a test and not a
@@ -200,46 +200,6 @@ var plain = planFromDiff(['logs/2026-01-01/no-such-note.md', 'NO-SUCH-DESIGN-SCR
 check('plain docs price NOTHING', plain.suites.size === 0, [...plain.suites].join(', '));
 check('plain docs are ignored, not unmapped', plain.ignored.length === 4 && plain.unmapped.length === 0,
       plain.ignored.length + ' ignored, ' + plain.unmapped.length + ' unmapped');
-
-// ---- ext/ + libc-ext.js: the extension surface (#534) ----
-//
-// This path class merged green with ZERO suites selected until #534 — the
-// UNMAPPED report is a yellow warning, not a failure, so nothing forced the
-// decision. The pinned set is argued from measured coverage, each suite
-// covering what the others cannot: `ext` pins the optional-library contract
-// and runs build-libc-ext.js --check (drift between ext/ and the committed
-// artifact is otherwise invisible to every suite); `unit` EXECUTES
-// regex/fnmatch/glob via the ext_* goldens; `libc` is the only suite that
-// executes the search.h family (libc-test search_tsearch/hsearch/lsearch/
-// insque + fnmatch). Quantified over the REAL tree, the os/ walk's shape, so
-// a NEW file under ext/ is covered without anyone remembering this guard.
-var EXT_SET = ['ext', 'unit', 'libc'];
-var extFiles = [];
-(function walkExt(dir) {
-  fs.readdirSync(dir, { withFileTypes: true }).forEach(function (e) {
-    if (e.name.charAt(0) === '.') return;
-    var abs = path.join(dir, e.name);
-    var rel = path.relative(ROOT, abs).split(path.sep).join('/');
-    if (e.isDirectory()) walkExt(abs);
-    else if (!dropped(rel)) extFiles.push(rel);
-  });
-})(path.join(ROOT, 'ext'));
-check('the ext/ walk found the real tree (an empty walk makes the next check vacuous)',
-      extFiles.length >= 15, extFiles.length + ' files');
-EXT_SET.forEach(function (want) {
-  var miss = extFiles.filter(function (f) { return !planFromDiff([f]).suites.has(want); });
-  check('every ext/ file selects ' + want, miss.length === 0,
-        miss.length ? 'missing: ' + miss.slice(0, 8).join(', ') : extFiles.length + ' files');
-});
-// The generated-and-committed artifact and its generator draw the same set:
-// all three are one surface — sources, generator, artifact — and a diff can
-// legally contain any subset of them.
-['libc-ext.js', 'tools/build-libc-ext.js'].forEach(function (f) {
-  var s = planFromDiff([f]).suites;
-  var miss = EXT_SET.filter(function (want) { return !s.has(want); });
-  check(f + ' selects ext+unit+libc', miss.length === 0,
-        miss.length ? 'missing: ' + miss.join(', ') : [...s].join(', '));
-});
 
 // ---- tiers (#576 F1) ----
 //

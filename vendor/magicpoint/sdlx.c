@@ -1,5 +1,5 @@
 /*
- * sdlx.c — the gucOS port's display backend (todos/0119): mgp's Xlib
+ * sdlx.c — the gucOS port's display backend (docs/archive/0119): mgp's Xlib
  * vocabulary implemented over one SDL window. Replaces upstream x11.c
  * (whose init_win/get_color/... entry points are re-implemented here)
  * and image/send.c (imageToXImage/freeXImage/ximageToPixmap, truecolor
@@ -890,7 +890,7 @@ void sdlx_frame_hook(void (*cb)(void)) {
 	__setAnimationFrameFunc(cb);
 }
 
-/* Idle park (todos/0161, IDLE-POWER Stage 2), wrapped so mgp.c needs no
+/* Idle park (docs/archive/0161, IDLE-POWER Stage 2), wrapped so mgp.c needs no
  * SDL include: block until an SDL event arrives or ms elapse. Peek-only —
  * a waking event stays queued for the next sx_pump(), so every event
  * still flows through the one XCheckMaskEvent path. Safe to call only
@@ -903,7 +903,7 @@ void sdlx_wait_event(int ms) {
 }
 
 /* FS_WATCH composition (ticket #75): the same idle park, but ALSO waking
- * on a readable fd — the kernel's unified WAIT (todos/0178) composes fds
+ * on a readable fd — the kernel's unified WAIT (docs/archive/0178) composes fds
  * with the input ring, so a deck edit wakes a settled slide immediately.
  * Peek semantics match sdlx_wait_event: a waking ring event is drained
  * into the SDL event queue at the import's return and stays queued for

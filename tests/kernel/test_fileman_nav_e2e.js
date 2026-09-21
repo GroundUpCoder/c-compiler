@@ -178,7 +178,7 @@ const out = boot([
   'echo ==cut',
 
   // ---- an externally-created file appears UNPROMPTED (FS_WATCH
-  // auto-refresh, todos/0123/0264 — this used to require F5; the
+  // auto-refresh, docs/archive/0123/0264 — this used to require F5; the
   // dedicated legs live in test_fileman_watch_e2e.js) and F5 still
   // re-lists on demand ----
   'printf late > /root/nav/late.txt',

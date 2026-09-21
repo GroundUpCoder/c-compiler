@@ -1,5 +1,5 @@
 /* fontramp.c — the C1 multi-face CreateFont acceptance app (ticket #281,
- * todos/WIN32.md font section; the gdidemo/ctldemo precedent).
+ * docs/WIN32.md font section; the gdidemo/ctldemo precedent).
  *
  * Two modes:
  *   fontramp [FACE] [bold] [italic] [ul] [so]

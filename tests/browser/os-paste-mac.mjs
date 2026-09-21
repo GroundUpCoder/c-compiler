@@ -1,6 +1,6 @@
-// Ticket #96 (todos/0432) browser acceptance, THE MAC CELL (hostKeys:'mac',
+// Ticket #96 (docs/archive/0432) browser acceptance, THE MAC CELL (hostKeys:'mac',
 // the os-undo.mjs rig): ⌘V paste legibility + robustness the way a Mac user
-// hits it. The keymap itself is a CLOSED DECISION (todos/KEYMAP.md — ⌘
+// hits it. The keymap itself is a CLOSED DECISION (docs/KEYMAP.md — ⌘
 // carries the verbs, Ctrl stays reserved); everything here is truth-in-
 // labeling and robustness under that policy.
 //   - /run/host-platform: the browser boot path persists the 'mac' verdict.

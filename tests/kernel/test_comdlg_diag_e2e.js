@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// R4 (todos/0255): a directory listing that comes up short must SAY SO.
+// R4 (docs/archive/0255): a directory listing that comes up short must SAY SO.
 // Pre-fix, comdlg32.c's fd_refill had two silent-no-op paths — a failed
 // snapshot malloc showed ONLY "../" (an OOM indistinguishable from an
 // empty directory: the exact fail-loud regression class the 0233/0252/0254

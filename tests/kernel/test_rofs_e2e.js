@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Process-side read-only /usr end-to-end (todos/0180): REAL C programs
+// Process-side read-only /usr end-to-end (docs/archive/0180): REAL C programs
 // compiled by compiler.js run as worker_threads under a kernel whose
 // embedder ships the sealed system volume as an SAB (Kernel opts.roImage).
 // Two boots, the vdso-e2e RPC-op-counter pattern:

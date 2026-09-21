@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// todos/0370 acceptance, headless: SysListView32 + SysHeader32 + the AQM
-// agent seam (os/win32/listview.c, design todos/SOFTWARE-NATIVE.md §3).
+// docs/archive/0370 acceptance, headless: SysListView32 + SysHeader32 + the AQM
+// agent seam (os/win32/listview.c, design docs/SOFTWARE-NATIVE.md §3).
 // Covers:
 //   - `ctldemo lvtest`: the synchronous message-surface selftest (columns,
 //     items, subitems, A/W roundtrips, state/selection/notify, hit test,

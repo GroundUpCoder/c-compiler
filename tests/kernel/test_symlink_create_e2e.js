@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// open(O_CREAT) through a dangling symlink creates the TARGET (todos/0375).
+// open(O_CREAT) through a dangling symlink creates the TARGET (docs/archive/0375).
 //
 // The bug: BlockFS's create branch inserted a dirent for the LEXICAL final
 // name without re-checking that a (symlink) dirent of that name already

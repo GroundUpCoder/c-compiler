@@ -68,7 +68,7 @@ static SWORD audio_acc[8192];
  * axes need raw[] populated — the $4016 read runs the SOCD (opposing-direction)
  * filter, which mirrors raw[axis] back into treated[axis] on every read; a
  * directly-poked treated[] with raw[]==0 is erased on the next read (that was
- * the arrows-ignored bug, todos/0213). Non-axis buttons (A/B/Start/Select) were
+ * the arrows-ignored bug, docs/archive/0213). Non-axis buttons (A/B/Start/Select) were
  * unaffected because the filter early-returns for them, but routing all buttons
  * through the same path keeps the frontend faithful to upstream's input map. */
 static void set_button(int idx, int pressed) {
@@ -213,7 +213,7 @@ static size_t build_test_rom(void) {
 		 * (green) while Up is held, else $30 (white) while A is held, else $21
 		 * (blue). Making the built-in ROM respond to BOTH a face button and a
 		 * D-pad direction lets the e2e inject each and assert the frame reacts.
-		 * The Up leg is the todos/0213 guard: a D-pad axis only survives the
+		 * The Up leg is the docs/archive/0213 guard: a D-pad axis only survives the
 		 * $4016 read if raw[] was populated (set_button ->
 		 * input_data_set_standard_controller), so the SOCD filter mirrors it
 		 * back into treated[] instead of erasing it; the port[].type =

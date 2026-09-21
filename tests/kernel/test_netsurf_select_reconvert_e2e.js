@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// AN OPEN CORE SELECT MENU SURVIVES A LIVE RE-CONVERSION (todos/0434).
+// AN OPEN CORE SELECT MENU SURVIVES A LIVE RE-CONVERSION (docs/archive/0434).
 //
 // Before 0434, html__reconvert freed the open menu at every window start,
 // and box_select's option-list refill destroyed the menu object with the
@@ -13,7 +13,7 @@
 // kept in pixels.
 //
 // The trigger in every leg is DETERMINISTIC: a multi-select row click
-// keeps the menu open (todos/0422) and fires `change` synchronously; the
+// keeps the menu open (docs/archive/0422) and fires `change` synchronously; the
 // change listener performs the JS mutation while the menu is open.  The
 // listener also flips a #mark strip, which only paints through the
 // re-conversion — the settled shot must show the flip, so a shot that

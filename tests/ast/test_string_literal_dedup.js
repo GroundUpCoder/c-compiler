@@ -1,6 +1,6 @@
 'use strict';
 
-// todos/0228 — read-only string literals: dedup OFF by default (a UB write
+// docs/archive/0228 — read-only string literals: dedup OFF by default (a UB write
 // through one literal stays LOCAL instead of corrupting every same-spelling
 // literal), an opt-in --dedup-literals flag restores content merging, and a
 // compile-time diagnostic rejects PROVABLE direct writes through a literal.

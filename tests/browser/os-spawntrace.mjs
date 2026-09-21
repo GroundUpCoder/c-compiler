@@ -8,7 +8,7 @@
 // Asserts: a traced no-args `mkdir` produces ONE merged __spawnTraces
 // record with sane phase ordering (kernel stamps -> worker first line ->
 // importScripts done -> boot -> instantiate -> first output), a cached
-// Module (todos/0037 still active), and positive per-phase durations.
+// Module (docs/archive/0037 still active), and positive per-phase durations.
 import { openOsSession, waitFor } from './lib/os-harness.mjs';
 
 const s = await openOsSession({

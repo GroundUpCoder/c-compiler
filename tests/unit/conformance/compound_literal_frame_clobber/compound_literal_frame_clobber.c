@@ -8,7 +8,7 @@
 // EXPECT: callee() cannot touch main()'s locals; guard stays all-zero.
 //      Only the declaration-initializer position is affected — the same
 //      literal in an assignment, behind &, or as a member-access base is fine.
-// FIXED: todos/0319. Found by the todos/0313 CPython probe: it is what made
+// FIXED: docs/archive/0319. Found by the docs/archive/0313 CPython probe: it is what made
 //      CPython's own bytecode compiler double-free on any generator
 //      expression. Root cause: SDecl's child list was a construction-time
 //      snapshot of the DVar initializers, so a later in-place initializer

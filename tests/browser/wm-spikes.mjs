@@ -1,4 +1,4 @@
-// Runner for WM spikes S1/S2/S4 (todos/0012) — drives www/wm-spikes.html in
+// Runner for WM spikes S1/S2/S4 (docs/archive/0012) — drives www/wm-spikes.html in
 // headless Chromium and prints verdicts. See WM.md spike appendix.
 // Run: node wm-spikes.mjs
 import { chromium } from 'playwright';

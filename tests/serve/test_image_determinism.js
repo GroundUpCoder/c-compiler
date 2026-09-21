@@ -1,4 +1,4 @@
-// Deterministic system-image bake (todos/0249): two bakes of an identical
+// Deterministic system-image bake (docs/archive/0249): two bakes of an identical
 // tree MUST produce byte-identical blobs, or the deploy's content-hashed
 // image name (os-system.<sha>.img, immutable cache headers) churns on every
 // rebuild and a no-change redeploy re-downloads the whole ~19.5 MB image.

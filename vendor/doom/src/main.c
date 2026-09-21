@@ -148,7 +148,7 @@ static void handleKeyInput()
 void DG_Init()
 {
   /* Present at native 640x400 — no CPU pre-scale. The compositor scales
-     fixed-size windows via the per-surface dst rect (todos/0024): drag a
+     fixed-size windows via the per-surface dst rect (docs/archive/0024): drag a
      frame edge, `wmctl scale`, or maximize for scale-to-fit. */
   window = SDL_CreateWindow("DOOM",
                             DOOMGENERIC_RESX,
@@ -185,7 +185,7 @@ void DG_SleepMs(uint32_t ms)
        starves the rAF pacing and the message-loop input/presents even where
        Atomics.wait is legal. There the no-op is REQUIRED.
      - gucOS PROCESS WORKERS (createSurfaceSDL) and headless (createNullSDL):
-       SDL_Delay is a real cooperative sleep since todos/done/0224 — a classic
+       SDL_Delay is a real cooperative sleep since docs/archive/0224 — a classic
        blocking main loop is first-class there, and this no-op is a choice,
        not a workaround.
      Keeping the callback model — main() registers doomgeneric_Tick via

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ticket-bridge.js — the host ticket bridge (ticket #451; todos/NETWORK.md).
+// ticket-bridge.js — the host ticket bridge (ticket #451; docs/NETWORK.md).
 //
 // A single-file, dependency-free localhost server that lets the in-OS
 // `file-gucos-ticket` client hand a ticket/alert request OUT of the OS

@@ -6,7 +6,7 @@
 //      space; leading/trailing stripped). Space AFTER a comma is preserved;
 //      only the space BEFORE the delimiter comma is lost.
 // EXPECT: S(a , b) stringizes to "a , b". compiler.js: "a, b".
-// KNOWN-BUG: todos/0196 (pinned xfail; root cause ~compiler.js:1445/1523.
+// KNOWN-BUG: docs/archive/0196 (pinned xfail; root cause ~compiler.js:1445/1523.
 //      Cosmetic — affects #-stringized log/assert message text only).
 #include <stdio.h>
 #define S(...) #__VA_ARGS__

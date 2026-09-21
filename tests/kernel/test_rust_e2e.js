@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// todos/0413 + todos/0414 + todos/0415 acceptance: Rust binaries run in
+// docs/archive/0413 + docs/archive/0414 + docs/archive/0415 acceptance: Rust binaries run in
 // gucOS, gucos-sys is the ONE Rust binding to the "c" ABI, and a real
 // -rust tool works over BlockFS.
 //
@@ -15,7 +15,7 @@
 // (the repo name is provisional — a rename is a one-line change here).
 //
 // Legs:
-//   A (unconditional, no rustc needed — the anti-vacuous half, todos/0287):
+//   A (unconditional, no rustc needed — the anti-vacuous half, docs/archive/0287):
 //     1. fixture integrity: sha256(fixture) == the recorded sha256 (both)
 //     2. module shape (RUST.md §2): every import is from module "c";
 //        exports include main, memory AND alloca; the memory is growable
@@ -32,13 +32,13 @@
 //     4. in-OS: the fixtures are written into the root volume of a booted
 //        gucOS and spawned FROM THE SHELL; stdout + $? asserted for the
 //        hello, panic and alloc paths
-//     4b. in-OS wc-rust (todos/0415): the tool's output is compared against
+//     4b. in-OS wc-rust (docs/archive/0415): the tool's output is compared against
 //        the busybox wc applet ON THE SAME INPUTS in the same booted OS
 //        (default, -l/-w/-c, combined flags, -L/-m, multi-file total,
 //        piped stdin, the "-" operand, and the missing-path stdout +
 //        exit-status behaviour). Two large-input legs, one per read loop:
 //        - LARGE REGULAR FILE proves the KERNEL's reassembly loop
-//          (RemoteFS.read re-issues the RPC for S_IFREG — todos/0140); it
+//          (RemoteFS.read re-issues the RPC for S_IFREG — docs/archive/0140); it
 //          could pass even if the tool never handled a short read.
 //        - LARGE PIPED STDIN proves the TOOL's own read loop: fd 0 on a
 //          pipe is not S_IFREG, so the kernel does NOT reassemble; the

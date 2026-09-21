@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Pty semantics (todos/0020) without wasm: fake workers over a BROKERED
+// Pty semantics (docs/archive/0020) without wasm: fake workers over a BROKERED
 // kernel, the test playing the process side of the kernel-page protocol
 // (test_pipes.js pattern). The pty slave is a full Tty — the same line
 // discipline test_tty.js covers — so this file focuses on what's NEW:

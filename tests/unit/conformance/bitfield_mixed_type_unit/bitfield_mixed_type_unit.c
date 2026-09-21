@@ -8,7 +8,7 @@
 //      arrays/memcpy/serialization against clang-built code.
 // EXPECT: struct A{char a:4; int b:4; int tail;} -> sizeof 8, offsetof(tail) 4
 //      (both int-width, valid on ILP32 and LP64). compiler.js: 12 and 8.
-// KNOWN-BUG: todos/0190 (pinned xfail; the layout allocator keys "current unit"
+// KNOWN-BUG: docs/archive/0190 (pinned xfail; the layout allocator keys "current unit"
 //      on the field's declared type and restarts on a type change).
 #include <stdio.h>
 #include <stddef.h>

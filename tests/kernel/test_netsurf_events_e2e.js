@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// NetSurf's UI event coverage, IN THE OS (todos/0289, NETSURF-JS.md Lane C).
+// NetSurf's UI event coverage, IN THE OS (docs/archive/0289, NETSURF-JS.md Lane C).
 //
 // The monkey gate (vendor/netsurf/smoke-js.mjs legs 9-11) proves the event
 // surface against the plot stream, including an A/B baseline built with
@@ -99,7 +99,7 @@ fill('chg', 128, 128, 128);
 
 var field = document.getElementById('i');
 /* On the FIELD, not on document: keydown goes to the focused element now.
- * A listener here never ran before todos/0289 — keydown was dispatched at
+ * A listener here never ran before docs/archive/0289 — keydown was dispatched at
  * the document root whatever had focus. */
 field.addEventListener('keydown', function () {
 	fill('dn', ${LIT.down.join(', ')});

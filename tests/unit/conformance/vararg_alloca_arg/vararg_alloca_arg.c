@@ -3,7 +3,7 @@
 // the arg-block base from live SP (+ the tracked struct-return deferral
 // delta), but an alloca-retaining callee returns with an UNTRACKED SP
 // bump (the caller-frees contract), so the callee got a garbage block
-// pointer. Found in the 2026-07 fresh-eyes hunt (todos/0208).
+// pointer. Found in the 2026-07 fresh-eyes hunt (docs/archive/0208).
 // C11: n/a (alloca is a POSIX/GNU extension); clang/gcc print all lines.
 // EXPECT: every line prints; direct alloca in an arg stays live across
 // the call.

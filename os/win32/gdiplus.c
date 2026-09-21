@@ -816,7 +816,7 @@ GpStatus WINGDIPAPI GdipDrawImageRectRect(
      * they get the notice too — otherwise the commonest case, a caller
      * that never sets a mode at all, would be the one silently
      * substituted. WIN32_UNSUPPORTED reports ONCE PER CALL SITE
-     * (win32_internal.h, todos/0211), so this is one line per process,
+     * (win32_internal.h, docs/archive/0211), so this is one line per process,
      * not per frame — the return status is what a caller reads. */
     if (graphics->interpolation != InterpolationModeNearestNeighbor) {
         WIN32_UNSUPPORTED("GdipDrawImageRectRect interpolation mode %d "

@@ -2,7 +2,7 @@
 // lost its storage — codegen crashed with "emitLValue: variable not
 // found" when a case body used it. busybox awk.c's parse_expr does
 // exactly this (`switch (tc) { var *v; case TC_VARIABLE: ... v = ...`).
-// Found porting the spawn-capable applets (todos/0035).
+// Found porting the spawn-capable applets (docs/archive/0035).
 // C11: 6.8.4.2 — the switch body is a compound statement like any other;
 // a declaration before the first case label is never "executed" (its
 // initializer, if any, is skipped) but IS in scope for the whole body.

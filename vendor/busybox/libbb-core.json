@@ -1,7 +1,7 @@
 {
   "type": "lib",
   "name": "libbb-core",
-  "description": "shared libbb slice for the busybox binaries (hush uses bin.json; coreutils.json deps on this) (todos/0010)",
+  "description": "shared libbb slice for the busybox binaries (hush uses bin.json; coreutils.json deps on this) (docs/archive/0010)",
   "includes": [
     "src/include",
     "port/include"

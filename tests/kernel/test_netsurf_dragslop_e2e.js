@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// todos/0427 (P0) — a held button must not report as released before the
+// docs/archive/0427 (P0) — a held button must not report as released before the
 // motion clears DRAG_SLOP.
 //
 // gucos_mouse_state() computed the HOLDING_* bits INSIDE `if (gw->dragging)`,
@@ -20,7 +20,7 @@
 // defective path.
 //
 // The probe page logs every mousedown/mousemove/mouseup to the console with
-// coordinates and `e.buttons`; todos/0421 routes those lines to the boot's
+// coordinates and `e.buttons`; docs/archive/0421 routes those lines to the boot's
 // stderr, and the kernel input ring preserves injection order, so the LINE
 // ORDER is the event order.  Three gestures:
 //
@@ -37,7 +37,7 @@
 //          Unfixed: TWO mouseups (the spurious one, then the CLICK_1 one).
 //
 // A final sentinel move at (500,350) flips the sentinel div class, and the class
-// restyle repaints (the todos/0316-proven path — NB document.title is NOT
+// restyle repaints (the docs/archive/0316-proven path — NB document.title is NOT
 // usable here: dukky's title setter is a stub, so a dynamic retitle never
 // reaches the window).  Polling the pixels for that flip is the flush
 // barrier: the page is deliberately TEXTLESS and style-free below the

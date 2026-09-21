@@ -1,4 +1,4 @@
-/* advapi32.c — the registry as a small file-backed hive (todos/0059,
+/* advapi32.c — the registry as a small file-backed hive (docs/archive/0059,
  * WIN32.md friction #3).
  *
  * One text hive per user at $HOME/.win32reg (HOME=/root in-OS), loaded
@@ -38,7 +38,7 @@
  * processes; revisit if one ever does.
  *
  * ---------------------------------------------------------------------
- * CROSS-PROCESS SHARING — reload-merge at flush (todos/0288)
+ * CROSS-PROCESS SHARING — reload-merge at flush (docs/archive/0288)
  *
  * The hive is ONE file shared by every win32 process on the system, and
  * several are live at once (winmine, notepad, calc are all seeded and
@@ -85,7 +85,7 @@
  * tmp+rename, and there is no advisory lock, so two flushes landing in
  * the same instant still race on the rename (last rename wins, whole
  * file — the window is one re-read + one write, not a whole process
- * lifetime). A genuinely transactional store is `todos/0162`.
+ * lifetime). A genuinely transactional store is `docs/archive/0162`.
  */
 
 #undef UNICODE
@@ -316,7 +316,7 @@ static void hive_load(void) {
 
 /* Write the whole hive out (tmp + rename). Returns 0 only when every
  * byte reached the store AND the rename landed — a short write on a full
- * disk or an EROFS home must not report success (todos/0234).
+ * disk or an EROFS home must not report success (docs/archive/0234).
  * The '|'-delimited line format is safe because every key/name in the
  * lists came through hive_enc, which escapes '|' and newlines (#319). */
 static int hive_save(RegVal *vals, RegKey *keys) {
@@ -344,7 +344,7 @@ static int hive_save(RegVal *vals, RegKey *keys) {
 }
 
 /* Report a failed flush once, not per RegCloseKey — losing the user's
- * settings silently is the bug this guards against (todos/0234). */
+ * settings silently is the bug this guards against (docs/archive/0234). */
 static void flush_warn(const char *why) {
     static int warned;
     if (warned) return;

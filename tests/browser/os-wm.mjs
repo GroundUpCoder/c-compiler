@@ -1,10 +1,10 @@
-// WM browser acceptance (todos/WM.md + todos/0014): boot the reference OS
+// WM browser acceptance (docs/WM.md + docs/archive/0014): boot the reference OS
 // page in headless Chromium, launch the seeded /bin/winbox from the shell,
 // and drive its WINDOW through the real UI-bridge path — canvas mouse/
 // keyboard -> kernel hit-test/rings -> SDL app — asserting composited
 // pixels on the desktop canvas at every step (window fill, kernel chrome,
 // click paint, key toggle, title-bar drag, border drag-resize with the
-// SURFACE_CONFIGURE renegotiation (todos/0019), close box). With 0014 the
+// SURFACE_CONFIGURE renegotiation (docs/archive/0019), close box). With 0014 the
 // autostarted /bin/wm is part of the scene: the borderless taskbar strip,
 // WM (not kernel) placement, taskbar-button minimize/restore, and wmctl
 // from the shell.
@@ -31,7 +31,7 @@ try {
   // Don't race hush's banner: typed input before the first prompt is eaten.
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
-  // VTs (todos/0022; 0070: a healthy boot lands on VT2): the tty is VT1 and
+  // VTs (docs/archive/0022; 0070: a healthy boot lands on VT2): the tty is VT1 and
   // only one is visible. Shell typing happens on VT1, canvas pixels/input on VT2
   // (the compositor may idle while its placeholder canvas is hidden, so
   // pixel waits on VT1 could stall on stale frames). Deep VT coverage lives
@@ -43,13 +43,13 @@ try {
         FACE = [192, 192, 192], FACE_DOWN = [222, 222, 222];
 
   await setVt(2);
-  // Dynamic screen resolution (todos/0023): VT2 entry resizes the screen to
+  // Dynamic screen resolution (docs/archive/0023): VT2 entry resizes the screen to
   // the viewport pane. Wait for the worker's canvas commit to catch up, then
   // derive all screen-edge geometry from the LIVE size.
   await waitScreen();
   const { w: SW, h: SH } = await page.evaluate(() => window.__osScreen);
-  check('VT2 screen tracks the viewport pane (todos/0023)', SW > 800 && SH > 500, { SW, SH });
-  // Marker WAIT, not an instant sample (todos/0199, the 0238/0171 rule):
+  check('VT2 screen tracks the viewport pane (docs/archive/0023)', SW > 800 && SH > 500, { SW, SH });
+  // Marker WAIT, not an instant sample (docs/archive/0199, the 0238/0171 rule):
   // waitScreen() settles the canvas GEOMETRY but not the desktop-layer teal
   // COMPOSITE at this pixel, so under load a bare near(sample(...)) raced the
   // first painted frame and failed while the diagnostic re-sample already
@@ -97,7 +97,7 @@ try {
   // 0014: winbox has a taskbar button (button 0, sunken while focused);
   // clicking it minimizes, clicking again restores — the wm's policy loop
   // driven through its OWN surface's input ring. Button 0 sits right of the
-  // Start strip AND the Task-View/overview button (todos/EXPOSE shifted the
+  // Start strip AND the Task-View/overview button (docs/EXPOSE shifted the
   // app strip by TASKVIEW_W): with 1 window it spans x [112, 272).
   await waitPixel(230, BARY, FACE_DOWN);
   check('taskbar button sunken while winbox focused', true);
@@ -129,7 +129,7 @@ try {
   check('title drag moved the window', true);
   check('old spot back to desktop', near(await sample(WX + 4, WY + 4), TEAL), await sample(WX + 4, WY + 4));
 
-  // Drag-resize (todos/0019): grab the SE frame corner (the WM_BORDER band
+  // Drag-resize (docs/archive/0019): grab the SE frame corner (the WM_BORDER band
   // just outside the client), drag +60/+40 — Win95 outline preview during
   // the drag, ONE configure at release; winbox re-derives its surface and
   // redraws, the ack swaps the kernel buffer. 240x160 -> 300x200.
@@ -147,7 +147,7 @@ try {
   check('frame border flanks the resized client',
     near(await sample(NX + RW + 2, NY + 100), FACE), await sample(NX + RW + 2, NY + 100));
 
-  // Cursor shapes (todos/0105): the kernel derives the effective cursor per
+  // Cursor shapes (docs/archive/0105): the kernel derives the effective cursor per
   // pointer move and the page maps it to canvas.style.cursor. Over a RESIZABLE
   // frame it reads a resize cursor (ew-resize side / nwse-resize corner); over
   // the client and the desktop it's the plain arrow (winbox sets no app
@@ -168,7 +168,7 @@ try {
     check('desktop -> default arrow', desk === 'default' || desk === '', desk);
   }
 
-  // Maximize (todos/0025): double-click the title bar — kernel detects the
+  // Maximize (docs/archive/0025): double-click the title bar — kernel detects the
   // gesture (EV_TITLE_ACTIVATE), /bin/wm answers with MOVE + RESIZE to the
   // work area (screen minus taskbar, client top below the kernel title
   // bar): winbox re-renders at SW x (SH - 56), position (0, 28).
@@ -192,7 +192,7 @@ try {
   check('restored frame at the restored edge',
     near(await sample(NX + RW + 2, NY + 100), FACE), await sample(NX + RW + 2, NY + 100));
 
-  // Title-bar boxes (todos/0030), [min][max][close] right-aligned, 16px
+  // Title-bar boxes (docs/archive/0030), [min][max][close] right-aligned, 16px
   // metrics + 2px gaps: centers at RW-48 / RW-30 / RW-12 from the left
   // edge, mid-title. Min box -> kernel wmMinimize directly; max box ->
   // EV_TITLE_ACTIVATE -> the same wm.c toggle as the double-click.
@@ -240,7 +240,7 @@ try {
   await page.waitForFunction(() => window.__osOut.includes('taskbar'), { timeout: 20000, polling: 'raf' });
   check('wmctl list from the in-browser shell sees the taskbar', true);
 
-  // ---- window cycling (todos/0032): the Ctrl+Alt+Tab chord ----
+  // ---- window cycling (docs/archive/0032): the Ctrl+Alt+Tab chord ----
   // Two fresh winboxes (cascade slots k=1: 40,60 and k=2: 68,84; the
   // second is focused). The chord flips focus to the least-recent one;
   // again flips back. After killing the wm the chord is NOT recognized
@@ -270,7 +270,7 @@ try {
   await waitPixel(BX + 150, BY - 14, NAVY);
   check('chord again flipped back', true);
 
-  // ---- window system menu (todos/0102): Alt+Space raises the sysmenu on
+  // ---- window system menu (docs/archive/0102): Alt+Space raises the sysmenu on
   // the focused window; keyboard-only Move commits; Close via the menu tears
   // it down. A fresh winbox C keeps A/B (and the later legs) untouched. The
   // bare Alt KEYDOWN reaches the app (the os-snap "one toggle per chord"
@@ -285,7 +285,7 @@ try {
   // Wait for C's FOCUSED TITLE before touching anything (the 0215 flake):
   // the probe point (CX+200, CY+100) lies inside B's client too, so an
   // orange wait there is satisfied before C even maps (map-on-placement,
-  // todos/0069) — and a canvas focus click sent while C's map is in flight
+  // docs/archive/0069) — and a canvas focus click sent while C's map is in flight
   // lands on whichever window the hit test finds THAT moment. Under load C
   // maps first, the click landed on C, and winbox's persistent 8x8 black
   // click mark sat exactly on the green-swallow probe below. The navy
@@ -302,7 +302,7 @@ try {
   await page.keyboard.down('Alt');
   await page.keyboard.press('Space');
   await page.keyboard.up('Alt');
-  // Wait on a FOCUS marker, not mere presence (todos/0199, the 0171 rule):
+  // Wait on a FOCUS marker, not mere presence (docs/archive/0199, the 0171 rule):
   // the arrows below only nav the menu if the sysmenu popup already holds
   // KERNEL focus (the kernel routes keys to the focused surface's owner —
   // an unfocused-yet-listed popup would drop them onto winbox C, leaving
@@ -346,7 +346,7 @@ try {
   await page.keyboard.down('Alt');
   await page.keyboard.press('Space');
   await page.keyboard.up('Alt');
-  await setVt(1);   // focus marker again (todos/0199) — the Down x5 -> Close
+  await setVt(1);   // focus marker again (docs/archive/0199) — the Down x5 -> Close
                     // nav needs the re-opened popup to hold focus first.
   await page.keyboard.type(
     "wmctl wait win ctxmenu 8000 && wmctl list | " +
@@ -360,7 +360,7 @@ try {
   await waitPixel(350, 200, TEAL, 30000);
   check('Close via the sysmenu tore C down', true);
 
-  // ---- taskbar always-on-top (todos/0038): drag B onto the bottom strip;
+  // ---- taskbar always-on-top (docs/archive/0038): drag B onto the bottom strip;
   // the bar is pinned to the TOP z layer (wm.c SET_LAYER), so it composites
   // and hit-tests ABOVE the dragged window — its buttons stay clickable. ----
   const preStrip = await sample(200, BARY);
@@ -374,7 +374,7 @@ try {
   await waitPixel(BX + 120, SH - 45, ORANGE);    // B's fill just above the bar
   check('winbox dragged onto the strip', true);
   const strip = await sample(200, BARY);
-  check('taskbar still composited above the dragged window (todos/0038)',
+  check('taskbar still composited above the dragged window (docs/archive/0038)',
     near(strip, FACE) || near(strip, FACE_DOWN), strip);
   // The button UNDER the overlap still clicks: B is focused, so its button
   // click must minimize it (pre-0038 the click landed in B's client).
@@ -388,7 +388,7 @@ try {
   await setVt(1);
   await page.keyboard.type("wmctl list | sed '$!d' | grep -q taskbar && echo Z-TOP-O''K\r");
   await page.waitForFunction(() => window.__osOut.includes('Z-TOP-OK'), { timeout: 20000, polling: 'raf' });
-  check('wmctl list: top of z is the taskbar (todos/0038)', true);
+  check('wmctl list: top of z is the taskbar (docs/archive/0038)', true);
   await setVt(2);
   // Put B back where the kill-the-wm legs expect it.
   await waitPixel(BX + 150, SH - 66, NAVY);      // B's title, refocused settle
@@ -418,7 +418,7 @@ try {
   check('no WM: the chord reaches the app (fill toggled)', true);
 
   // no WM: Alt+Space is likewise NOT recognized — BOTH keydowns reach the
-  // app (todos/0102, the EV_CYCLE rule): the Alt flips the fill, the Space
+  // app (docs/archive/0102, the EV_CYCLE rule): the Alt flips the fill, the Space
   // flips it back. Wait for each flip in turn so the two toggles can't
   // cancel into an indistinguishable no-op.
   const preAltSpace = await sample(BX + 220, BY + 130);

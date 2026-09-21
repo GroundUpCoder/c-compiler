@@ -1,4 +1,4 @@
-/* multicall_main.c — the coreutils multicall entry point (todos/0010).
+/* multicall_main.c — the coreutils multicall entry point (docs/archive/0010).
  *
  * One wasm binary carries all coreutils applets; /bin/ls, /bin/grep, …
  * are BlockFS symlinks to /bin/coreutils and the applet is chosen by
@@ -16,7 +16,7 @@
  * to argv[1] as the applet name: `coreutils ls -l` works like busybox's
  * own `busybox ls -l`.
  *
- * Since todos/0035 the multicall links the vfork-on-__spawn shim
+ * Since docs/archive/0035 the multicall links the vfork-on-__spawn shim
  * (port/vfork_spawn.c) — the spawn-capable applets (find -exec, xargs,
  * awk via popen/system, tar's seamless .gz, env-exec) journal their
  * "vfork children" exactly like hush does. The former PV_NO_INTERCEPT
@@ -101,7 +101,7 @@ int yes_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
 
 /* sleep: hand-rolled (upstream sleep.c wasn't vendored) — POSIX seconds
  * plus the busybox fractional extension (`sleep 0.5`); multiple args sum.
- * Wanted by shell scripts and the OS test harnesses (todos/0014). */
+ * Wanted by shell scripts and the OS test harnesses (docs/archive/0014). */
 static int sleep_main(int argc, char **argv)
 {
 	double total = 0;
@@ -121,7 +121,7 @@ static int sleep_main(int argc, char **argv)
 	return 0;
 }
 
-/* whoami/id/hostname: hand-rolled single-user stubs (todos/0034) — the
+/* whoami/id/hostname: hand-rolled single-user stubs (docs/archive/0034) — the
  * upstream applets drag in libpwdgrp (id) or the network stack
  * (hostname) to answer questions this OS answers by construction:
  * everyone is root (uid 0), the host is localhost. Matches the

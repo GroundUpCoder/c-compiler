@@ -1,4 +1,4 @@
-// /bin/deck browser acceptance (todos/0284): the gucOS slide presenter
+// /bin/deck browser acceptance (docs/archive/0284): the gucOS slide presenter
 // through the real compositor.
 //
 //   - the SEEDED demo deck (/usr/share/deck/gucos.deck) launches, SELF-

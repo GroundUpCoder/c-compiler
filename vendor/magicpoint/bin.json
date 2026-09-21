@@ -1,6 +1,6 @@
 {
   "name": "mgp",
-  "description": "MagicPoint 1.13a presentation tool, display layer ported Xlib -> SDL + freetype2 + libpng (todos/0119)",
+  "description": "MagicPoint 1.13a presentation tool, display layer ported Xlib -> SDL + freetype2 + libpng (docs/archive/0119)",
   "compilerArgs": [
     "-DFREETYPE",
     "-DUSE_PNG",

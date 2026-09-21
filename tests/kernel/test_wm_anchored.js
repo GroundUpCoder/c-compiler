@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Anchored child surfaces + the grab + the focus funnel (todos/0256, the
+// Anchored child surfaces + the grab + the focus funnel (docs/archive/0256, the
 // menu-uniform architecture's Spike 1) without wasm: fake workers over a
 // brokered kernel (the test_wm.js pattern). Covers, at the kernel seam:
 //   - SURFACE_CREATE flag bit6 validation (parent exists, same pid), the

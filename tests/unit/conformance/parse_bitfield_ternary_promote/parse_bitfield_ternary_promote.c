@@ -1,7 +1,7 @@
 // BUG: computeTernaryType received the branches' UNPROMOTED declared types,
 // so `c ? bf : bf` on a narrow unsigned bit-field had type unsigned int and
 // subsequent arithmetic went unsigned: (c ? u20 : u20) - 0x200000 < 0 was 0
-// (todos/0367 residual of 0356 — the wide->declared rule was fixed for
+// (docs/archive/0367 residual of 0356 — the wide->declared rule was fixed for
 // binary operands only).
 // C11: 6.5.15p5 — the usual arithmetic conversions (which begin with the
 // integer promotions, 6.3.1.8) are performed on arithmetic branch operands.

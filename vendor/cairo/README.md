@@ -2,7 +2,7 @@
 
 Upstream: https://www.cairographics.org/releases/cairo-1.18.4.tar.xz
 (sha256 `445ed8208a6e4823de1226a74ca319d3600e83f6369f99b14265006599c32ccb`).
-The platform's modern 2D vector API for new C apps (todos/0061 — adopt,
+The platform's modern 2D vector API for new C apps (docs/archive/0061 — adopt,
 don't invent; GDI stays the API for ported Win32 apps).
 
 ## What's vendored

@@ -1,4 +1,4 @@
-/* Upstream-cairo-test runner (todos/0061): renders each vendored upstream
+/* Upstream-cairo-test runner (docs/archive/0061): renders each vendored upstream
  * test (image backend, ARGB32, CLEAR-initialized — matching what
  * cairo-test.c does for the image target) and compares against the
  * upstream reference PNG à la buffer-diff: a per-channel tolerance and a

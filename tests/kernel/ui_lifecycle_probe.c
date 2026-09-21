@@ -7,7 +7,7 @@ static int failures, notifications, destroyed;
 static void check(const char *name, int ok) { printf("%s %s\n", ok ? "ok" : "FAIL", name); if (!ok) failures++; }
 /* Effective visibility settles asynchronously: with /bin/wm subscribed a new
  * surface stays unmapped until the WM's placement ack (map-on-placement,
- * todos/0069; 200 ms backstop). Wait on the authoritative query, never nap. */
+ * docs/archive/0069; 200 ms backstop). Wait on the authoritative query, never nap. */
 static int settle_viewable(SDL_Window *w, int want) {
     for (int i = 0; i < 300; i++) { if (guc_window_viewable(w) == want) return 1; SDL_PumpEvents(); SDL_Delay(10); }
     return 0;

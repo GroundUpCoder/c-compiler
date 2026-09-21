@@ -1,7 +1,7 @@
 // gucOS MicroPython port — the /bin/micropython (and /bin/python) driver.
 //
 // Started life as upstream's ports/minimal/main.c (REPL only, argv ignored).
-// todos/0117 R1 turned it into a real script runner: the command line is
+// docs/archive/0117 R1 turned it into a real script runner: the command line is
 // honoured, sys.argv is populated, exceptions set the exit status, and the
 // POSIX hooks (mp_import_stat; mp_lexer_new_from_file via MICROPY_READER_POSIX
 // in py/lexer.c) resolve against the OS filesystem. The argument grammar and
@@ -155,7 +155,7 @@ static int do_stdin(void) {
 
 #endif // MICROPY_ENABLE_COMPILER
 
-// --- sys.path (todos/0117 R2) ---------------------------------------------
+// --- sys.path (docs/archive/0117 R2) ---------------------------------------------
 //
 // R1 left sys.path at MicroPython's default `["", ".frozen"]`, which meant a
 // script could only import its siblings when it happened to be run from its
@@ -176,7 +176,7 @@ static int do_stdin(void) {
 // Two choices worth defending:
 //
 // * /usr/local/lib/micropython, not /usr/lib/micropython. /usr is a SEALED,
-//   read-only volume on this OS (todos/0040) — nothing can ever be installed
+//   read-only volume on this OS (docs/archive/0040) — nothing can ever be installed
 //   there at runtime, so a site dir under it would be permanently empty. The
 //   OS's writable admin territory is /usr/local (a baked symlink to
 //   /var/local), which is also why PATH is /usr/local/bin:/bin. This entry is

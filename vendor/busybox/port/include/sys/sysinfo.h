@@ -1,4 +1,4 @@
-/* sys/sysinfo.h — WASM PORT (todos/0043).
+/* sys/sysinfo.h — WASM PORT (docs/archive/0043).
  *
  * Linux's sysinfo(2) surface for the procps applets (uptime, free). The
  * implementation (port/libbb_stubs.c) reads the kernel's synthetic /proc —

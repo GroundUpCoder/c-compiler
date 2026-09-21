@@ -315,7 +315,7 @@ typedef unsigned long long uoff_t;
 /* WASM PORT: this libc's off_t is long long (64-bit) even without LFS —
  * the upstream !LFS assumption sizeof(off_t)==sizeof(long) misdetects
  * (BUG_off_t_size_is_misdetected below fired as soon as the compiler
- * learned to diagnose negative array sizes, todos/0231), and OFF_FMT "l"
+ * learned to diagnose negative array sizes, docs/archive/0231), and OFF_FMT "l"
  * would pop 4 bytes of an 8-byte vararg. Use the 64-bit family. */
 typedef unsigned long long uoff_t;
 #  define XATOOFF(a) xatoull_range((a), 0, LLONG_MAX)

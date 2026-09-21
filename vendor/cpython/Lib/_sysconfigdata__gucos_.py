@@ -1,4 +1,4 @@
-# gucOS sysconfigdata (todos/0340, CPYTHON.md §5.4).
+# gucOS sysconfigdata (docs/archive/0340, CPYTHON.md §5.4).
 #
 # Upstream generates this file during `make` by dumping the configure/Makefile
 # variables (Lib/sysconfig.py:_generate_posix_vars). gucOS has no configure and

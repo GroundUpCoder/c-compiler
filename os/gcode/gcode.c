@@ -1,5 +1,5 @@
 /*
- * gcode — a minimal, line-oriented agentic coding assistant (todos/0174).
+ * gcode — a minimal, line-oriented agentic coding assistant (docs/archive/0174).
  *
  * Speaks the Anthropic Messages API (streaming SSE + tool use) over libcurl.
  * No fullscreen ANSI — just SGR colors — so it behaves the same on VT1 and
@@ -575,7 +575,7 @@ static ssize_t getline(char **buf, size_t *cap, FILE *f) {
 #include <sys/time.h>
 #include <sys/select.h>   /* #504: the post-exit nonblocking pipe drain */
 
-/* Timeout: setitimer(ITIMER_REAL)+SIGALRM (todos/0044). The parked pipe
+/* Timeout: setitimer(ITIMER_REAL)+SIGALRM (docs/archive/0044). The parked pipe
  * read EINTRs when the signal lands (kernel krpc-intr); we SIGKILL the
  * child and STOP READING (#503 — draining to EOF after the kill made the
  * cap unbounded, see the loop-top check). */
@@ -1611,7 +1611,7 @@ static char *system_hash(const char *s) {
  *      (collected walking up, emitted parent-most first so the most
  *      specific directory has the last word)
  *
- * The cfgstore precedent (~/.config > /etc > /usr/share, todos/NETWORK.md)
+ * The cfgstore precedent (~/.config > /etc > /usr/share, docs/NETWORK.md)
  * fixes the layer set; unlike cfgstore's per-key override, prose context
  * CONCATENATES — an /etc file adds to the shipped orientation instead of
  * silently discarding it (the Claude Code CLAUDE.md layering model, which

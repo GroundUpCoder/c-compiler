@@ -1,5 +1,5 @@
 // __gcstr("...") — string literals as imported externref constants
-// (js-string importedStringConstants, module "#"). todos/0041.
+// (js-string importedStringConstants, module "#"). docs/archive/0041.
 #include <stdio.h>
 #include <guc.h>
 

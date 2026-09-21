@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// tools/mkimage.js — bake the read-only system image offline (todos/0040).
+// tools/mkimage.js — bake the read-only system image offline (docs/archive/0040).
 //
 // Runs the same seed pipeline the OS boots with (os/os-common.js) against a
 // fresh image file: every binary compiled by this repo's own cc, vendor
@@ -12,7 +12,7 @@
 //   node tools/mkimage.js                      # -> os/os-system.img
 //   node tools/mkimage.js --out=PATH [--manifest=os/image.json] [--quiet]
 //
-// Optional opt-in image overlays (todos/0118): fold a sibling-published,
+// Optional opt-in image overlays (docs/archive/0118): fold a sibling-published,
 // prebuilt `overlay@1` manifest's files into the image. OFF by default —
 // a plain bake is byte-identical to today. Loud failure on any problem.
 //   --overlay=<id>            enable one declared overlay (repeatable)
@@ -46,7 +46,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// Cross-tree preflight (todos/0341, extended by #142): this bakes a 111 MB
+// Cross-tree preflight (docs/archive/0341, extended by #142): this bakes a 111 MB
 // blob into ITS OWN os/, so a foreign-cwd launch would silently rewrite
 // another tree's image. Every harness spawn (image-fixture, serve.js, comguc)
 // runs with a same-tree cwd — measured at #142.
@@ -121,7 +121,7 @@ log(manifest.smallSnapshot ? 'including Small snapshot ' + manifest.smallSnapsho
 
 // Resolve requested overlays against image.json `overlays[]`. An unknown id is
 // a usage error (exit 2), BEFORE any bake — the whole point is an explicit,
-// acknowledged opt-in (todos/0118). The manifest `manifest` field is relative
+// acknowledged opt-in (docs/archive/0118). The manifest `manifest` field is relative
 // to the repo root (absolute also allowed).
 const resolvedOverlays = resolveRequestedOverlays();
 function resolveRequestedOverlays() {
@@ -146,7 +146,7 @@ function resolveRequestedOverlays() {
 const tmpPath = outPath + '.tmp-' + process.pid;
 
 async function main() {
-  // The published blob's mtime is the bake START time (todos/0082): an
+  // The published blob's mtime is the bake START time (docs/archive/0082): an
   // input edited during the bake may or may not be reflected, so the
   // freshness gate must read it as newer than the blob.
   const bakeStart = new Date();

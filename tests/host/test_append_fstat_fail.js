@@ -1,4 +1,4 @@
-// Host-level regression test (todos/0233 CD4 + todos/0252 R2): the
+// Host-level regression test (docs/archive/0233 CD4 + docs/archive/0252 R2): the
 // native-fs flavor's O_APPEND position handling.
 //
 // CD4: the O_APPEND open must not swallow an fstat failure — a failed

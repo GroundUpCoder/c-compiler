@@ -2,11 +2,11 @@
 
 `compiler.js` is the primary compiler in this repo — a C → WebAssembly compiler in a single file. All other files (host.js, serve.js, tools/, vendor/) are auxiliary.
 
-**North star** (see `todos/OS.md`): a WebAssembly-native, almost-POSIX OS in a
+**North star** (see `docs/OS.md`): a WebAssembly-native, almost-POSIX OS in a
 browser tab — every binary a real wasm module from this compiler, with
 persistence (BlockFS), a shell, and eventually a compositor/window manager.
 "Almost" because `fork()` is deliberately replaced by the owner-brokered
-`posix_spawn` model (decision + rationale in `todos/OS.md` — don't re-litigate).
+`posix_spawn` model (decision + rationale in `docs/OS.md` — don't re-litigate).
 
 ## CORE PRINCIPLE — build to the goal, not to the demo (NO "not used yet" shortcuts)
 
@@ -30,7 +30,7 @@ customer" — that is the exact anti-pattern being rejected here.
 
 ## PRINCIPLES — contract-anchored correctness + honest shape (jku, 2026-08-13)
 
-**Canonical text: `todos/PRINCIPLES.md`. Read it before filing or designing.** Set
+**Canonical text: `docs/PRINCIPLES.md`. Read it before filing or designing.** Set
 in stone by jku (email uid 928); these two govern how work is classified and shaped.
 
 1. **Contract-anchored correctness.** Correctness is judged against what the API's
@@ -63,8 +63,8 @@ two-sided edit**: implement the symbol *and* retire the test that pinned its abs
 ## Tickets & the work queue (`cc-meta ticket`)
 
 **🎯 THE PRIMARY EPIC (jku direct ruling, 2026-08-13): gamedev, full
-throttle — read `todos/GAMEDEV-EPIC.md` before selecting or filing work.
-`todos/PKGDEV-EPIC.md` is TABLED** and must not be dispatched; the 2026-08-07
+throttle — read `docs/GAMEDEV-EPIC.md` before selecting or filing work.
+`docs/PKGDEV-EPIC.md` is TABLED** and must not be dispatched; the 2026-08-07
 promotion that ranked PKGDEV first is superseded. Gamedev is PRIMARY and
 EXCLUSIVE in allocation: select gamedev-advancing tickets, then apply the
 weight sort (light → medium → heavy, `Pn` breaks ties, bug-fix-first within a
@@ -81,14 +81,16 @@ DB-backed work items driven with the `cc-meta ticket` CLI. This repo's
 project is **c-compiler** (project id `019d77d8-f894-7d09-9099-4e747aa20bfb`).
 The old file-based queue (`todos/NNNN-<slug>.md` + `todos/queue.json` +
 `todos/queue.js`) was **retired 2026-07-30**; its open items were migrated
-1:1 into cc tickets, and `todos/done/` remains as the read-only archive of
-everything that shipped under the old system (see `todos/README.md`).
+1:1 into cc tickets. The `todos/` directory itself went on 2026-09-21: its
+design docs now live in `docs/`, the completed items in `docs/archive/`
+(read-only), the register validator in `tools/liabilities/` and the hook in
+`tools/githooks/` (see `docs/README.md`).
 
 - **Ticket numbers are per-project `#N`.** Reference tickets as `#N` in
   commits and dev logs. A bare number is ambiguous across projects — pass
   `--project 019d77d8-f894-7d09-9099-4e747aa20bfb` when addressing a ticket
   by number; the full ticket id is unambiguous everywhere. Historical
-  `todos/NNNN` citations resolve into `todos/done/` or git history, not into
+  `docs/NNNN` citations resolve into `docs/archive/` or git history, not into
   the ticket tracker — the two id spaces are unrelated.
 - **Canonical flow** (there is no engine — the coordinator is the engine):
   `cc-meta ticket next --project <id>` peeks the top READY ticket → spawn the
@@ -138,21 +140,22 @@ everything that shipped under the old system (see `todos/README.md`).
   The test is an **argument**, not the word "game" — anything on the path of a
   developer building a game inside gucOS qualifies (toolchain, text/fonts,
   source control, the in-OS dev loop, platform stability). Full rulings:
-  `todos/GAMEDEV-EPIC.md`, section "Epic membership is ARGUED, not
+  `docs/GAMEDEV-EPIC.md`, section "Epic membership is ARGUED, not
   pattern-matched".
-- **Design/topic docs**: `todos/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
+- **Design/topic docs**: `docs/NAME.md` (OS.md, KERNEL.md, SDL3.md, …) —
   long-lived designs and backlogs that tickets reference for detail. These
   stay in the repo; only the queue moved.
-- **Liability register**: `todos/LIABILITIES.md` (todos/done/0286) — the
+- **Liability register**: `docs/LIABILITIES.md` (docs/archive/0286) — the
   index of gaps the tree *describes* but nothing schedules. Each entry cites
   a file + a literal anchor line, one line on the gap, and the **live**
   ticket funding it. A *true* gap comment is more dangerous than a false
   one: it reads as known-and-handled, so the documentation is the reason
-  nobody looks again. `node todos/liabilities.js check` fails on a
+  nobody looks again. `node tools/liabilities/liabilities.js check` fails on a
   closed/missing `ticket:`, a `defers-to:` that has already shipped and is
   unpinned (the deferral outlived its premise), a moved/vanished anchor, or
-  an empty register — run by the `todos` suite in `tests/run.js` and by the
-  pre-commit hook (`git config core.hooksPath todos/githooks` per clone).
+  an empty register — run by the `liabilities` suite in `tests/run.js` and by
+  the pre-commit hook (`git config core.hooksPath tools/githooks` per clone;
+  clones that pointed at the old `todos/githooks` must re-run this).
   **Enrolment rule**: if a comment's sentence is true and implies work, it
   needs a ticket AND an entry in the same commit (not a `TODO`-marker lint —
   the 12 findings that motivated this carried no markers).
@@ -167,7 +170,7 @@ that way:
   and jumps the queue ahead of all feature work. **Any bug found from anywhere — a
   report, a manual UX sweep, an incidental discovery — is filed P0 unless the user
   explicitly says otherwise.** 🔴 **Correctness here is contract-anchored**
-  (`todos/PRINCIPLES.md`): behavior inside the contract's permitted envelope —
+  (`docs/PRINCIPLES.md`): behavior inside the contract's permitted envelope —
   permitted lateness, jitter, implementation-defined limits — is a **quality gap**
   and files at P1/P2 with its harm measured, NOT at P0. Reclassifying is not
   dismissing: a quality gap can still be epic-critical and urgent.
@@ -186,12 +189,12 @@ starting new work; reference tickets as `#N` in commits and dev logs.
 local day, file per topic) capturing the *why* behind non-trivial work —
 decisions, trade-offs, gotchas. Add an entry when landing anything
 substantial, cross-linking tickets as `#N` (historical entries cite
-`todos/NNNN`, which resolves into `todos/done/` or git history). In-repo
+`docs/NNNN`, which resolves into `docs/archive/` or git history). In-repo
 convention doc: `logs/README.md`.
 
 ## Running tests — `tests/run.js` (unified entry + diff-aware)
 
-`node tests/run.js` (todos/0084) is the ONE dispatcher over the whole
+`node tests/run.js` (docs/archive/0084) is the ONE dispatcher over the whole
 estate — the individual runners (`tests/run-unit.js`, `tests/run.py`
 categories, `tests/host/run.js`, `tests/blockfs/run.js`,
 `tests/kernel/run.js`, `tests/browser/os-sweep.mjs`) stay independently
@@ -244,7 +247,7 @@ Exit 2 = refused before anything ran, never a test red (3 is the heavy lock's,
 sibling symlink `<wt>/../clang-simplified` → `~/git/clang-simplified`, or that
 member skips.)
 
-**The record states its own scope (todos/0339).** A full browser sweep does not
+**The record states its own scope (docs/archive/0339).** A full browser sweep does not
 fit one tool call, so it is habitually split into two `--filter` halves — and a
 `pass` whose scope is unrecorded is not evidence of scope. Every suite-runner
 suite's `summary.json` therefore carries `filter`, a `files` block (`total` /
@@ -317,7 +320,7 @@ both invisible on a normal single run:
   "did not run", distinguishable from a genuine red, and still a nonzero
   gate. Self-heals from a stale lock left by a killed holder. Bypass on a
   genuinely isolated host (own container/VM) with `CC_NO_HEAVY_LOCK=1`.
-  **Since todos/0342 the lock guards the BOOT, not just the runners:**
+  **Since docs/archive/0342 the lock guards the BOOT, not just the runners:**
   `os/boot.js` itself joins at startup (so a single-file kernel e2e, a bench
   tool, and a bare `node os/boot.js` all participate — exit 3 names the
   holder; `--wait-lock[=SECS]` is boot.js's loud-wait opt-in for an
@@ -329,7 +332,7 @@ both invisible on a normal single run:
   a `[heavy-lock]` stderr marker means LOCK HELD, not a test failure**
   (`driveBoot` propagates it as its own exit 3). The one uncoverable path is
   a human browser tab against a dev `serve.js` (no repo process can lock a
-  human's browser — recorded exclusion, todos/done/0342). Control test:
+  human's browser — recorded exclusion, docs/archive/0342). Control test:
   `tests/kernel/test_heavylock_e2e.js`.
 - 🔴 **WHEN A GATE AND A BOOT BOTH WANT THE LOCK, THE GATE GOES FIRST.** The
   asymmetry is structural, not a preference: **`os/boot.js` HAS
@@ -370,7 +373,8 @@ never intuition about "how big" the change is. And an absent
 | Changed paths | Suites pulled in | Cost |
 |---|---|---|
 | `logs/**.md` | **none** | zero |
-| `todos/*.md`, `CLAUDE.md` | `todos` only | ~6.8 s |
+| `docs/*.md` (all but `LIABILITIES.md`), `CLAUDE.md` | **none** | zero |
+| `docs/LIABILITIES.md`, `tools/liabilities/**` | `liabilities` only | ~7 s |
 | `os/**.{c,h}`, `os/image.json`, `os/os-common.js` | kernel + sweep | heavy |
 | `os/os.html`, `os/osk.js`, `os/compositor.js`, `os/kernel-worker.js`, `os/process-worker.js` | **sweep** only (+`host` for os.html) | one heavy suite (ticket #428) |
 | `os/boot.js` | **kernel** only | one heavy suite (ticket #428) |
@@ -384,7 +388,7 @@ heavy suites and that is deliberate** — see rule 5.
 
 **2. The heavy-lock ceiling — worktrees parallelise EDITING, never the GATE.**
 `tests/lib/heavy-lock.js` makes the kernel and sweep suites mutually exclusive
-machine-wide and CROSS-PROCESS (`os/boot.js` joins too, since todos/0342). A
+machine-wide and CROSS-PROCESS (`os/boot.js` joins too, since docs/archive/0342). A
 second lane hitting the lock does not queue — it **exits 3**, and since #561 a
 gate whose selection includes a heavy suite contends AT DISPATCHER START (the
 whole-run reservation), not minutes in at its first heavy row. So the standard
@@ -550,7 +554,7 @@ It supersedes the per-green half of the old "gucOS auto-ships on green" rule.
   the bisect space — and re-run on the fix; the batch does not ship until green.
   Attribution is the shipper's burden, as in rule 5 and 3a.6.
 
-### Flake / under-load gate (`tests/flake.js`, todos/0147)
+### Flake / under-load gate (`tests/flake.js`, docs/archive/0147)
 
 Run this **after landing any new e2e/browser test** (and as a periodic
 dogfood tripwire): `node tests/flake.js` runs the historically
@@ -569,14 +573,14 @@ e.g. `node tests/browser/os-sweep.mjs --repeat 5 --filter=os-doom`.
 is the single documented source of "what does this diff need"** — replace
 the old "after touching X, run the Y sweep" lore with a rule there, don't
 re-encode it as prose. `node tests/run.js --list` prints the table + the
-IGNORE set (docs/todos/logs → nothing). A changed CODE path that matches no
+IGNORE set (docs/logs → nothing). A changed CODE path that matches no
 rule is reported as **UNMAPPED** (warned, never silently skipped) — that's
 the signal to add a rule. run.py categories are BATCHED into one python
 process; the browser `sweep` hard-requires Playwright — a missing or drifted
 install is refused at exit 2 by the #559 pre-flight whenever `sweep` is in
 the selected set (#477 removed the old, unreachable optional-skip tier).
 
-### Test-sync discipline — root cause over quiet symptom (todos/0171)
+### Test-sync discipline — root cause over quiet symptom (docs/archive/0171)
 
 The estate's timing bugs share one anti-pattern: a **silent symptom**. Hold
 the line on these when writing or converting tests:
@@ -618,7 +622,7 @@ with `// BUG:` / `// C11:` / `// EXPECT:` header comments. `diag_*` dirs assert
 a *required* diagnostic via `expected.compiler.exitcode` (no stderr golden —
 the message wording is free to change). **Fix bugs test-first: add the failing
 test here, commit it, then fix.** Verified-but-unfixed findings are tracked in
-`todos/CONFORMANCE-REMAINING.md`.
+`docs/CONFORMANCE-REMAINING.md`.
 
 **Pinned known bugs (xfail).** A confirmed-but-unfixed bug can be committed as a
 *green* conformance test with `config.json` `"knownBug": "NNNN"` (the open
@@ -656,7 +660,7 @@ asset drop taxes the whole dev loop.
 
 As of writing:
 
-- **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator; the lighter alternate GB core), `sameboy` (SameBoy v1.0.3 — cycle-accurate GB/GBC second core, embedded MIT boot ROMs, the baked `.gb`/`.gbc` openwith default; since todos/0260 a win32 app on the uniform menu facility — GDI-blitted client, File▸Open ROM… via comdlg32, Pause/model/palette menu; patch table in `vendor/sameboy/README.md`), `snake`
+- **Games / engines**: `doom` (doomgeneric), `quake` (1996 software renderer), `gameboy` (Peanut-GB emulator; the lighter alternate GB core), `sameboy` (SameBoy v1.0.3 — cycle-accurate GB/GBC second core, embedded MIT boot ROMs, the baked `.gb`/`.gbc` openwith default; since docs/archive/0260 a win32 app on the uniform menu facility — GDI-blitted client, File▸Open ROM… via comdlg32, Pause/model/palette menu; patch table in `vendor/sameboy/README.md`), `snake`
 - **Interpreters / DBs**: `lua` (5.5), `micropython` (1.28), `sqlite` (3.53)
 - **Presentations (0119, X→SDL ports — no Xlib shim, each fork patches its
   display layer to SDL directly)**: `sent` (suckless, ISC; drw rebuilt over
@@ -703,7 +707,7 @@ As of writing:
 
 ## kernel.js (the process control plane) and its tests
 
-`kernel.js` is the owner-side kernel (design: `todos/KERNEL.md`): process
+`kernel.js` is the owner-side kernel (design: `docs/KERNEL.md`): process
 table, per-process kernel-page SAB, block-RPC transport, spawn/wait/kill
 routing. It is per-SYSTEM; `host.js` is per-PROCESS (loaded in every process
 worker) — keep that boundary. `KernelClient.spawnHooks()` plugs into
@@ -712,7 +716,7 @@ code. Signal delivery is cooperative: kernel.js posts SIGPEND bits on the
 kernel page, host.js claims them at env-import safe points and calls the
 wasm `__sig_dispatch` export (so pure-compute loops are uninterruptible by
 design — SIGKILL still works). The tty (line discipline, termios, fg-pgroup
-signal routing) is a kernel object; ptys (todos/0020) are pairs where the
+signal routing) is a kernel object; ptys (docs/archive/0020) are pairs where the
 SLAVE is a full Tty (line discipline reused verbatim, per-Tty read-waiter
 queues) and slave→master is a pipe-shaped buffer (echo + ONLCR output;
 whole-or-block writes) — termios/pgrp RPCs are fd-aware (`_ttyForFd`),
@@ -721,20 +725,20 @@ attaches `pcb.tty` from the child's post-actions fd 0 (a slave there means
 that pty's winsize SAB, control chars, SIGTTIN; first attach claims
 fgPgid). With `Kernel({fs})` the kernel also owns
 the fd layer — per-process fd tables → shared open file descriptions → ONE
-kernel-side fs object (a BlockFS, or since todos/0026 the OS hands it a
+kernel-side fs object (a BlockFS, or since docs/archive/0026 the OS hands it a
 MountFS over two volumes — the kernel treats it identically), with fs
 syscalls as 0x04xx RPCs served to host.js's
 RemoteFS (toWasmEnv reused over it); without opts.fs, processes get private
 in-process fs (standalone pages keep that path forever — two transports,
 one fs; see KERNEL.md "fd/data-plane amendment"). The sealed /usr serves
-itself process-side (todos/0180): the embedder ships the system image as
+itself process-side (docs/archive/0180): the embedder ships the system image as
 ONE SAB (`Kernel({roImage})`, `BLOCK_FS.storeToSab`), every worker mounts
 it locally, and RemoteFS answers absolute /usr paths with ZERO RPCs —
 symlink escapes (`/usr/local`) retry brokered, write-intent/mutators/
 relative paths stay brokered, local fds live at RO_FD_BASE and promote to
 brokered twins at dup2/spawn-action crossings (rules + limits: the
 RemoteFS header and KERNEL.md's single-writer section). Spawn caches compiled
-Modules (todos/0037; generalized by #188): every binary compiles once
+Modules (docs/archive/0037; generalized by #188): every binary compiles once
 kernel-side and the `WebAssembly.Module` structured-clones in the spawn
 message (`procSpec.module`, bytes dropped), keyed by the fs `moduleKey`
 after symlink resolution — immutable prefix:ino on a read-only volume,
@@ -742,7 +746,7 @@ VALIDATED prefix:ino:size:mtime on a writable one (a rewrite, e.g.
 `cc -o a.out` or a gucman upgrade, moves the key and REPLACES that
 path's entry — a stale Module can never be hit); ss modules, /proc, and
 no-fs kernels keep the bytes path — `kernel.moduleCacheStats()` counts.
-Spawn honours `#!` (todos/0065, `_spawnShebang`): a text image starting
+Spawn honours `#!` (docs/archive/0065, `_spawnShebang`): a text image starting
 `#!` re-dispatches to its interpreter line (execve(2) semantics — one
 optional arg, script path replaces argv[0], depth-4 chain cap →
 ENOEXEC), checked BEFORE the module cache; `./foo` on a `#!/bin/sh`
@@ -750,7 +754,7 @@ script just runs.
 Pipes are just
 another OFD kind (PIPE_CREATE; kernel-side buffers + wait queues; blocking
 read/write as deferred RPCs; EOF/EPIPE + SIGPIPE; select readiness) — and
-since todos/0181 they serve themselves through an SPSC ring: RemoteFS.pipe()
+since docs/archive/0181 they serve themselves through an SPSC ring: RemoteFS.pipe()
 posts a 256K ring SAB ahead of PIPE_CREATE (the audio-sab handshake), the
 ring is the pipe's buffer in EVERY mode (kernel stream ops use the
 _pipeAvail/Take/Put accessors — no demotion drain, no locks), and the
@@ -771,7 +775,7 @@ AF_UNIX peer (`sockServe`) — first user is the WM protocol server on
 /run/wm.sock (framed spec in the WMP block, MUST MATCH os/wm_proto.h),
 serving /bin/wm (policy: placement, taskbar, minimize) and /bin/wmctl;
 `Kernel.service()` spawns parentless auto-reaped service processes (the
-wm autostart). The kernel is also the sound server (todos/0017, design in
+wm autostart). The kernel is also the sound server (docs/archive/0017, design in
 WM.md "Audio mixing"): per-process source rings register via AUDIO_OPEN
 (0x2xxx; SAB rides {type:'audio-sab'} before the RPC — the wm-sabs
 handshake), `audioInit()` allocates the one page-owned f32/48k output
@@ -785,7 +789,7 @@ dry → reclaim (paused/no-output drop at once — never wedge). Tests:
 drive the real SAB protocol against fake workers (deterministic, no
 threads); the `*_e2e.js` files compile real C and run it in
 `worker_threads`; `bench_fs.js` is the manual brokered-vs-inprocess
-benchmark. The runner (todos/0081, engine `tests/lib/suite-runner.js`)
+benchmark. The runner (docs/archive/0081, engine `tests/lib/suite-runner.js`)
 is parallel by default (`-j`, `--serial`, `--filter`, `--resume`,
 `--fail-fast`, `--timeout`); per-file logs + an incrementally
 checkpointed `summary.json` land in `build/test-kernel/`, so an
@@ -795,35 +799,35 @@ layout comment and the tests in sync.
 
 ## os/ (the reference OS build) — gucOS
 
-`os/` is **gucOS** (groundupcoder OS; named in todos/0114), the bootable
-reference build (design: `todos/OS.md` "Reference
-build"; landed via `todos/done/0004`): `os.html` (thin xterm UI bridge;
-VTs per todos/0022 — the tty is VT1, the desktop VT2, exactly ONE visible
+`os/` is **gucOS** (groundupcoder OS; named in docs/archive/0114), the bootable
+reference build (design: `docs/OS.md` "Reference
+build"; landed via `docs/archive/0004`): `os.html` (thin xterm UI bridge;
+VTs per docs/archive/0022 — the tty is VT1, the desktop VT2, exactly ONE visible
 at a time via the Terminal/Desktop tab bar (Ctrl+Alt+F1/F2 as aliases),
 boot streams on VT1 then a healthy `ready` auto-switches to VT2 — the
-desktop is the default tab (todos/0070; a manual switch during boot wins,
+desktop is the default tab (docs/archive/0070; a manual switch during boot wins,
 boot-error/halt still force VT1), zero kernel change; browser tests must sit on VT2 for canvas pixels/
 input and VT1 for shell typing — the `window.__osVtSwitch(n)` probe) →
 `kernel-worker.js` (kernel.js + BlockFS-on-OPFS + compiler.js backing
 /bin/cc) → `process-worker.js` per pid. One kernel per origin
-(todos/0045): kernel-worker takes a Web Lock named after the OPFS image
+(docs/archive/0045): kernel-worker takes a Web Lock named after the OPFS image
 pair BEFORE any mount and holds it for the tab's lifetime — a second
 tab gets `boot-locked` → os.html's guard screen + Retry (`boot-retry`
 re-enters; the lock frees when the winner closes; `__osState ===
 'locked'` is the probe). `boot.js` is the headless twin — same
 kernel/manifest under Node with the tty on stdio
-(`echo 'ls /' | node os/boot.js`) — guarded since todos/0293 (the 0045
+(`echo 'ls /' | node os/boot.js`) — guarded since docs/archive/0293 (the 0045
 follow-up): a sidecar lockfile beside the writable root image
 (`<root>.img.lock`, stale-stealing, released on exit/signals) makes a
 second boot of the SAME pair refuse at exit 5 naming the holder pid —
 the headless twin of the Web Lock. Different pairs boot concurrently
 (the kernel e2es' per-boot mkdtemp images never contend). The
 browser compositor is ONE WebGPU render pass per rAF in the kernel
-worker (todos/0055, `os/compositor.js`: shm surfaces seq-gated
+worker (docs/archive/0055, `os/compositor.js`: shm surfaces seq-gated
 `writeTexture` into cached GPUTextures, gpu surfaces
 `copyExternalImageToTexture` per ImageBitmap, chrome as white-texture
 flat quads, title/'x'/Exposé-caption text as cached label textures
-rasterized by the ksvc kernel text service — todos/0275: os/ksvc/ksvc.c,
+rasterized by the ksvc kernel text service — docs/archive/0275: os/ksvc/ksvc.c,
 FreeType+fontchain built by OUR compiler to /usr/lib/ksvc.wasm, loaded
 sync in the kernel thread by os/ksvc.js over a minimal read-only env,
 `Kernel({textService})`; the headless wmScreenshotScreen composite blits
@@ -837,8 +841,8 @@ no retry). Boot thus REQUIRES worker WebGPU — every browser os test
 launches Chromium with `--enable-unsafe-webgpu --enable-features=Vulkan`
 (flagless headless gets no adapter); headless boot.js/kernel-suite never
 construct a compositor and are unaffected. The OS store is a WRITABLE root
-volume at `/` + a READ-ONLY baked system blob at `/usr` (todos/0040,
-design `todos/DISK-IMAGE.md`; supersedes 0026's system-at-/ split),
+volume at `/` + a READ-ONLY baked system blob at `/usr` (docs/archive/0040,
+design `docs/DISK-IMAGE.md`; supersedes 0026's system-at-/ split),
 host.js `MountFS` on top: `/bin` is a root-volume symlink → `/usr/bin`
 (merged-usr), `/usr/local` a baked symlink → `/var/local` (the admin's
 writable territory; `PATH=/usr/local/bin:/bin` everywhere), /etc is
@@ -857,7 +861,7 @@ sources compiled at bake time** by the cc driver in `os-common.js` (no
 build step), vendor `project` builds, `bin` blobs (repo-relative game
 data), raw `text`, and `link` symlinks; the `user` section (gameboy ROMs,
 Desktop links) seeds ONCE onto a freshly created root volume
-(no version gate — `/etc/.image-version` is gone). Staleness (todos/
+(no version gate — `/etc/.image-version` is gone). Staleness (docs/
 0082): every Node-side gate is version AND input-fresh — a blob at the
 manifest version whose mtime is older than any bake input (compiler.js,
 host.js, os/ tree, the manifest's vendor project/bin closure —
@@ -875,7 +879,7 @@ the rw volume). pid 1 is busybox hush (`/bin/sh`, baked from
 `vendor/busybox/bin.json`); `/bin/wm`
 autostarts as a kernel service (killing it falls back to kernel-chrome;
 `wm &` respawns) and reads its Start menu from `/etc/menu` if that dir
-exists, else `/usr/share/menu` (first-existing-dir wins). Windowed vendor apps are seeded in-OS (todos/0015):
+exists, else `/usr/share/menu` (first-existing-dir wins). Windowed vendor apps are seeded in-OS (docs/archive/0015):
 `doom` (a gucman package and the first real `defaultPackages` member
 since #420 — a fresh networked boot installs it via `sync-defaults`, the
 fat image folds it under `/usr/opt/doom`; the launcher keeps the
@@ -883,19 +887,19 @@ caller's CWD and passes `-iwad`), `/bin/gameboy` (ROMs under `/root/roms` — th
 files are gitignored, so their entries are `optional`: missing binary
 assets log a skip instead of failing the boot; bare `gameboy` runs a
 built-in test ROM), `/bin/snake` (tty game; needs two paced `q`s to quit
-— its exit-prompt read loop spins on EOF), `/bin/quake` (todos/0018 —
+— its exit-prompt read loop spins on EOF), `/bin/quake` (docs/archive/0018 —
 pak0.pak + autoexec.cfg at `/root/id1`; requests relative mouse at
 VID_Init: SURFACE_SET_FLAGS bit1 → kernel wanted-state → os.html pointer
 lock, the lock gesture being a kernel-hit-tested client click; ESC
 unlocks, click re-locks; `wmctl relmove` injects rel deltas headless).
-The REPLs are seeded too (todos/0036): `/bin/lua`, `micropython`,
+The REPLs are seeded too (docs/archive/0036): `/bin/lua`, `micropython`,
 `/bin/sqlite3` — piped use exits cleanly on EOF, interactive use works
 at the hush prompt and over ptys (`tests/kernel/test_repl_pty_e2e.js`);
 sqlite3 file-backed DBs exposed the brokered-fsync crash fixed in 0036
 (FS_FSYNC RPC, fsync as a dispatched fs method).
-MicroPython is a real script runner since todos/0117 R1 (it ships as the
+MicroPython is a real script runner since docs/archive/0117 R1 (it ships as the
 `micropython` gucman PACKAGE, not an image.json entry — `micropython`
-lands in `/usr/local/bin`, and since todos/0338 the name `python` is a
+lands in `/usr/local/bin`, and since docs/archive/0338 the name `python` is a
 cmdalt CLAIM rather than a second symlink): `python foo.py a b` runs
 the file with `sys.argv` set and its exit status propagated, `-c cmd`
 and stdin-as-script work, `open()`/`io`/`sys.std*` are real file objects
@@ -903,8 +907,8 @@ over the kernel fd layer (`vendor/micropython/file.c`, upstream's POSIX
 file object lifted OUT of MicroPython's VFS — the kernel owns mounting),
 uncaught tracebacks go to **stderr**, and the heap is 32 MB (the GC
 pause tracks live data at ~1.7 ms/MB, not heap size — table in
-`vendor/micropython/README.md`). todos/0117 **R2** (un-parked as a decider
-call — the todos/0313 M0 park condition never fired; reasoning in the
+`vendor/micropython/README.md`). docs/archive/0117 **R2** (un-parked as a decider
+call — the docs/archive/0313 M0 park condition never fired; reasoning in the
 ticket) gave it a real SEARCH PATH and a curated stdlib. `sys.path` is
 `[<script's dir> | "", ".frozen", /usr/local/lib/micropython,
 <dir of the real binary>/lib]`: entry 0 is the SCRIPT's directory as in
@@ -943,17 +947,17 @@ which the collecting glob skips); mkmpgenhdr un-dots them. Tests:
 the real `/usr/local/bin/python` symlink) + the 639-file upstream
 corpus in run.py's `micropython`/`micropython-upstream` categories
 (537→580 passing, 108→65 skipped at R2).
-`/bin/term` (todos/0020, `os/term/`) is the wasm terminal: kernel pty +
+`/bin/term` (docs/archive/0020, `os/term/`) is the wasm terminal: kernel pty +
 freetype (vendored lib, font at `/etc/fonts/mono.ttf` with the baked
 `/usr/share/fonts/mono.ttf` as fallback) + an escape
 parser scoped to hush/vi; `term &` runs hush interactive in a window
 (640x432 = 80x24), `term cmd...` runs that instead; drag-resize reflows
 via TIOCSWINSZ, close = SIGHUP. Resize is gated on
-`SDL_WINDOW_RESIZABLE` (todos/0021): host.js maps it to kernel
+`SDL_WINDOW_RESIZABLE` (docs/archive/0021): host.js maps it to kernel
 surface-flag bit2; without it `wmResize`/WMP RESIZE/`wmctl resize`
 refuse (fixed-res doom/quake/gameboy can't be sheared; winbox/gpubox/
 term declare it; WMP record bit4, `R` in `wmctl list`). Fixed-size
-windows SCALE instead (todos/0024): a per-surface dst viewport —
+windows SCALE instead (docs/archive/0024): a per-surface dst viewport —
 `wmSetDst`/WMP SET_DST/`wmctl scale`, dst dims in the 80-byte record +
 a DST list column, NN compositing in both flavors, input inverse-maps
 (agent injection stays buffer-coords), frame drags rubber-band and emit
@@ -961,32 +965,32 @@ EV_SCALE_REQ answered by wm.c's aspect-fit integer-snap policy (no-WM
 fallback: kernel applies the raw box); SET_DST on a resizable surface
 refuses — scaled and configurable are exclusive modes. `winbox fixed`
 (title "fixbox") is the fixed-size acceptance app. Maximize/restore
-(todos/0025): the kernel detects a title-bar double-click (400ms + 4px
+(docs/archive/0025): the kernel detects a title-bar double-click (400ms + 4px
 slop, event timestamps threaded from the page) and emits WMP
 EV_TITLE_ACTIVATE — mechanism only; wm.c owns the maximized set + saved
 geometry and dispatches on the resizable bit (work-area MOVE+RESIZE vs
 centered aspect-fit SET_DST whose integer snap never overflows the work
 area), re-fitting on EV_SCREEN; `wmctl max` sends WMP ACTIVATE → the
-same event (R_ERR with no WM subscriber — no WM, no maximize). The screen is dynamic (todos/0023): on VT2 the desktop
+same event (R_ERR with no WM subscriber — no WM, no maximize). The screen is dynamic (docs/archive/0023): on VT2 the desktop
 canvas tracks the viewport (1 CSS px = 1 screen px, no DPR); os.html
 sends `screen-resize`, the worker resizes the OffscreenCanvas +
 `wmSetScreen` → WMP EV_SCREEN + a kernel one-shot position clamp (the
 no-WM fallback); /bin/wm re-lays the taskbar (destroy+recreate) and
 re-clamps — browser tests must derive screen-edge geometry from the
 LIVE canvas rect (`window.__osScreen` probe), never 800×500 constants.
-The desktop shell (todos/0028–0033, 2026-07-08): wm.c owns a Start
+The desktop shell (docs/archive/0028–0033, 2026-07-08): wm.c owns a Start
 button + menu popup (entries from seeded `/etc/menu`; children get own
 pgroup, PATH=/bin HOME=/root, cwd /root, WNOHANG-reaped) and a
 fullscreen bottom-of-z desktop layer (icon grid from `/root/Desktop`,
 dbl-click launches — own timestamp check, NOT e.button.clicks which
 accumulates across windows; `wmctl dblclick` injects both clicks on
 one connection), all in the one wm process dispatched by windowID;
-menu + desktop launch through ONE `activate(path)` (todos/0066):
+menu + desktop launch through ONE `activate(path)` (docs/archive/0066):
 a file that is runnable after symlink resolution — `\0asm` or `#!`,
 told by peeking the first bytes — spawns directly (launchers are
 ordinary `#!/bin/sh` scripts; the old first-line-argv menu format
 is gone, menu/snake became a real script); anything else opens
-through the openwith associations (todos/0072, `os/openwith.h` —
+through the openwith associations (docs/archive/0072, `os/openwith.h` —
 ONE header-only resolver shared by wm.c, fileman and `/bin/open`):
 store = `~/.config/openwith` > `/etc/openwith` >
 `/usr/share/openwith` overlaid PER KEY (`os/cfgstore.h`, arch CS3 —
@@ -1001,7 +1005,7 @@ kernel title bar has [min][max][close] boxes (min = wmMinimize direct,
 max = EV_TITLE_ACTIVATE, each box only if it fits the title — 32px
 windows stay draggable); the taskbar has a right-aligned HH.MM clock,
 launch-order-stable buttons (memmove compaction), and overflow shrink
-left of the clock. Taskbar polish round 2 (todos/0101): right-clicking
+left of the clock. Taskbar polish round 2 (docs/archive/0101): right-clicking
 the strip (empty run / clock / Show-Desktop region — anything past the
 Start strip that isn't a drawn button) raises a taskbar-strip menu
 (Cascade / Tile / Minimize All / Properties→ctlpanel) over the 0091
@@ -1017,13 +1021,13 @@ routing lands at `bar_rclick`, left-click byte-identical. Ctrl+Alt+Tab
 wmKey ONLY with a WM subscribed → WMP EV_CYCLE 0x8B / CYCLE 0x19 /
 `wmctl cycle` (wm.c walks LRU stamps forward, previous-window on
 Shift; minimized skipped) — no subscriber, the key passes through.
-Z layers (todos/0038): per-surface layer -1/0/+1 (WMP SET_LAYER 0x1A /
+Z layers (docs/archive/0038): per-surface layer -1/0/+1 (WMP SET_LAYER 0x1A /
 kernel-JS `wmSetLayer` / `wmctl layer`; record word 11, T/B chars in
 `wmctl list` FLAGS), every z-order op stable-sort-normalized within
 its layer — wm.c pins taskbar+menu to +1 and the desktop to -1, so
 the bar is always-on-top and nothing sinks under the desktop; the
 no-WM fallback never sets layers.
-Map-on-placement (todos/0069): with a WM subscribed, SURFACE_CREATE
+Map-on-placement (docs/archive/0069): with a WM subscribed, SURFACE_CREATE
 makes the surface UNMAPPED — skipped by compositor + hit test (still
 listed/focusable/injectable/SHOT-able) — until the WM's first
 geometry/stacking op on the sid (MOVE/RESIZE/SET_DST/SET_LAYER/
@@ -1033,7 +1037,7 @@ at create (wm.c ignores those), subscriber-owned borderless (the
 start menu) waits for its self-park; WM_MAP_TIMEOUT_MS (200ms) and
 last-subscriber-gone map everything pending — no-WM boots are
 byte-identical to pre-0069.
-Aero effects (todos/0063, WM.md "Aero effects"): per-pixel alpha via
+Aero effects (docs/archive/0063, WM.md "Aero effects"): per-pixel alpha via
 `SDL_WINDOW_TRANSPARENT` → kernel flag bit3 → WMP_F_ALPHA 32 (`A` in
 the now-7-char `wmctl list` FLAGS; headless composite blends an exact
 integer src-over, `winbox alpha` = "alphabox" acceptance app); drop
@@ -1048,12 +1052,12 @@ headless composite/goldens never read it, off = byte-identical
 pre-0063 pass).
 Verified-but-unfixed items live in WM.md "Known issues"
 (pointer-lock needs a per-round human check).
-/proc is a synthetic kernel-rendered volume (todos/0043: `ProcFS` in
+/proc is a synthetic kernel-rendered volume (docs/archive/0043: `ProcFS` in
 kernel.js, auto-bound by the Kernel ctor via the mount table; Linux
 formats — busybox ps/top/pgrep/pkill/uptime/free are seeded coreutils
 applets over it; per-process CPU time reads 0 by design; libc grew
 getsid over a new GETSID RPC).
-strace (todos/0046): the kernel traces any pcb whose spawn spec named a
+strace (docs/archive/0046): the kernel traces any pcb whose spawn spec named a
 trace pipe — `__spawn_spec.trace` is a pipe WRITE-end fd in the parent,
 host-read only under spawn flags bit1 (`__SPAWN_TRACE`; bit2 = follow
 descendants, lines get `[pid N]` prefixes); every RPC appends one
@@ -1063,28 +1067,28 @@ and a full pipe drops lines + reports the count at exit (the kernel
 never blocks). `/bin/strace [-f] [-o FILE] cmd args...` (os/strace.c)
 is just the plumbing: pipe, spawn pre-traced, copy to stderr, propagate
 exit status (128+sig on a signaled child).
-SDL frame pacing is the kernel's clock (todos/0100): nested workers get
+SDL frame pacing is the kernel's clock (docs/archive/0100): nested workers get
 no working rAF, so `Kernel({vsync: true})` (kernel-worker only)
 advertises the compositor rAF via two kernel-page TAIL words —
 `vsyncTick()` bumps+notifies every live pcb per composite,
 `KernelClient.vsyncWait` parks on it with rAF catch-up semantics, and
 host.js's surface backend slots that in as its `requestAnimationFrame`
-(both flavors — the browser flavor since todos/0167, IDLE-POWER Stage 1).
+(both flavors — the browser flavor since docs/archive/0167, IDLE-POWER Stage 1).
 Tab hidden = no ticks = SDL apps park (honest pause;
 cooperative signals defer to the next tick, SIGKILL unaffected). No
 vsync source (boot.js, standalone) → the deadline-setTimeout pacer
 tier in host.js's frame-loop driver (fixed 0100: the old fixed
 `setTimeout(16)`-after-callback pacer silently halved presented fps —
 sameboy GBC showed 60 emulated/33 presented). Idle SDL apps can leave
-the frame race entirely (todos/0161, IDLE-POWER Stage 2):
+the frame race entirely (docs/archive/0161, IDLE-POWER Stage 2):
 `SDL_WaitEvent`/`SDL_WaitEventTimeout` REALLY block on the OS input
 ring via `__sdl_pump_wait` in 1s chunks
 (import return = cooperative-signal safe point), waking on routed
 input/resize/quit instead of 60×/s — mgp parks its settled slides this
 way (`sdlx_wait_event`); wm.c's conversion is 0168, wake-counter probes
 + compositor parking 0169. Test: `test_waitevent_e2e.js`; design:
-`todos/IDLE-POWER.md`. Multi-source sleeps are the kernel's unified
-WAIT since todos/0178 (`FS_WAIT` + the `__wait` import — fds ⊕ input
+`docs/IDLE-POWER.md`. Multi-source sleeps are the kernel's unified
+WAIT since docs/archive/0178 (`FS_WAIT` + the `__wait` import — fds ⊕ input
 ring ⊕ timeout ⊕ signal-EINTR, readiness-check+park atomic
 kernel-side; KERNEL.md's two-tier wait rule is normative): wm.c parks
 in WAIT{sock ⊕ ring} (pre-park select gone), user32's GetMessage in
@@ -1107,14 +1111,14 @@ FS_SELECT/FS_WAIT like any fd; C surface os/fswatch.h (__fs_watch
 import; must match kernel.js's FSW table). Consumers: mgp live-reload
 (the deck watch IS wantreload's source now — upstream's ctime poll
 removed; the settled park composes the fd via sdlx_wait_event_fd) and
-fileman auto-refresh (todos/0123: watch_cwd re-armed per navigation
+fileman auto-refresh (docs/archive/0123: watch_cwd re-armed per navigation
 over user32's general RegisterFdWake seam — registered fds join
 GetMessage's WAIT, drained raw on wake, one posted message per
 episode; selection carried by NAME across the refill). Tests:
 `test_fswatch_e2e.js` + `test_mgp_livereload_e2e.js` +
 `test_fileman_watch_e2e.js`.
 The Start menu is a single Win95 column with a gucOS sidebar band
-(todos/0098's Win7 two-pane reverted to one column by todos/0132, the
+(docs/archive/0098's Win7 two-pane reverted to one column by docs/archive/0132, the
 22px gucOS band + bottom All-Programs its follow-up, over the 0078
 Win95-classic substrate): the ROOT window ("startmenu") is a fixed 192×274
 panel — a vertical gucOS branding BAND (navy→blue gradient, "gucOS" via
@@ -1141,7 +1145,7 @@ holds focus, hand-back at the create echo, arrows/type-ahead/Left/Esc on
 the deepest column). Ctrl+Esc toggles it via WMP EV_MENU 0x8C / MENU
 0x1C / `wmctl menu` — the EV_CYCLE pattern (subscriber-gated, keyup
 swallowed).
-Desktop icons are selectable & movable (todos/0077, wm.c-only): click/
+Desktop icons are selectable & movable (docs/archive/0077, wm.c-only): click/
 ctrl-click/shift-range/marquee build a 64-bit selection set (navy label
 strips; marquee intersects TILES, ctrl adds), drag moves the whole set
 grid-snapped all-or-nothing with positions persisted in
@@ -1153,7 +1157,7 @@ desktop sid (kernel's borderless exemption stands; policy asks) and
 modifiers are tracked by KEYSYM from key events since pointer records
 carry no mod word; wmctl grew keydown/keyup/down/up/drag for headless
 gestures; right-button routing landed with 0091 (below).
-Desktop icons rename in place (todos/0103, wm.c-only): F2 on a lone
+Desktop icons rename in place (docs/archive/0103, wm.c-only): F2 on a lone
 selection — or the icon menu's Rename row — opens an inline editor over
 the label (sunken white box + caret; printable insert, Backspace, Enter
 commits `rename(2)` on `/root/Desktop`, Esc cancels, click-away/focus-loss
@@ -1162,7 +1166,7 @@ both kept) leave the editor open; the `.icons` cell is carried to the new
 name (`desk_icons_rename`); the Recycle Bin is not renamable. A
 `desk_edit_armed` flag gates the focus-loss commit so the transient
 focus-fall when the icon menu dismisses can't close the editor early.
-The system clipboard (todos/0090) is ONE kernel-held slot ({fmt, bytes};
+The system clipboard (docs/archive/0090) is ONE kernel-held slot ({fmt, bytes};
 fmt 1 = UTF-8 text, tagged so 0092's file lists can ride later) behind
 the CLIP_SET/CLIP_GET RPCs — cross-process, survives the writer exiting
 (Win95: one slot, no history). The C surface is the real SDL3 clipboard
@@ -1178,8 +1182,8 @@ is the shell bridge — `cmd | clip` sets, `clip -o` prints (exit 1 when
 empty; also the test probe). Host-browser clipboard integration is
 deliberately NOT wired (SDL3.md). Tests:
 `tests/kernel/test_clipboard_e2e.js` + the os-shell.mjs notepad leg.
-Right-click context menus (todos/0091; on the menucore engine since
-todos/0259 — "ctxmenu"/"ctxmenu2"/... chain levels to MENU_MAX_DEPTH,
+Right-click context menus (docs/archive/0091; on the menucore engine since
+docs/archive/0259 — "ctxmenu"/"ctxmenu2"/... chain levels to MENU_MAX_DEPTH,
 the old one-flyout cap gone) built per open from fixed item lists — empty desktop (New ▸ Folder/
 Text File with the Win95 uniquifier, Sort by ▸ Name = forget `.icons`,
 Refresh, Display → `ctlpanel Display`; ctlpanel grew applet-by-name
@@ -1202,7 +1206,7 @@ popup items stay agent targets, which is how tests drive them. Tests:
 lists menu BARS before the `popupmenu` section; browser legs must
 quiesce ~1.5s after the VT2 settle or a late EV_SCREEN dismisses the
 popup under test).
-File manager operations (todos/0092): the ONE file-ops core is
+File manager operations (docs/archive/0092): the ONE file-ops core is
 `os/fileops.h` (header-only, the openwith.h precedent — shared by
 BOTH fileman and wm.c): recursive `fo_copy` (symlinks copy AS links —
 a Desktop launcher copies like a shortcut; refuses dir-into-itself),
@@ -1231,7 +1235,7 @@ modal-over-modal — an error box over the rename dialog — is drivable
 Multi-select/details = 0106, desktop-icon rename = 0103, DnD = recorded
 non-goal. Tests: `tests/kernel/test_fileman_ops_e2e.js` +
 `tests/browser/os-fileman.mjs`.
-The Recycle Bin (todos/0093): delete is RECOVERABLE now — the trash
+The Recycle Bin (docs/archive/0093): delete is RECOVERABLE now — the trash
 store is fileops.h territory (`/root/.recycle/files/` moved entries,
 name clashes uniquified "x", "x 2"; `/root/.recycle/info/` one sidecar
 per entry, line 1 = original absolute path, line 2 = delete time; the
@@ -1254,7 +1258,7 @@ skip the bin, cut/copy skip it too; the bin's own menu is Open/Empty
 Recycle Bin. Desktop deletes and the bin-menu Empty deliberately DON'T
 confirm (no dialog furniture in wm.c; fileman's flows do). Tests:
 `tests/kernel/test_recycle_e2e.js` + `tests/browser/os-recycle.mjs`.
-The sound scheme (todos/0094): event sounds through the 0017 mixer.
+The sound scheme (docs/archive/0094): event sounds through the 0017 mixer.
 The ONE core is `os/sounds.h` (header-only — wm.c's SystemStart boot
 chime and winmm's PlaySound are the same code): scheme store =
 `~/.config/sounds` > `/etc/sounds` > `/usr/share/sounds/scheme`
@@ -1277,7 +1281,7 @@ spent-tail reclaim: "dry" = can't back another output frame — at
 non-integer resample ratios queued never hits 0, which leaked a dead
 stream per one-shot clip. Tests: `tests/kernel/test_sounds_e2e.js` +
 `tests/browser/os-sounds.mjs` + ctlpanel-e2e Sounds legs.
-Aero Snap (todos/0095): drag-to-edge tiling + Win+arrow, the 0025/0032
+Aero Snap (docs/archive/0095): drag-to-edge tiling + Win+arrow, the 0025/0032
 mechanism/policy split. Kernel: the title drag tracks the POINTER
 against 8px edge zones (WM_SNAP_MARGIN) and — subscriber-gated — emits
 WMP EV_SNAP_EDGE 0x8D {sid, edge; 0 left-the-zone, 1 L, 2 R, 3 top,
@@ -1307,7 +1311,7 @@ EV_SCREEN re-fits snapped like maximized. Tests:
 `tests/kernel/test_snap_e2e.js` + mechanism legs in
 test_wm.js/test_wm_policy.js + `tests/browser/os-snap.mjs` (NB winbox
 flips its fill on the unswallowed Meta keydown — one toggle per chord).
-The screensaver (todos/0096): idle-triggered Win95 classics, the same
+The screensaver (docs/archive/0096): idle-triggered Win95 classics, the same
 mechanism/policy split. Kernel: `_wmLastInput` stamps at the wmKey/
 wmPointer ENTRIES (all real input incl. INJECT_SCREEN; per-window
 INJECT_KEY/INJECT_POINTER deliberately don't — agents can poke apps
@@ -1329,11 +1333,11 @@ pointer/key event lands on it and ANY of them dismisses + restores the
 prior focus (the waking input re-stamped the clock by arriving);
 marquee (5x7 font zoomed, random height per pass) + starfield (128
 stars) repaint per frame tick; EV_SCREEN dismisses (idle re-raises);
-Mystify/pipes = todos/0115. Tests: `tests/kernel/test_saver_e2e.js` +
+Mystify/pipes = docs/archive/0115. Tests: `tests/kernel/test_saver_e2e.js` +
 test_wm.js legs + `tests/browser/os-saver.mjs` (VT1 typing is tty
 input, NOT wm input — jiggle the mouse on VT2 to arm a fresh idle
 interval).
-The menu ENGINE is ONE facility (todos/0259, arch A13):
+The menu ENGINE is ONE facility (docs/archive/0259, arch A13):
 `os/win32/menucore.c` (model + geometry + tracking + freetype raster
 over HDC, behind the menucore.h MenuCoreOps vtable) is consumed by BOTH
 user32 (HMENU API/bar/agent front-end) and wm.c (Start-menu flyouts +
@@ -1343,7 +1347,7 @@ panel — search/pins/band — stays wm-drawn). wm.c links
 user32/kernel32 — gdi32's W wrappers live in gdi32w.c, veneer-side);
 the Start tree is the UNION of /etc/menu and /usr/share/menu (/etc wins
 same-name clashes — the gucman prerequisite, ex-0244/0250).
-gucman (todos/0261, Slice 1) is the package manager: optional apps live
+gucman (docs/archive/0261, Slice 1) is the package manager: optional apps live
 OUT of the baked blob as `packages/<name>.json` definitions →
 `tools/mkpkg.js` builds deterministic tar+gzip payloads + `index.json`
 into `dist/packages/` (gitignored; served at `/packages/*` by serve.js,
@@ -1358,7 +1362,7 @@ That is what lets the package repo publish independently of an image
 deploy (comguc `build.mjs --image-only` / `--packages-only`). Before
 #580 a build REPLACED the repo — 41 consecutive deploys silently
 unpublished the `-clang` set that way. Concurrent same-dir builds are
-still the todos/0388 race that silently retargeted another builder's
+still the docs/archive/0388 race that silently retargeted another builder's
 repo mid-read (it cost a 185 gate a false red). So **two builds must
 never share an out dir**: `--pool=DIR` decouples the expensive
 content-addressed payload STORE from the index, `<out>/pool` becomes a
@@ -1384,7 +1388,7 @@ default to the FAT image so the estate needs no test changes;
 Repo URL: /etc/gucman/repos > baked /usr/share/gucman/repos
 (origin-relative `/packages`). punes is the first package (Slice 1);
 deploy leg + pulling the other apps are follow-ons.
-Command alternatives (todos/0338, design `todos/COMMAND-ALTERNATIVES.md`) make
+Command alternatives (docs/archive/0338, design `docs/COMMAND-ALTERNATIVES.md`) make
 a command NAME switchable: `/usr/bin/cmdalt` is a MULTICALL binary whose mode
 is `basename(argv[0])` — under its own name the admin CLI (`list`/`which`/
 `set`/`reset`), under any other name a DISPATCHER that forwards every argument
@@ -1407,13 +1411,13 @@ Packages provide a name through the `commands` control key (gucman APPENDS to
 the baked body) — never through a `bin` alias, which `/usr/local/bin`-precedes-
 `/bin` would make a permanent silent SHADOW; mkpkg and gucman both refuse one.
 That shadow is diagnosed in four places (`which`, `list`, `set`/`reset`, and
-ctlpanel's new Default Programs applet — todos/0130's picker leg) and
+ctlpanel's new Default Programs applet — docs/archive/0130's picker leg) and
 deliberately not auto-repaired. Tests: `test_cmdalt_e2e.js` + ctlpanel legs.
 Image version: read `os/image.json` (`version`) — do not restate it here. This
 line said **v140** for ~39 bumps, was refreshed to v179, and drifted again within
 hours; a hand-maintained mirror of machine-readable state only ever tells you how
 long since someone last looked.
-The Win32 veneer (todos/WIN32.md) lives in `os/win32/` as an app-side
+The Win32 veneer (docs/WIN32.md) lives in `os/win32/` as an app-side
 lib.json library: 0057 landed gdi32 — `windows.h` + `gdi32.c`, a CPU
 rasterizer over the surface/bitmap RGBA buffers (DCs incl. memory DCs,
 objects + stock + leak counters, all 16 ROP2s, shapes with GDI
@@ -1432,7 +1436,7 @@ surface; child controls drawn IN-PROCESS into the top-level's surface,
 Wine-style — a child DC is the surface span offset to its client
 origin via the `win32_internal.h` `__gdi_dc_wrap` seam, which replaced
 0057's `__gdi_bind_hwnd` scaffold), the CLASSIC blocking message loop
-(GetMessage parks in the kernel's unified WAIT since todos/0178 —
+(GetMessage parks in the kernel's unified WAIT since docs/archive/0178 —
 agent socket ⊕ input ring ⊕ next timer deadline, drained into the SDL
 queue at the import's return; WM_PAINT only when the queue is dry,
 WM_QUIT last), input routing (hit-test/capture/focus; SDL3 keysyms are
@@ -1510,7 +1514,7 @@ After 0068: notepad 27, calc 15 (comdlg32/clipboard/printing +
 TrackPopupMenu/keyboard-layout). `tests/kernel/test_winmine_e2e.js` is
 the acceptance test (geometry, menus, dialogs, WM_TIMER, cell-reveal
 pixels, registry persistence across boots).
-`/bin/gpubox` (todos/0016) is
+`/bin/gpubox` (docs/archive/0016) is
 the GPU demo — direct webgpu.h rendering: browser = per-process WebGPU
 device + ImageBitmap handoff; headless = the optional Dawn tier (the
 `webgpu` devDependency in the root package.json, LAZILY probed by host.js
@@ -1518,7 +1522,7 @@ device + ImageBitmap handoff; headless = the optional Dawn tier (the
 readback→shm SAB, so `wmctl shot` works identically to CPU apps). GPU
 apps must quit via SDL_Quit(), not exit()-in-frame-callback — the runtime
 drains pending Dawn work before the EXIT handshake (WM.md spike-S3
-caveat). Audio (todos/0017): doom/gameboy sound mixes kernel-side into
+caveat). Audio (docs/archive/0017): doom/gameboy sound mixes kernel-side into
 one output ring; os.html loads host.js ONLY for `createAudioReceiver`
 and resumes the AudioContext on the first user gesture (autoplay
 policy); `boot.js` stays silent by design (no `audioInit` — apps
@@ -1547,7 +1551,7 @@ icon grid, and the desktop layer's teal equals the compositor
 background teal) + `os-aero.mjs` (0063; exact src-over blend, shadow
 falloff + corner clip, live Aero Peek popup, minimize-anim settle,
 glass round-trip) (real Chromium, manual). The whole sweep is ONE
-command since todos/0081: `node tests/browser/os-sweep.mjs`
+command since docs/archive/0081: `node tests/browser/os-sweep.mjs`
 (discovers `os-*.mjs`, serial by design — 0045 boot lock + contention;
 `--filter`/`--resume`/`--fail-fast`; per-file logs + checkpointed
 `summary.json` in `build/test-browser/`).
@@ -1558,7 +1562,7 @@ command since todos/0081: `node tests/browser/os-sweep.mjs`
 (an OPFS `SyncAccessHandle` in the browser, a `MemoryByteStore` in tests). The
 superblock + TLSF allocator + inode table + directories all live in the store.
 
-**MountFS** (also host.js, todos/0026) is a mount table over N BlockFS volumes:
+**MountFS** (also host.js, docs/archive/0026) is a mount table over N BlockFS volumes:
 longest-prefix routing with prefix strip, its own fd/dir-handle namespaces,
 cross-volume rename/link → `EXDEV`, mount points → `EBUSY`. Symlinks resolve in
 the FULL namespace: MountFS wires `_mountPrefix`/`_mountOwns` hooks into each
@@ -1574,7 +1578,7 @@ single-volume paths are untouched. Tests: `tests/blockfs/test_mounts.js` (walk
 mechanics + fsck), `tests/kernel/test_mounts.js` (routing/EXDEV/EBUSY/escape
 semantics + the 0040 readonly-/usr layout).
 
-**Read-only volumes + sealed blobs** (host.js, todos/0040):
+**Read-only volumes + sealed blobs** (host.js, docs/archive/0040):
 `createV4(store, {readonly: true})` mounts an EXISTING v4 image read-only —
 every mutating op returns `EROFS` via `_setErr`, decided AFTER the path walk
 (so a path escaping through a symlink to a writable volume retries on its

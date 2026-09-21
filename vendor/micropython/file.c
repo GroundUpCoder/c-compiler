@@ -28,7 +28,7 @@
 // See vendor/micropython/README.md for the patch table. In short: the
 // upstream file is the file-object half of the POSIX VFS, gated on
 // MICROPY_VFS_POSIX and reached through the VFS mount table. This port has
-// no VFS (the gucOS kernel already owns mounting — see todos/KERNEL.md), so
+// no VFS (the gucOS kernel already owns mounting — see docs/KERNEL.md), so
 // the object is lifted out, the `vfs_` prefix dropped from its C symbols,
 // the gate moved to MICROPY_PY_BUILTINS_OPEN, and the win32/macOS/select
 // branches removed (one target). `mp_builtin_open` — which upstream gets

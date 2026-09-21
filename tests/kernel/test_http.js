@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// HTTP transport semantics (todos/0172; fd-shaped since todos/0417) without
+// HTTP transport semantics (docs/archive/0172; fd-shaped since docs/archive/0417) without
 // wasm: a fake worker drives the real SAB protocol against a real brokered
 // Kernel with a FAKE fetch injected (opts.fetch), so every path is
 // deterministic — no network. The fake fetch hands back a controllable
@@ -10,7 +10,7 @@
 // (ETIMEDOUT), EOF-vs-error, close-aborts, and teardown reclaim. Same
 // fake-worker plumbing as test_pipes.js.
 //
-// RED CONTROL (todos/0417): on the pre-0417 kernel HTTP_OPEN answers {id},
+// RED CONTROL (docs/archive/0417): on the pre-0417 kernel HTTP_OPEN answers {id},
 // not {fd} — the very first check of leg A fails loudly and the run stays
 // bounded (no leg parks on an unowned fd).
 //

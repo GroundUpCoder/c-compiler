@@ -1,5 +1,5 @@
-/* wwinmain.c — the wWinMain CRT entry shim (todos/0068, design
- * todos/WIN32.md). Windows picks the CRT entry (main / WinMain /
+/* wwinmain.c — the wWinMain CRT entry shim (docs/archive/0068, design
+ * docs/WIN32.md). Windows picks the CRT entry (main / WinMain /
  * wWinMain) at link time; in this static-link world the project manifest
  * does — a UNICODE GUI port whose entry is wWinMain lists this file in
  * its bin.json `sources` (see vendor/winmine/bin.json). Deliberately NOT

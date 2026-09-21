@@ -1,4 +1,4 @@
-%% effects.mgp - gucOS MagicPoint showcase (todos/0185): %pause builds and
+%% effects.mgp - gucOS MagicPoint showcase (docs/archive/0185): %pause builds and
 %% %mark/%again column layout. (The cutin fly-ins need X child windows,
 %% which this port drops - see vendor/magicpoint/README.md descopes.)
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"

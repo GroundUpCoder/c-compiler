@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MicroPython script-runner e2e (todos/0117 R1). The sibling of
+// MicroPython script-runner e2e (docs/archive/0117 R1). The sibling of
 // test_repl_pty_e2e.js: that one proves the INTERACTIVE REPL over a pty,
 // this one proves the CLI — `micropython foo.py args`, which before R1
 // silently ignored argv and dropped into the REPL instead.

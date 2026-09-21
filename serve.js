@@ -4,13 +4,13 @@ const fs = require('fs');
 const path = require('path');
 
 // Positional args (dir, port) plus optional flags. `--clang` folds the
-// sibling clang-simplified `clang-apps` image overlay (todos/0118) into the
-// served system blob when the sibling artifact is available (todos/0141);
+// sibling clang-simplified `clang-apps` image overlay (docs/archive/0118) into the
+// served system blob when the sibling artifact is available (docs/archive/0141);
 // `--overlay=<id>` is the generic form, mirroring tools/mkimage.js.
 const positionals = [];
 const requestedOverlays = new Set();
 // `--packages-index=<producer>[,<producer>]` (clang is set by
-// serve-with-clang.js; rust is the todos/0416 twin) asserts the served
+// serve-with-clang.js; rust is the docs/archive/0416 twin) asserts the served
 // /packages repo is the SUPERSET index over the named native-sibling
 // producers — dist/packages/index.json must exist and list at least one
 // package of each producer's suffix (*-clang / *-rust, built by an
@@ -92,7 +92,7 @@ const stat = fs.statSync(resolved, { throwIfNoEntry: false });
 const singleFile = stat && stat.isFile() ? resolved : null;
 const root = singleFile ? path.dirname(resolved) : resolved;
 
-// Resolve requested image overlays (todos/0141) against os/image.json's
+// Resolve requested image overlays (docs/archive/0141) against os/image.json's
 // `overlays[]` declaration. "Available" = the sibling-published overlay.json
 // exists; a missing sibling build is a NORMAL state (the overlay is an opt-in
 // convenience), so a requested-but-absent overlay is DROPPED with a loud line
@@ -139,18 +139,18 @@ const servedImageName = overlayPlan ? overlayPlan.imageName
                       : minimalImage ? 'os-system.minimal.img'
                       : 'os-system.img';
 
-// Prebaked system-image freshness (todos/0040 + 0082): when serving the OS
+// Prebaked system-image freshness (docs/archive/0040 + 0082): when serving the OS
 // tree, make sure os/os-system.img is current BEFORE listening — a stale/
 // missing blob makes every fresh browser boot silently fall back to the
 // ~16s in-worker bake, and a version-current blob baked before an
 // uncommitted compiler.js/os//vendor edit would be silently FETCHED (the
 // browser can't check input mtimes — this gate is the browser-path half of
-// todos/0082). Baking is delegated to tools/mkimage.js (the same seed
+// docs/archive/0082). Baking is delegated to tools/mkimage.js (the same seed
 // pipeline). Version rule mirrors kernel-worker.js: rebake only when
 // baked < manifest (a NEWER blob is kept); input rule: rebake when any
 // bake input (compiler.js, os/, vendor closure) is newer than the blob.
 // `plan` is resolveOverlayPlan's result (null → base image). With a plan the
-// gate becomes overlay-aware (todos/0141): the blob is a sidecar keyed by the
+// gate becomes overlay-aware (docs/archive/0141): the blob is a sidecar keyed by the
 // overlay set, and freshness compares the DESIRED overlay set against the
 // blob's baked OVERLAYS= line (os-common.bakedOverlays) in addition to the
 // version/input-mtime rules — plus the sibling overlay.json's mtime folds into

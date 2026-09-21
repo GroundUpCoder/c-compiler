@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Spike 1 of the menu-uniform architecture (todos/0256): the kernel
+// Spike 1 of the menu-uniform architecture (docs/archive/0256): the kernel
 // anchored-child primitive + the grab + the focus funnel, proven END TO END
 // through the stock SDL3 veneer with NO user32 and NO menu code — a real
 // compiled C app (tests/kernel/fixtures/menubox) driven via wmctl against a

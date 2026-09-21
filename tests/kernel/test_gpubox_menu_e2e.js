@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// M2 acceptance (todos/0258, menu arch §4.a.5): a GPU app's menu is
+// M2 acceptance (docs/archive/0258, menu arch §4.a.5): a GPU app's menu is
 // first-class on the SAME engine as notepad's — WITHOUT the optional Dawn
 // tier. gpubox is a minimal win32 app now (RegisterClass CS_OWNCLIENT +
 // CreateWindowEx + PeekMessage pump around its webgpu.h render loop), and

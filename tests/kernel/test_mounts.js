@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// MountFS semantics (todos/0026): the mount layer the OS embedders hand to
+// MountFS semantics (docs/archive/0026): the mount layer the OS embedders hand to
 // Kernel({fs}) — longest-prefix routing across two BlockFS volumes
 // ('/' system, '/root' user), the mount-namespace fd/dir-handle tables,
 // POSIX edges (EXDEV on cross-volume rename/link, EBUSY on mount points),
@@ -237,7 +237,7 @@ test('escape: mkdir/unlink through an escaping directory symlink', function () {
   assert(f.usr.stat('/tmp.txt') === null, 'unlink through the link');
 });
 
-// ---- read-only volume under the mount (todos/0040) ----
+// ---- read-only volume under the mount (docs/archive/0040) ----
 // The flipped reference layout: writable root at '/', a READONLY system
 // volume at /usr, /bin -> /usr/bin, /usr/local -> /var/local. The kernel
 // funnels fs RPCs through this exact surface, so EROFS/_lastError here IS
@@ -279,7 +279,7 @@ test('readonly /usr: every mutator on the RPC surface is EROFS', function () {
   assert(f.m.utime('/usr/bin/sh', 1, 2) === null && f.m._lastError === 'EROFS', 'utime');
   var fd = f.m.open('/usr/bin/sh', 0, 0);
   assert(fd !== null, 'O_RDONLY still opens');
-  // EBADF/EINVAL, not EROFS (todos/0376): the fd carries its access mode,
+  // EBADF/EINVAL, not EROFS (docs/archive/0376): the fd carries its access mode,
   // and a readonly volume only hands out O_RDONLY fds — the fd-mode check
   // precedes the volume flag on fd-based ops (POSIX; Linux agrees). EROFS
   // stays the answer for the write-intent opens and path mutations above.
@@ -301,7 +301,7 @@ test('readonly /usr: reads, the /bin symlink, and the /usr/local escape work', f
   assert(names.indexOf('sh') >= 0, 'readdir of the RO volume: ' + names.join(','));
 });
 
-test('moduleKey (todos/0037, #188): immutable on RO volumes, VALIDATED on rw', function () {
+test('moduleKey (docs/archive/0037, #188): immutable on RO volumes, VALIDATED on rw', function () {
   var f = fresh0040();
   var k = f.m.moduleKey('/usr/bin/sh');
   assert(typeof k === 'string' && k.length > 0, 'RO regular file keys');

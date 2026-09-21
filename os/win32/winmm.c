@@ -1,5 +1,5 @@
-/* winmm.c — the winmm veneer slice (todos/0068; real PlaySound todos/0094,
- * design todos/WIN32.md). PlaySound plays WAVs through the 0017 kernel
+/* winmm.c — the winmm veneer slice (docs/archive/0068; real PlaySound docs/archive/0094,
+ * design docs/WIN32.md). PlaySound plays WAVs through the 0017 kernel
  * mixer via the shared event-sound core (os/sounds.h — the scheme store,
  * the WAV parser, and the drain-dry fire-and-forget are all there; wm.c's
  * boot chime is the same code). user32's MessageBeep and MessageBox icon
@@ -22,7 +22,7 @@
  *     a mixer pump never drain, so never trust the queue alone).
  *   - SND_LOOP plays the clip once: looping needs a process-side refill
  *     pump that fire-and-forget deliberately doesn't have (recorded in
- *     todos/0094's closeout; no corpus consumer loops).
+ *     docs/archive/0094's closeout; no corpus consumer loops).
  *   - PlaySound(NULL, ...) / SND_PURGE stops the current sound. */
 
 #undef UNICODE
@@ -53,7 +53,7 @@ BOOL PlaySoundA(LPCSTR sound, HMODULE mod, DWORD flags) {
         /* silent success BY DESIGN (0068: the corpus wave assets are not
          * vendored, and the default ding must not fire per winmine timer
          * tick) — but report ONCE so an inert soundscape is an inventoried
-         * decision, not a mystery (todos/0145 gap #13) */
+         * decision, not a mystery (docs/archive/0145 gap #13) */
         WIN32_UNSUPPORTED("PlaySound SND_RESOURCE: resource waves not "
                           "vendored (silent success, 0068)");
         return TRUE;
@@ -101,7 +101,7 @@ BOOL PlaySoundA(LPCSTR sound, HMODULE mod, DWORD flags) {
     if (!(flags & SND_ASYNC)) {
         /* SND_SYNC: poll the queue, capped at the clip duration + slack —
          * a pumpless kernel (headless boot.js) never drains the ring.
-         * usleep and SDL_Delay block identically here since todos/0224;
+         * usleep and SDL_Delay block identically here since docs/archive/0224;
          * usleep keeps this unit SDL-video-agnostic. */
         int waited = 0;
         while (SDL_GetAudioStreamQueued(s) > 0 && waited < dur_ms + 250) {

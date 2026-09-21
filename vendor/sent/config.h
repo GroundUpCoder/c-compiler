@@ -1,6 +1,6 @@
 /* See LICENSE file for copyright and license details.
  *
- * gucOS port (todos/0119): fontfallbacks are file paths on ONE freetype
+ * gucOS port (docs/archive/0119): fontfallbacks are file paths on ONE freetype
  * face (user override first, then the baked default — term.c's pair);
  * shortcuts are SDL keycodes (SDL3 keycodes ARE the character for
  * printables); the farbfeld filter pipeline is gone — images load

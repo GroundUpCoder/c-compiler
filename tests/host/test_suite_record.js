@@ -1,5 +1,5 @@
 'use strict';
-// The suite-runner's RUN RECORD contract (todos/0339).
+// The suite-runner's RUN RECORD contract (docs/archive/0339).
 //
 // The full browser sweep exceeds a single tool call, so it is always run as two
 // `--filter` halves. Before this contract existed, both halves wrote

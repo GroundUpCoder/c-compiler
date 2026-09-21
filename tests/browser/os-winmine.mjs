@@ -1,4 +1,4 @@
-// winmine browser acceptance (todos/0068, design todos/WIN32.md): boot the
+// winmine browser acceptance (docs/archive/0068, design docs/WIN32.md): boot the
 // reference OS page in headless Chromium, launch the seeded /bin/winmine
 // from the shell, and play through the REAL input path — the menu bar
 // opens on a page mouse click (popup pixels composited), ESC closes it, a

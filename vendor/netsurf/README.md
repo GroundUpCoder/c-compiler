@@ -3,7 +3,7 @@
 The complete NetSurf browser — core plus its seven support libraries —
 vendored for the gucOS toolchain (`compiler.js`).  This is the foundation
 for `/bin/netsurf` (file:, data: and http(s): over the kernel HTTP
-transport since #182, JavaScript on via Duktape; see `todos/OS.md` and
+transport since #182, JavaScript on via Duktape; see `docs/OS.md` and
 the netsurf lanes).  The whole constellation (~850 TUs) builds with compiler.js
 in ~57 s into a ~5.0 MB wasm and runs end-to-end:
 `node vendor/netsurf/smoke.mjs` builds the upstream **monkey** headless
@@ -12,8 +12,8 @@ fetch → hubbub parse → libdom → libcss style → layout → plot, assertin
 the plotted geometry and a clean exit.
 
 **JavaScript is in, and on** (duktape 2.7.0 + the nsgenbind WebIDL
-bindings; `todos/NETSURF-JS.md` Lane A).  DOM mutation repaints (Lane B)
-and the UI event surface is real (Lane C, `todos/0289`): mouse events carry
+bindings; `docs/NETSURF-JS.md` Lane A).  DOM mutation repaints (Lane B)
+and the UI event surface is real (Lane C, `docs/archive/0289`): mouse events carry
 coordinates, capture-phase listeners fire, keys reach the focused element,
 and forms report input/change/submit.  `node vendor/netsurf/smoke-js.mjs`
 is its gate: script execution, console, parse-time `document.write`, click
@@ -43,7 +43,7 @@ Dev).  Licences: MIT (libs), GPLv2 (netsurf core) — each tree keeps its
 | `*/lib.json`, `netsurf-core.json`, `bin.json` | The build graph (below) |
 | `patches/` | Curated content patches (table below) + `pristine.json`, the recorded sha256 of each patched file's pristine residual (what `patchcheck.mjs` checks against) |
 | `update.sh`, `relativize.mjs`, `UPSTREAM.json` | Re-runnable vendor pipeline |
-| `patchcheck.mjs` | Offline patch-record verifier (todos/0423): strict reverse-apply of every `patches/` section + residual manifest + per-change differential.  Runs in the `netsurf-patch` suite and the pre-commit hook; see "Updating" |
+| `patchcheck.mjs` | Offline patch-record verifier (docs/archive/0423): strict reverse-apply of every `patches/` section + residual manifest + per-change differential.  Runs in the `netsurf-patch` suite and the pre-commit hook; see "Updating" |
 | `regen-js-bindings.sh`, `genjs-sources.mjs` | Re-runnable **binding** pipeline (maintainer-only; no build runs it) |
 | `smoke.mjs`, `test/hello.html` | Build + end-to-end smoke recipe (`test/squares.html` + `test/two.html` drive the in-window e2e, `tests/kernel/test_netsurf_e2e.js`) |
 | `smoke-js.mjs`, `demos/` | The JavaScript gate (17 legs incl. the A/B baselines; `--reuse` to skip a fresh link, `--leg N` for one; `test/ptr-*.html` drive the pointer-path legs) |
@@ -114,7 +114,7 @@ netsurf core:
   `tests/kernel/test_netsurf_demos_e2e.js` in-window.
 
 netsurf core — **the Lane B live re-conversion bridge** (JS DOM mutation →
-re-box → reflow → repaint; design in `todos/NETSURF-JS.md`, rationale in
+re-box → reflow → repaint; design in `docs/NETSURF-JS.md`, rationale in
 `logs/2026-07-26/netsurf-lane-b.md`).  Upstream converts a document to
 boxes exactly ONCE, so all of this is "make box construction re-runnable
 on a live content":
@@ -157,7 +157,7 @@ on a live content":
   of the existing `textarea_set_caret`, so a caret can be carried from a
   destroyed widget to its replacement.  Purely additive; upstreamable.
 
-netsurf core — **the Lane C UI event coverage** (todos/0289; rationale in
+netsurf core — **the Lane C UI event coverage** (docs/archive/0289; rationale in
 `logs/2026-07-27/netsurf-lane-c.md`).  Upstream fired exactly three UI
 events at script — `click`, `keydown` and window `load` — and the first
 two carried nothing useful:
@@ -229,11 +229,11 @@ two carried nothing useful:
   by name), `WINDOW KEY … KIND DOWN|UP` and `WINDOW WHEEL`, so the cheap
   gate can drive a press-drag-release and a key release at all.
 
-netsurf core — **the pointer path** (todos/0419 + todos/0420; rationale in
+netsurf core — **the pointer path** (docs/archive/0419 + docs/archive/0420; rationale in
 `logs/2026-07-29/netsurf-pointer-path.md`).  Both defects sit in the tail of
 `html_mouse_action`:
 
-- `include/netsurf/pointerpath.h` (new; todos/0431) — the build-time kill
+- `include/netsurf/pointerpath.h` (new; docs/archive/0431) — the build-time kill
   switches, one per behaviour because the merge carried two:
   `-DNETSURF_NO_CLICK_CANCEL` restores the thrown-away click-dispatch
   result (0419), `-DNETSURF_NO_DYNAMIC_PSEUDO` restores the never-match
@@ -297,7 +297,7 @@ libdom:
   VALUE changed.  So `el.className = 'slab on'` on an element that already
   had a class went on matching the OLD list for the rest of the document's
   life — `.slab.on` never applied, while the same selector on a
-  freshly-created element did (todos/0316, measured in the OS).
+  freshly-created element did (docs/archive/0316, measured in the OS).
   `dom_attr_set_value` is the one choke every value rewrite passes through
   (`setAttribute`, `className`, `classList`, `attr.value`), so it now calls
   the new `_dom_element_classes_changed`.  Upstreamable.  Regression guard:
@@ -415,7 +415,7 @@ resolve patch fuzz, update `shim/testament.h`'s `WT_REVID`, run
 `./update.sh --check` (below), then `node vendor/netsurf/smoke.mjs` must
 pass.
 
-**How the byte-identical claim is enforced (todos/0423).** Two checks, two
+**How the byte-identical claim is enforced (docs/archive/0423).** Two checks, two
 cadences:
 
 - **`./update.sh --check`** is the full proof: it rebuilds the constellation
@@ -437,7 +437,7 @@ cadences:
   pristine residual's sha256 to `patches/pristine.json`, and for any change
   to a component proves the old and new (tree, diff) pairs reduce to the
   same pristine — so a hand-edit that is not mirrored into its `.diff` in
-  the same change cannot land silently (the todos/0407 incident shape).
+  the same change cannot land silently (the docs/archive/0407 incident shape).
 
 A patch edit therefore travels as ONE change: the component tree edit, the
 regenerated `patches/<c>.diff` section, and — only if the pristine base
@@ -475,7 +475,7 @@ itself moved — a `patchcheck.mjs --write-manifest` refresh of
   `setjmp` sites are both the `if (DUK_SETJMP(jb) == 0)` form the
   setjmp/longjmp lowering recognises.  Upstream's own JS surface is
   immature in ways that bound what pages can do; the audit and the
-  follow-on lanes are in `todos/NETSURF-JS.md`.
+  follow-on lanes are in `docs/NETSURF-JS.md`.
 - **libnsfb non-portable backends** (X11/SDL1.2/wayland/VNC/able
   surfaces, 1/24bpp depths) — gucOS renders through its own SDL3-shm
   frontend (Lane 2).

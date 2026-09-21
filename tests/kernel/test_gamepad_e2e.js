@@ -234,7 +234,7 @@ const watchdog = setTimeout(() => {
   // padbox prints one line per gamepad event; `wait %1` after the close
   // request is the sync marker (the QUIT record queues BEHIND every pad
   // record, so padbox's exit proves all pad lines were printed — no fixed
-  // sleeps, per the todos/0171 discipline).
+  // sleeps, per the docs/archive/0171 discipline).
   const r = driveBoot([
     'padbox &',
     'wmctl wait win padbox',

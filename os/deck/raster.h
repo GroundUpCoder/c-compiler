@@ -1,4 +1,4 @@
-/* raster.h — /bin/deck's CPU rasterizer (todos/0284, design
+/* raster.h — /bin/deck's CPU rasterizer (docs/archive/0284, design
  * ~/git/meta/gucos/notes/slide-tool-design.md §1.3).
  *
  * Pure C over libc+math — NO SDL, NO freetype, NO cJSON — so the layer is

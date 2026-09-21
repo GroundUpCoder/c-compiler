@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// R3 (todos/0254): os/cfgstore.h must never silently truncate a config
+// R3 (docs/archive/0254): os/cfgstore.h must never silently truncate a config
 // store. Pre-fix, cfg_set read the user file through ONE bounded
 // fread(text, 1, 8191, uf) and rebuilt the file from that snapshot — so a
 // ~/.config/openwith larger than 8191 bytes lost EVERYTHING past the prefix

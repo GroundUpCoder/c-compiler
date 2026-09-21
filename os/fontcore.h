@@ -1,5 +1,5 @@
 /* fontcore.h — ONE header-only glyph pipeline for the estate's freetype
- * text consumers (todos/0277; the fontchain.h / fileops.h / openwith.h
+ * text consumers (docs/archive/0277; the fontchain.h / fileops.h / openwith.h
  * precedent). Consolidates the chain-probe / tofu / two-tier-cache /
  * glyph-render discipline that gdi32 (os/win32/gdi32.c), term
  * (os/term/term.c) and ksvc (os/ksvc/ksvc.c) each carried a copy of —
@@ -102,7 +102,7 @@ static FcGlyph *fc_cache_get(FcCache *c, unsigned cp, FcRenderFn render, void *c
  * bytes decode as U+FFFD advancing past the bad lead byte only, so
  * byte-indexed callers never desync. (Identical to win32_internal.h's
  * __u8_next, which stays the win32 seam's caret-math copy — folding it
- * here would couple user32's EDIT to freetype; see todos/0277.) */
+ * here would couple user32's EDIT to freetype; see docs/archive/0277.) */
 static unsigned fc_u8_next(const char *s, int len, int *i) {
     unsigned char c = (unsigned char)s[(*i)++];
     if (c < 0x80) return c;
@@ -239,7 +239,7 @@ typedef struct {
 /* ftsynth.c's FT_GlyphSlot_Oblique slant: ~12 degrees. */
 #define FC_ITALIC_SHEAR 0x0366A
 
-/* Load flags for the face's CURRENT ppem (todos/0279). Small sizes get
+/* Load flags for the face's CURRENT ppem (docs/archive/0279). Small sizes get
  * light autohinting (vertical-only stem snapping) — unhinted stems land
  * between pixel boundaries and read as mush below ~16px. The tuned 20px
  * system size stays UNHINTED and must say so EXPLICITLY: with autofit

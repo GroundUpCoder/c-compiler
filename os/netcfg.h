@@ -1,5 +1,5 @@
 /* netcfg.h — the network (HTTP bridge) configuration store, ONE policy in
- * ONE place (ticket #349; todos/NETWORK.md Tier 2.5).
+ * ONE place (ticket #349; docs/NETWORK.md Tier 2.5).
  *
  * Header-only by design (the display.h/saver.h precedent): static functions
  * shared by textual inclusion — os/win32/ctlpanel.c (the Network applet) is

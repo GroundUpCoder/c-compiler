@@ -1,4 +1,4 @@
-// todos/0135 browser acceptance, THE MAC CELL: the EDIT undo record driven
+// docs/archive/0135 browser acceptance, THE MAC CELL: the EDIT undo record driven
 // the way jku hit the bug — a Mac host, where the keyboard-scheme
 // auto-detect (hostkeys=mac -> seedHostKeyScheme -> /etc/keys scheme=macos)
 // binds KA_UNDO to Cmd+Z, not Ctrl+Z. Every other undo test runs the

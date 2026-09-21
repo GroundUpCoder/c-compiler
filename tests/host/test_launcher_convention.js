@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Package-launcher convention lint (todos/0444, ticket #189).
+// Package-launcher convention lint (docs/archive/0444, ticket #189).
 //
 // Every inline /bin/sh launcher a package ships must be SPAWN-FREE: the old
 // dirname-of-realpath self-location convention cost four processes per launch

@@ -103,8 +103,8 @@ if _mswindows:
                     "CREATE_DEFAULT_ERROR_MODE", "CREATE_BREAKAWAY_FROM_JOB"])
 else:
     if _can_fork_exec:
-        # gucOS (todos/0340): the process model is owner-brokered posix_spawn —
-        # fork() is deliberately absent (todos/OS.md), so _posixsubprocess can
+        # gucOS (docs/archive/0340): the process model is owner-brokered posix_spawn —
+        # fork() is deliberately absent (docs/OS.md), so _posixsubprocess can
         # never be built here. _can_fork_exec stays True because gucOS DOES
         # create processes (it is not the emscripten/wasi "no processes at all"
         # case that flag was written for); only this one import is optional.
@@ -729,7 +729,7 @@ def _use_posix_spawn():
         # gucOS has no fork(), so posix_spawn is not an optimization here — it
         # is the only process-creation primitive there is. The owner-side
         # kernel validates the spec and reports failures to the parent
-        # synchronously (todos/KERNEL.md), which is exactly the error-reporting
+        # synchronously (docs/KERNEL.md), which is exactly the error-reporting
         # contract this function exists to test for. Checked before the
         # environment override on purpose: _PYTHON_SUBPROCESS_USE_POSIX_SPAWN=0
         # cannot conjure a fork() to fall back to.

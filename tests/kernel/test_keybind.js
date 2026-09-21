@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The kernel key-grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3, CHUNK 1
+// The kernel key-grab table (docs/KEYBINDING-OVERRIDE-SYSTEM.md §3, CHUNK 1
 // mechanism) without wasm: a scripted WM client (test_wm_policy.js plumbing)
 // drives /run/wm.sock and injects raw key events via kernel.wmKey. Covers:
 //   - GRAB_SET installs a table; a matching chord emits EV_HOTKEY {token,

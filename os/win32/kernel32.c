@@ -1,5 +1,5 @@
-/* kernel32.c — the kernel32 subset over POSIX (todos/0059, design
- * todos/WIN32.md "Coexistence with POSIX").
+/* kernel32.c — the kernel32 subset over POSIX (docs/archive/0059, design
+ * docs/WIN32.md "Coexistence with POSIX").
  *
  * Pure user-space translation, the Wine/Cygwin model: HANDLE wraps an fd
  * (or a pid / find-state / mapping object), CreateFile->open,
@@ -373,7 +373,7 @@ HANDLE GetStdHandle(DWORD which) {
 
 /* ============================================================== files */
 
-/* host.js open() O_DIRECTORY bit (Linux value; todos/0442) — the libc
+/* host.js open() O_DIRECTORY bit (Linux value; docs/archive/0442) — the libc
  * headers expose no O_DIRECTORY constant yet, so the raw bit rides here.
  * A read-only open of a directory with the bit succeeds as a real dir fd
  * (fstat/close work; read() answers EISDIR, like ReadFile on a Windows
@@ -430,7 +430,7 @@ HANDLE CreateFileW(LPCWSTR name, DWORD acc, DWORD share, void *sa,
                                       * a read-only volume is EROFS, but
                                       * Windows OPEN_ALWAYS opens existing
                                       * files on write-protected media fine
-                                      * (notepad viewing /usr, todos/0202) */
+                                      * (notepad viewing /usr, docs/archive/0202) */
         if (!existed) fl |= O_CREAT;
         break;
     case TRUNCATE_EXISTING: fl |= O_TRUNC; break;
@@ -1412,7 +1412,7 @@ static char g_argv0[512];
 static WCHAR g_cmdlineW[1024];
 static int g_procInfoInit;
 
-/* Identity via the synthetic /proc (todos/0043): argv rides
+/* Identity via the synthetic /proc (docs/archive/0043): argv rides
  * /proc/<pid>/cmdline in Linux NUL-separated format. */
 static void proc_info_init(void) {
     if (g_procInfoInit) return;

@@ -5,8 +5,8 @@
 //      gcc both emit a valid empty object, and a port cannot use an upstream
 //      source list without it.
 // EXPECT: ok
-// KNOWN-BUG: todos/0322 (pinned xfail via config.json "knownBug"). Found by the
-//      todos/0313 CPython probe: CPython 3.13.5 has four such files in its core
+// KNOWN-BUG: docs/archive/0322 (pinned xfail via config.json "knownBug"). Found by the
+//      docs/archive/0313 CPython probe: CPython 3.13.5 has four such files in its core
 //      build (Python/jit.c, optimizer.c, optimizer_analysis.c,
 //      optimizer_symbols.c — Tier-2 JIT, compiled unconditionally by the
 //      Makefile and empty unless _Py_TIER2 is set). Verified with a positive

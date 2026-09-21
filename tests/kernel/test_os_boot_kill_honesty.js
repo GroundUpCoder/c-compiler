@@ -52,7 +52,7 @@ function check(name, cond, extra) {
 const BARE_NULL = /^ {2}FAIL .* {2}null/m;
 
 // Heavy-lock refusals inside the target are INCONCLUSIVE, not red — propagate
-// them as our own exit 3, the driveBoot convention (todos/0342). Under the
+// them as our own exit 3, the driveBoot convention (docs/archive/0342). Under the
 // kernel suite this never fires (CC_HEAVY_LOCK_PID joins boots re-entrantly);
 // it protects a standalone hand-run racing a live heavy suite.
 function bailOnLockRefusal(out, err) {

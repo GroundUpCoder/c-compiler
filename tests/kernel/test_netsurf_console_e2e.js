@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// todos/0421 — the page console reaches the tty, IN THE OS.
+// docs/archive/0421 — the page console reaches the tty, IN THE OS.
 //
 // A page author inside gucOS had no evidence channel at all: the gucOS
 // window table carried no `console_log`, so every console call ended at
@@ -30,7 +30,7 @@
 //   - `2>FILE` really is the off-switch: the same page leaves the tty
 //     clean and lands every line in the file instead.
 //
-// Uncaught exceptions ARE asserted here since ticket #177 (todos/0424):
+// Uncaught exceptions ARE asserted here since ticket #177 (docs/archive/0424):
 // dukky's error sites route them through dukky_report_exception →
 // browser_window_console_log(BW_CS_SCRIPT_ERROR), so a thrown click
 // listener prints `js: exception: error: ...` on the tty.  The leg

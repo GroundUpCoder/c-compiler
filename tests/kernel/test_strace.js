@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// strace (todos/0046) protocol semantics without wasm: fake workers over a
+// strace (docs/archive/0046) protocol semantics without wasm: fake workers over a
 // brokered kernel (test_kernel.js pattern), the test playing both the tracer
 // (owns the pipe, reads decoded lines) and the tracee (issues RPCs). Covers:
 // spec.trace validation (pipe write end only), request+result decode incl.

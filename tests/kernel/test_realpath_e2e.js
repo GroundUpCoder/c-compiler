@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// realpath(3) / readlink -f resolve symlinks PHYSICALLY (todos/0263, gucOS #76).
+// realpath(3) / readlink -f resolve symlinks PHYSICALLY (docs/archive/0263, gucOS #76).
 //
 // The bug: the RemoteFS-flavor realpath import (the one a booted gucOS uses)
 // returned the LEXICAL normalizer (_resolvePath — collapse ./../// but keep

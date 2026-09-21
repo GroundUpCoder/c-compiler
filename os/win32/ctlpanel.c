@@ -1,4 +1,4 @@
-/* ctlpanel.c — the Control Panel (todos/0048 v1; todos/0089 v2 applet hub).
+/* ctlpanel.c — the Control Panel (docs/archive/0048 v1; docs/archive/0089 v2 applet hub).
  *
  * v2 shape: the main window is the Win95 Control Panel FOLDER — a grid of
  * labelled applet icons — and every applet opens as its own sibling
@@ -18,7 +18,7 @@
  *               negative queries). `wmctl click "Vol +"`/"Vol -" steps,
  *               settext EDIT:0 + click Set goes absolute, the label reads
  *               back via gettext — the e2e drives exactly that.
- *   Sounds    — the event-sound scheme (todos/0094, os/sounds.h): enable/
+ *   Sounds    — the event-sound scheme (docs/archive/0094, os/sounds.h): enable/
  *               mute checkbox (snd_set_mute writes just the mute key to
  *               ~/.config/sounds — cfgstore.h delta) + a Test button
  *               (PlaySound SystemDefault). Distinct from Sound: that is
@@ -29,30 +29,30 @@
  *               radios choose the VT2 zoom factor (auto/3x/2x/1x/0.75x/
  *               0.5x — sub-1x = denser, more fits) and apply LIVE through
  *               the display cfgstore -> kernel-worker watch -> page
- *               bridge. Wallpaper still lands with todos/0049.
+ *               bridge. Wallpaper still lands with docs/archive/0049.
  *   Date/Time — live clock over SetTimer/WM_TIMER (the 0068 timer).
  *   Screen Saver — the 0096 saver config (os/saver.h): pick None/Marquee/
  *               Starfield (radios apply on click), set the idle timeout
  *               (Apply), Preview raises it now (WMP SAVER — the wmctl-saver
  *               gesture; /bin/wm answers, so no WM = silent no-op).
  *   Network   — the Tier 2.5 HTTP bridge switch (ticket #349, os/netcfg.h,
- *               todos/NETWORK.md): enable/disable checkbox + bridge URL
+ *               docs/NETWORK.md): enable/disable checkbox + bridge URL
  *               (both cfgstore `net` delta-writes; the kernel embedder
  *               watches the store, so the toggle retargets the next
  *               transfer live — no reboot) + a Test button that fetches
  *               the bridge's /health over the kernel HTTP primitive. The
  *               copy states the seam honestly: the bridge is a program on
  *               the HOST machine the user runs themselves.
- *   Default Programs — the command-alternatives picker (todos/0338 plus
- *               todos/0130's picker leg, over os/cmdalt.h): WHICH
+ *   Default Programs — the command-alternatives picker (docs/archive/0338 plus
+ *               docs/archive/0130's picker leg, over os/cmdalt.h): WHICH
  *               implementation a dispatched command NAME runs. Two lists
  *               (the keys, then the selected key's candidates), Set as
  *               default / Use default writing the SAME ~/.config/cmdalt
  *               delta `cmdalt set`/`cmdalt reset` write, plus the
  *               PATH-shadow warning — this is the screen a user whose
  *               switch "did nothing" is standing on. File associations,
- *               the other half of the Windows applet, stay todos/0130's.
- * Mouse applet: recorded in todos/0089, build opportunistically.
+ *               the other half of the Windows applet, stay docs/archive/0130's.
+ * Mouse applet: recorded in docs/archive/0089, build opportunistically.
  */
 
 #include <windows.h>
@@ -71,7 +71,7 @@
 #include "../cmdalt.h"
 #include "../wm_proto.h"
 
-/* A config-store write failed — read-only or full $HOME (todos/0234).
+/* A config-store write failed — read-only or full $HOME (docs/archive/0234).
  * Every applet uses this one discipline: revert the control to the
  * stored state, then say WHY, so the UI never shows a setting that
  * didn't actually stick. */
@@ -83,7 +83,7 @@ static void store_fail(HWND owner, const char *what) {
 
 __import int __audio_gain(int gain);             /* host.js; -1 = no mixer */
 
-/* The kernel HTTP primitive (todos/0172, fd-shaped todos/0417) — the
+/* The kernel HTTP primitive (docs/archive/0172, fd-shaped docs/archive/0417) — the
  * Network applet's Test button drives it directly (no curl veneer link). */
 __import int __http_open(const char *method, const char *url, const char *headers,
                          const void *body, int blen, int headers_ms, int idle_ms);
@@ -280,7 +280,7 @@ static LRESULT CALLBACK system_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
  * watches the store and re-posts the value to the page, which reflows the
  * desktop LIVE — sub-1x factors render MORE logical pixels than the pane
  * (everything smaller, more fits), >1x fewer (everything bigger).
- * Wallpaper/appearance still arrive with todos/0049. */
+ * Wallpaper/appearance still arrive with docs/archive/0049. */
 
 #define ID_DPBASE 600                            /* radios in DP_OPT order */
 
@@ -295,7 +295,7 @@ static const struct { const char *label; const char *value; } DP_OPT[] = {
 #define DP_N ((int)(sizeof DP_OPT / sizeof DP_OPT[0]))
 
 /* Sync the radios to the STORED config — WM_CREATE and the write-failure
- * reverts (the saver_sync discipline, todos/0234). A numeric value snaps
+ * reverts (the saver_sync discipline, docs/archive/0234). A numeric value snaps
  * to the nearest offered factor (the page snaps the same way, so the UI
  * shows what a hand-edited store effectively does); non-numeric = auto. */
 static void dp_sync(HWND h) {
@@ -326,7 +326,7 @@ static LRESULT CALLBACK display_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                            WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
                            20, 34 + i * 30, 272, 28, h,
                            (HMENU)(ID_DPBASE + i), NULL, NULL);
-        CreateWindowEx(0, "STATIC", "Wallpaper arrives with todos/0049.",
+        CreateWindowEx(0, "STATIC", "Wallpaper arrives with docs/archive/0049.",
                        WS_CHILD | WS_VISIBLE, 16, 228, 292, 28, h, NULL, NULL, NULL);
         dp_sync(h);
         return 0;
@@ -393,7 +393,7 @@ static const char *SV_RADIO[3] = { "none", "marquee", "starfield" };
 
 /* Sync the radios + timeout edit to the STORED config — shared by
  * WM_CREATE and the write-failure reverts (the UI must fall back to what
- * the store really holds, todos/0234). */
+ * the store really holds, docs/archive/0234). */
 static void saver_sync(HWND h) {
     sv_cfg c;
     sv_get(&c);
@@ -539,7 +539,7 @@ static int kb_effective(const ks_cfg *c, int idx, KsChord out[2]) {
 
 /* Sync the radios + checkbox + the chord listing to the STORED config —
  * WM_CREATE, every successful write, and the write-failure reverts (the
- * saver_sync discipline, todos/0234). */
+ * saver_sync discipline, docs/archive/0234). */
 static void kb_sync(HWND h) {
     ks_cfg c;
     ks_get(&c);
@@ -627,14 +627,14 @@ static LRESULT CALLBACK keyboard_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
-/* ------------------- Default Programs (todos/0130 picker leg, todos/0338)
+/* ------------------- Default Programs (docs/archive/0130 picker leg, docs/archive/0338)
  *
  * The COMMAND half of Windows' own Default Programs split ("set your
  * default programs" vs "associate a file type"): one row per cmdalt key
  * with its effective value, the candidate implementations for the selected
  * key, and Set as default / Use default over the SAME store `cmdalt set`
  * writes (os/cmdalt.h — this applet is UI over that policy, it forks
- * nothing). The file-association half stays todos/0130's.
+ * nothing). The file-association half stays docs/archive/0130's.
  *
  * The warning row is the third of the three PATH-shadow diagnostics: this
  * is the exact screen a user whose switch "did nothing" is standing on. */
@@ -796,7 +796,7 @@ static LRESULT CALLBACK defprog_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 #define ID_NETDET  805
 
 /* Sync the controls to the STORED config — WM_CREATE and the
- * write-failure reverts (the saver_sync discipline, todos/0234). */
+ * write-failure reverts (the saver_sync discipline, docs/archive/0234). */
 static void net_sync(HWND h) {
     nc_cfg c;
     nc_get(&c);
@@ -1265,7 +1265,7 @@ static LRESULT CALLBACK hub_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
-/* `ctlpanel <Applet>` opens that applet alongside the hub (todos/0091 —
+/* `ctlpanel <Applet>` opens that applet alongside the hub (docs/archive/0091 —
  * the desktop context menu's Display Properties shortcut). Names match
  * the icon labels, case-insensitively. */
 static int applet_by_name(const char *name) {
@@ -1306,7 +1306,7 @@ int main(int argc, char **argv) {
                            16 + HUB_ROWS * CELL_H - (CELL_H - ICON_H),
                            NULL, NULL, NULL, NULL);
     if (!g_hub) return 1;
-    if (argc > 1) open_applet(applet_by_name(argv[1]));   /* todos/0091 */
+    if (argc > 1) open_applet(applet_by_name(argv[1]));   /* docs/archive/0091 */
     MSG m;
     while (GetMessage(&m, NULL, 0, 0)) {
         TranslateMessage(&m);

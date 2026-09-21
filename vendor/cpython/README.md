@@ -2,21 +2,21 @@
 
 **Upstream pin**: `python/cpython`, tag **v3.13.5** (`Include/patchlevel.h`:
 `PY_VERSION "3.13.5"`).
-**Design**: `todos/CPYTHON.md` is normative — module-selection rule, extension
-set, prefix layout, package shape. **Execution ticket**: `todos/0340`.
+**Design**: `docs/CPYTHON.md` is normative — module-selection rule, extension
+set, prefix layout, package shape. **Execution ticket**: `docs/archive/0340`.
 **Probe narrative**: `logs/2026-07-28/m1-clang-stdlib-design.md`;
 landing log: `logs/2026-07-28/0340-cpython-vendor-tree.md`.
 
 Two consumers, one tree. The clang toolchain (`cc2wasm`, via the sibling
 `clang-simplified` repo's `wasm/image/manifest.json`) builds it today; the
-`compiler.js` build reads `bin.json` and is gated on `todos/0336`. Everything
+`compiler.js` build reads `bin.json` and is gated on `docs/archive/0336`. Everything
 here except the two clang-only items in §4 is shared.
 
 **Honesty, verbatim, wherever this port is described**: there are no sockets
 (`_socket` is not built), so **`asyncio` does not import and is not
 shipping-functional**; no `ssl`, no `https`, no `pip`; and **no `ctypes`,
 permanently** — gucOS has no `dlopen` and that is a settled platform decision
-(`todos/OS.md`), not a backlog item.
+(`docs/OS.md`), not a backlog item.
 
 ## 1. Layout
 
@@ -76,7 +76,7 @@ identical:
 All four rows were built by the same script into the same output path, so the
 deltas are like-for-like. (They are ~14 KB below the shipped payload's
 7,636,885: the published build adds `HAVE_PIPE`/`HAVE_DUP`/`HAVE_DUP2` and
-links from a different output path, which `todos/0349` records as embedded in
+links from a different output path, which `docs/archive/0349` records as embedded in
 the payload. Comparing sizes across directories measures the path — comparing
 the deltas within this series does not.)
 
@@ -100,7 +100,7 @@ Complete. Everything else in this tree is byte-for-byte upstream v3.13.5.
 | file | patch | why |
 |---|---|---|
 | `Modules/expat/{xmlparse,xmlrole,xmltok}.c` | `#undef PREFIX` prelude | the build defines `-DPREFIX="/usr/local"` for `Modules/getpath.c`; expat uses `PREFIX` as its own name-mangling macro, and the command line wins. (`xmltok.c` has an upstream `#undef PREFIX`, but it sits *after* the first uses.) |
-| `Modules/fcntlmodule.c` | `(void *)(intptr_t)` cast at the `ioctl` call + `<stdint.h>` | POSIX declares `ioctl` variadic; this libc declares `ioctl(int, unsigned long, void *)`. Whether the libc should go variadic is `todos/0325` Group D; this is the only call site. |
+| `Modules/fcntlmodule.c` | `(void *)(intptr_t)` cast at the `ioctl` call + `<stdint.h>` | POSIX declares `ioctl` variadic; this libc declares `ioctl(int, unsigned long, void *)`. Whether the libc should go variadic is `docs/archive/0325` Group D; this is the only call site. |
 | `Modules/getbuildinfo.c` | `#undef __DATE__` / `#undef __TIME__` prelude | overlay@1 requires byte-reproducible payloads. This replaces the recipe's `-DDATE`/`-DTIME` pin, which could not survive co-linking a library: zlib's `inflate_mode` enum has a member named `TIME`. Same result — the banner reads `xx/xx/xx, xx:xx:xx`. |
 | `Modules/posixmodule.c` | add `HAVE_POSIX_SPAWN` to the two `parse_arglist`/`parse_envlist`/`free_string_array` guards | upstream gates those helpers on the execv/spawnv/RTP families, so a `posix_spawn`-without-`exec` configuration — i.e. gucOS — compiles `os.posix_spawn` against three functions the preprocessor removed. |
 | `Lib/subprocess.py` | guarded `_posixsubprocess` import; `_use_posix_spawn()` returns True on `gucos`; `_POSIX_SPAWN_SEARCHES_PATH` (use `os.posix_spawnp` for a bare program name); explicit `OSError(ENOTSUP)` where the fork branch would have been | §6 |
@@ -115,12 +115,12 @@ wasi-sdk configure produced:
 | knob | value | why |
 |---|---|---|
 | `HAVE_POSIX_SPAWN`, `HAVE_POSIX_SPAWNP` | 1 | the libc ships the whole family; this is gucOS's *only* process-creation primitive |
-| `HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCLOSEFROM_NP` | 1 | added to the libc by `todos/0340`; it is what makes CPython's `close_fds=True` **default** reachable without `fork` |
+| `HAVE_POSIX_SPAWN_FILE_ACTIONS_ADDCLOSEFROM_NP` | 1 | added to the libc by `docs/archive/0340`; it is what makes CPython's `close_fds=True` **default** reachable without `fork` |
 | `HAVE_SIGSET_T` | 1 | was never emitted at all, so `posix_spawn(setsigdef=…)` raised `NotImplementedError` — which every `subprocess.run()` hits via its default `restore_signals=True` |
 | `HAVE_SYS_WAIT_H`, `HAVE_WAITPID` | 1 | the libc has both; without them `os.waitpid` is absent and `subprocess`, `venv`, `webbrowser`, `pty` all fail to import |
-| `HAVE_PIPE`, `HAVE_DUP`, `HAVE_DUP2` | 1 | gucOS pipes are real kernel objects with an SPSC fast path (`todos/0181`). Without `os.pipe` every `subprocess.run(capture_output=True)` dies in `_get_handles` |
+| `HAVE_PIPE`, `HAVE_DUP`, `HAVE_DUP2` | 1 | gucOS pipes are real kernel objects with an SPSC fast path (`docs/archive/0181`). Without `os.pipe` every `subprocess.run(capture_output=True)` dies in `_get_handles` |
 | `HAVE_KILL`, `HAVE_KILLPG` | 1 | real, kernel-routed; `Popen.terminate()`/`kill()` need `os.kill` |
-| `HAVE_PTY_H`, `HAVE_OPENPTY` | 1 | gucOS ptys are real kernel objects (`todos/0020`) |
+| `HAVE_PTY_H`, `HAVE_OPENPTY` | 1 | gucOS ptys are real kernel objects (`docs/archive/0020`) |
 | `HAVE_TERMIOS_H` | 1 | the `termios` extension is now built |
 
 Deliberately still off: `HAVE_EXECV`/`HAVE_FORK` (they do not exist here),
@@ -133,7 +133,7 @@ error, which beats accepting an argument and ignoring it).
 dialect directive; clang takes `-Wl,-z,stack-size=8388608` instead) and
 `-Dwcstol=__ccprobe_wcstol`, which keeps the shim's `wcstol` from colliding
 with the sibling's `libc-ext/__wcsto.c` — both projects independently filled
-the same `compiler.js` hole (`todos/0325` Group A retires both copies).
+the same `compiler.js` hole (`docs/archive/0325` Group A retires both copies).
 
 **The flag list is written twice** — `bin.json` for `compiler.js`, the sibling
 manifest's `cc2wasmFlags` for `cc2wasm` — because the two build systems have
@@ -152,7 +152,7 @@ macholib helpers).
 
 ## 6. `subprocess` without `fork`
 
-gucOS's process model *is* owner-brokered `posix_spawn` (`todos/OS.md` — `fork`
+gucOS's process model *is* owner-brokered `posix_spawn` (`docs/OS.md` — `fork`
 is deliberately absent), and `subprocess.py` already contains a complete
 `os.posix_spawn` path. Four things had to line up, and all four are in this
 tree rather than papered over:
@@ -169,7 +169,7 @@ tree rather than papered over:
    `os.posix_spawnp`, which searches `PATH`. Upstream routes that case to
    `fork_exec` purely because `os.posix_spawn` does not.
 4. `close_fds=True` — CPython's **default** — needs `POSIX_SPAWN_CLOSEFROM`.
-   `todos/0340` implemented it for real: `posix_spawn_file_actions_addclosefrom_np`
+   `docs/archive/0340` implemented it for real: `posix_spawn_file_actions_addclosefrom_np`
    in the libc travels as fd-action op 3, and the kernel (which is the side that
    actually knows which descriptors are open) enumerates and drops them at
    spawn. It is not a Python-side workaround and it benefits every gucOS
@@ -193,7 +193,7 @@ Against this tree, no environment variables set, binary at `<prefix>/bin/`:
 - Binary **7,636,885 B**, gzip -9 **2,254,132 B**; the gucman package is
   **4,603,396 B** downloaded / **17,557,740 B** installed over 552 files.
 - **Byte-reproducible**: two full publishes into the same path produced the
-  same sha256 (`7daa8881…`). Payloads embed their build path (`todos/0349`), so
+  same sha256 (`7daa8881…`). Payloads embed their build path (`docs/archive/0349`), so
   that comparison is only meaningful built in the same directory — it was.
 - All 42 legs of `tests/kernel/test_python_clang_e2e.js` pass IN-OS, including
   the same 166/180 sweep over the kernel's RemoteFS.

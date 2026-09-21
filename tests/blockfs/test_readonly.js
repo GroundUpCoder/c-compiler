@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Read-only volumes + sealed blobs (todos/0040): createV4({readonly}) must
+// Read-only volumes + sealed blobs (docs/archive/0040): createV4({readonly}) must
 // refuse every mutating op with EROFS (and never write through the store —
 // ReadOnlyStore is the backstop), while reads stay fully functional. The
 // seal (sealVolume/verifySeal + the fsck_v4 hash check) is the offline
@@ -119,7 +119,7 @@ test('every mutating op returns EROFS', function () {
   erofs(ro, 'utime', ro.utime('/bin/tool', 1, 2));
   var fd = ro.open('/bin/tool', O_RDONLY, 0);
   assert(fd !== null, 'O_RDONLY open still works');
-  // EBADF, not EROFS (todos/0376): the fd carries its access mode now, and
+  // EBADF, not EROFS (docs/archive/0376): the fd carries its access mode now, and
   // the only fd a readonly volume can hand out is O_RDONLY — POSIX puts the
   // fd-mode check before the mount flag (Linux agrees: write(2) on an
   // O_RDONLY fd is EBADF on any mount). EROFS stays the answer for

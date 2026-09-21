@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// todos/0275 acceptance: the ksvc kernel-C text service — label text in the
+// docs/archive/0275 acceptance: the ksvc kernel-C text service — label text in the
 // HEADLESS composite (`wmctl shot screen`), rasterized by the same
 // /usr/lib/ksvc.wasm blob the browser compositor uses.
 //

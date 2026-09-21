@@ -1,5 +1,5 @@
 /* saver.h — the screensaver configuration store, ONE policy in ONE place
- * (todos/0096).
+ * (docs/archive/0096).
  *
  * Header-only by design (the openwith.h/sounds.h precedent): static
  * functions shared by textual inclusion — os/wm.c (the idle-triggered saver

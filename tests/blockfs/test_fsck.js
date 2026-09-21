@@ -121,7 +121,7 @@ test('two inodes sharing one extent (double-allocation) is caught', function () 
   caught(r.store, 'double-allocation');
 });
 
-test('duplicate dirent names are caught (todos/0375)', function () {
+test('duplicate dirent names are caught (docs/archive/0375)', function () {
   // Positive control for the name-uniqueness invariant: open(O_CREAT)
   // through a dangling symlink used to append a second same-named dirent
   // and fsck passed the image clean. Build the corruption by raw surgery

@@ -11,13 +11,13 @@
 //   - SIGKILL leaks nothing: the kernel owns the descriptions, so the
 //     hog's unlinked-open file is reclaimed — fsck proves the store clean
 //   - tty reads arrive via deferred RPCs (brokered mode has no stdin ring)
-//   - TIOCGWINSZ sees tty.resize() over the brokered fs (todos/0011: the
+//   - TIOCGWINSZ sees tty.resize() over the brokered fs (docs/archive/0011: the
 //     ioctl guard read _stdinSab — never set in brokered mode — so every
 //     brokered process saw 80x24 forever; vi was the first to notice)
-//   - fsync/fdatasync work on brokered fds (todos/0036: the env's inline
+//   - fsync/fdatasync work on brokered fds (docs/archive/0036: the env's inline
 //     fsync used the BlockFS-private store handle, crashing the worker —
 //     sqlite3's journal fsync was the first caller)
-//   - fds carry their access mode (todos/0376): write() on an O_RDONLY fd
+//   - fds carry their access mode (docs/archive/0376): write() on an O_RDONLY fd
 //     used to SILENTLY MUTATE the file, read() on an O_WRONLY fd disclosed
 //     it — EBADF both, in the FS_OPEN arm and the spawn fd-action OPEN arm
 //     (the two kernel _makeOfd('file') sites)
@@ -162,7 +162,7 @@ int main(void) {
            fsync(fd), fdatasync(fd), fsync(1), fsync(77) == 0 ? 1 : 0);
     close(fd);
 
-    /* 10: access-mode enforcement (todos/0376): the fd carries flags &
+    /* 10: access-mode enforcement (docs/archive/0376): the fd carries flags &
        O_ACCMODE from open(). write() on O_RDONLY is EBADF and must leave
        the bytes untouched (the corruption half); read() on O_WRONLY is
        EBADF (the disclosure half); the right directions still flow. */
@@ -203,7 +203,7 @@ int main(void) {
        disagree, so this is the kernel-side twin of the BlockFS case in
        tests/blockfs/test_posix.js. The truncate is NOT write access: the
        kernel OFD still carries accmode 0, so write() on the fd is EBADF
-       (todos/0376) and the file stays empty. */
+       (docs/archive/0376) and the file stays empty. */
     fd = open("/otrunc.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     write(fd, "HELLO WORLD", 11);
     close(fd);
@@ -290,7 +290,7 @@ int main(int argc, char **argv) {
         return strcmp(cwd, "/sub") == 0 ? 5 : 3;
     }
     if (!strcmp(what, "modewrite")) {
-        /* fd 4 arrived via a spawn fd-action OPEN with O_RDONLY (todos/0376):
+        /* fd 4 arrived via a spawn fd-action OPEN with O_RDONLY (docs/archive/0376):
            writing it must be EBADF; reading it must still work. */
         errno = 0;
         int wn = write(4, "EVIL", 4);

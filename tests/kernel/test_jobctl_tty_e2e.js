@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Interactive job control e2e (the HANDOFF lingering item; machinery from
-// todos/0003, harness from todos/0011): Ctrl-Z / fg / bg / jobs / kill %1
+// docs/archive/0003, harness from docs/archive/0011): Ctrl-Z / fg / bg / jobs / kill %1
 // driven through the REAL stack — boot.js --tty-out, keystrokes through the
 // kernel tty line discipline into busybox hush's job control, `cat` as the
 // foreground/background tty reader.

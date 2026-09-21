@@ -3,7 +3,7 @@
    Shift+A must deliver key = SDLK_A ('A' = 65) with SDL_KMOD_SHIFT set, and
    plain a delivers SDLK_A's lowercase sibling 'a' (97). This differs from
    SDL2 (which delivered the unshifted keysym) — a past review "fixed" this
-   host to SDL2 semantics; todos/SDL3.md documents why that was a false
+   host to SDL2 semantics; docs/SDL3.md documents why that was a false
    positive. Paints by the last KEY_DOWN:
      key 'A' + shift → green   (correct SDL3 shifted delivery)
      key 'a' + shift → red     (SDL2 semantics — the wrong "fix")

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SDL_WaitEvent / SDL_WaitEventTimeout end-to-end (todos/0161, IDLE-POWER
+// SDL_WaitEvent / SDL_WaitEventTimeout end-to-end (docs/archive/0161, IDLE-POWER
 // Stage 2): a REAL C SDL program compiled by compiler.js runs as a
 // worker_thread under the kernel and parks on the OS input ring via the
 // __sdl_pump_wait seam (host.js pumpWait — the same futex user32's blocking
@@ -56,7 +56,7 @@ int main(void) {
     if (!w) { printf("NOWIN\\n"); return 3; }
     signal(SIGUSR1, on_usr1);
 
-    /* todos/0256: creating the window takes focus and the owner focus pair
+    /* docs/archive/0256: creating the window takes focus and the owner focus pair
        rides the ring — consume the initial FOCUS_GAINED (and pin that it
        arrives) so the park legs below start from a drained queue. */
     got = SDL_WaitEventTimeout(&ev, 2000);
@@ -152,7 +152,7 @@ const watchdog = setTimeout(() => {
 
   // Leg 1: zero-timeout poll + full-timeout park.
   await waitOut('L1 ');
-  check('create-steal FOCUS_GAINED arrived (todos/0256) and was consumed',
+  check('create-steal FOCUS_GAINED arrived (docs/archive/0256) and was consumed',
     field('FG', 'got') === 1 && field('FG', 'isfg') === 1, line('FG'));
   check('poll0: zero timeout returns immediately, false', /poll0=0/.test(out), line('READY'));
   check('L1: timeout park returns false', field('L1', 'got') === 0, line('L1'));

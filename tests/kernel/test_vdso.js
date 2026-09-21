@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// vDSO page semantics (todos/0179): kernel-written, process-read state
+// vDSO page semantics (docs/archive/0179): kernel-written, process-read state
 // PUBLISHED on the kernel page's tail behind one seqlock word instead of
 // served over RPC (KERNEL.md "What may leave the kernel"). Fake-worker
 // harness (test_kernel.js's): the kernel runs on THIS thread, so any

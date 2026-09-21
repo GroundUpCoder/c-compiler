@@ -1,4 +1,4 @@
-/* commctrl.h — comctl32 surface for the port corpus (todos/0060).
+/* commctrl.h — comctl32 surface for the port corpus (docs/archive/0060).
  * Declaration-only; the status bar (notepad) is the first real demand. */
 #pragma once
 
@@ -56,7 +56,7 @@ HWND CreateStatusWindowA(LONG style, LPCSTR text, HWND parent, UINT id);
 #define ICC_LISTVIEW_CLASSES 0x00000001
 
 /* ==================================================================
- * SysHeader32 + SysListView32 (report view), todos/0370. Struct layouts
+ * SysHeader32 + SysListView32 (report view), docs/archive/0370. Struct layouts
  * are the CLASSIC (pre-IE4) shapes — the corpus compiles against THESE
  * headers, so the layout is ours to pin. A/W generic per the corpus
  * convention (implemented entries are ANSI generics; W variants carry

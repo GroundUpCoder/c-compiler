@@ -2,7 +2,7 @@
 //      parenthesized non-type operand, the parser returned the sizeof node
 //      immediately instead of letting postfix operators keep binding to the
 //      operand — rejecting the suckless LEN(a) = sizeof(a) / sizeof(a)[0]
-//      idiom (hit vendoring sent, todos/0119).
+//      idiom (hit vendoring sent, docs/archive/0119).
 // C11: 6.5.3 (unary-expression: `sizeof unary-expression`) + 6.5.2 (a
 //      postfix-expression can be `( expression )` followed by [] . -> ):
 //      sizeof(a)[0] parses as sizeof((a)[0]), NOT (sizeof(a))[0].

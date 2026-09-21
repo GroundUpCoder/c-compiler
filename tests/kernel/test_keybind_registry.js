@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The keys.h named-action registry + override resolution + chord parse/format
-// (todos/KEYBINDING-OVERRIDE-SYSTEM.md §2/§5, CHUNK 2 policy layer). keys.h is
+// (docs/KEYBINDING-OVERRIDE-SYSTEM.md §2/§5, CHUNK 2 policy layer). keys.h is
 // SDL-header-free POSIX, so the logic is exercised DIRECTLY by a native-C probe
 // (keybind_registry_probe.c) — no boot, no wasm — compiled with clang and run
 // here. The probe prints ok/FAIL lines + exits with its failure count; this

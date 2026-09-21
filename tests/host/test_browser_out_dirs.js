@@ -11,7 +11,7 @@
 // that `git add -A` swept the churn into unrelated commits (d48012a2).
 //
 // The rule this test enforces: NO file under tests/browser/ may name a
-// committed journal/doc directory (logs/, todos/, docs/, old/) in a string
+// committed journal/doc directory (logs/, docs/, old/) in a string
 // literal. Test artifacts belong under gitignored scratch — build/ (the
 // suite convention, e.g. build/test-browser/<name>-shots/), media/, or a
 // tests/browser/.gitignore-covered name. A dev-log illustration is a
@@ -35,7 +35,7 @@ function check(name, cond, extra) {
   else { console.log('  FAIL ' + name + (extra !== undefined ? '  ' + extra : '')); failures++; }
 }
 
-const BAD = /(^|[/\\])(logs|todos|docs|old)\//;
+const BAD = /(^|[/\\])(logs|docs|old)\//;
 
 // Extract string-literal contents (', ", `) skipping // and /* */ comments.
 // Returns [{content, line}]. Regex literals are not modeled — they read as
@@ -104,7 +104,7 @@ for (const f of files) {
   const hits = stringLiterals(fs.readFileSync(f, 'utf-8'))
     .filter((s) => BAD.test(s.content));
   const rel = path.relative(ROOT, f);
-  check(`${rel}: no committed-dir (logs/, todos/, docs/, old/) path in a string literal`,
+  check(`${rel}: no committed-dir (logs/, docs/, old/) path in a string literal`,
     hits.length === 0,
     hits.map((h) => `line ${h.line}: ${JSON.stringify(h.content)}`).join('; '));
 }

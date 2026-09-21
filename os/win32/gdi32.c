@@ -1,4 +1,4 @@
-/* gdi32.c — the GDI drawing subset (todos/0057, design todos/WIN32.md).
+/* gdi32.c — the GDI drawing subset (docs/archive/0057, design docs/WIN32.md).
  *
  * A CPU rasterizer over 32-bit RGBA pixel buffers — the same pixel format
  * the surface protocol presents (R in byte 0, A in byte 3, tight rows).
@@ -6,7 +6,7 @@
  * user32 owns HWNDs and presenting; gdi32 sees only the raw span via
  * __gdi_dc_wrap, win32_internal.h) or a selected HBITMAP (memory DC).
  * This is the DWM redirection model: CPU draw -> shm -> GPU composite
- * (todos/0055) — GDI *is* a CPU rasterizer, on Windows and here.
+ * (docs/archive/0055) — GDI *is* a CPU rasterizer, on Windows and here.
  *
  * Text goes through freetype (the vendored lib /bin/term uses). Since C1
  * (ticket #281) CreateFont is MULTI-FACE: faceName/lfWeight/lfItalic
@@ -66,7 +66,7 @@
 #include FT_FREETYPE_H
 
 #include "win32_internal.h"
-#include "../fontcore.h"    /* the shared glyph pipeline (todos/0277) — pulls
+#include "../fontcore.h"    /* the shared glyph pipeline (docs/archive/0277) — pulls
                             * the fallback-face list (fontchain.h) and wcwidth.h
                             * (wide-cp tofu spans 2 cells) */
 
@@ -77,7 +77,7 @@
 #include <string.h>
 
 /* ============================================================ fail-loud
- * (todos/0211, declared in win32_internal.h; moved here from kernel32.c
+ * (docs/archive/0211, declared in win32_internal.h; moved here from kernel32.c
  * by M4/0259 — gdi32 is the base layer every veneer link set shares, so
  * wm.c can link gdi32+menucore without kernel32). One line to stderr per
  * call site — grep for "win32: unsupported" to inventory what's stubbed.
@@ -138,7 +138,7 @@ int __gdi_font_families(const char *const **names) {
 
 enum { OBJ_PEN = 1, OBJ_BRUSH, OBJ_FONT, OBJ_BITMAP };
 
-/* one cached glyph == fontcore FcGlyph (todos/0277). */
+/* one cached glyph == fontcore FcGlyph (docs/archive/0277). */
 
 struct __GDIOBJ {
     int type;
@@ -1852,7 +1852,7 @@ int SetMapMode(HDC hdc, int mode) {
 }
 
 static int print_stub(const char *name) {
-    fprintf(stderr, "gdi32: %s: no printing on this OS (todos/0048)\n", name);
+    fprintf(stderr, "gdi32: %s: no printing on this OS (docs/archive/0048)\n", name);
     return -1;                                   /* SP_ERROR */
 }
 

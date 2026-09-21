@@ -1,4 +1,4 @@
-/* model.c — .deck v1 parse + validation (todos/0284; format contract in
+/* model.c — .deck v1 parse + validation (docs/archive/0284; format contract in
  * model.h). Validation is VISIBLE, not fatal, for unknown keys and bad
  * style values (collected DeckWarns, defaults applied); malformed JSON /
  * missing required fields / unknown types / bad geometry are structured

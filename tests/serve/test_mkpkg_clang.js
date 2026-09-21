@@ -6,7 +6,7 @@
 // the index gains the -clang name; (2) a TAMPERED payload (sha256 mismatch) is
 // a loud exit(1), never a silently-copied wrong binary.
 //
-// Plus the OVERLAY-DRIFT gate (todos/0337): a sibling that publishes a
+// Plus the OVERLAY-DRIFT gate (docs/archive/0337): a sibling that publishes a
 // /usr/bin app no packages/*.json claims is a loud exit(1) — that app would
 // otherwise be built and then silently never ship — unless the payload is
 // EXPLICITLY exempted with a reason in tools/clang-unpackaged.json, and a

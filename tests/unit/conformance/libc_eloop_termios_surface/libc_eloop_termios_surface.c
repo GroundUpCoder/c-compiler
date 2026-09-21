@@ -10,7 +10,7 @@
 // EXPECT: ELOOP is 40 -- the number the kernel actually raises, not a fresh one --
 //         with the glibc wording, and the termios names exist with this libc's
 //         literal-baud encoding (B9600 == 9600, the BSD convention the original
-//         B9600/B115200 pair chose). todos/0340.
+//         B9600/B115200 pair chose). docs/archive/0340.
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Audio mixer semantics (todos/0017; design: WM.md "Audio mixing — the
+// Audio mixer semantics (docs/archive/0017; design: WM.md "Audio mixing — the
 // kernel sound server") without wasm: fake workers over a brokered kernel,
 // the test playing the process side of the AUDIO_OPEN handshake (the
 // test_wm.js pattern) and the page side of the output ring. Kernel-side
@@ -248,7 +248,7 @@ const near = (a, b) => Math.abs(a - b) < 1e-6;
   check('negative queued (clear race) heals + idles', kernel.audioPump(4) === 0 &&
     queued(st3) === 0);
 
-  // ---- master gain (todos/0048, AUDIO_GAIN): scales the mix pre-clamp ----
+  // ---- master gain (docs/archive/0048, AUDIO_GAIN): scales the mix pre-clamp ----
   const gq = await rpc(appPid, K.OP.AUDIO_GAIN, { gain: -1 });
   check('gain query (gain<0) -> 100, the unity default', gq.gain === 100, JSON.stringify(gq));
   const gs = await rpc(appPid, K.OP.AUDIO_GAIN, { gain: 50 });
@@ -281,7 +281,7 @@ const near = (a, b) => Math.abs(a - b) < 1e-6;
   await rpc(appPid, K.OP.AUDIO_CLOSE, { aid: o2.aid });
   check('paused dying stream dropped at once', !kernel.audioList().some((s) => s.aid === o2.aid));
 
-  // ---- drain-on-close at a NON-INTEGER resample ratio (todos/0094): the
+  // ---- drain-on-close at a NON-INTEGER resample ratio (docs/archive/0094): the
   // fractional cursor strands the last source frame (avail hits 0 with
   // queued > 0), so "dry" for a dying stream means "can't back another
   // output frame" — it must reclaim, not wedge (one-shot PlaySound clips

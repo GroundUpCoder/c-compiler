@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Unified test entry point with diff-aware selection (todos/0084).
+// Unified test entry point with diff-aware selection (docs/archive/0084).
 //
 // One command over the whole test estate — the existing runners stay
 // independently invocable; this is a thin dispatcher that knows how to
@@ -23,7 +23,7 @@
 // diff need" — CLAUDE.md points here instead of carrying the lore as prose.
 //
 // build/test-run/summary.json records what this invocation SELECTED as well as
-// what it produced (todos/0339): the `--filter` as given (null when absent),
+// what it produced (docs/archive/0339): the `--filter` as given (null when absent),
 // the resolved suite list, and — for the suite-runner-backed suites, which keep
 // their own manifest — a per-suite `files` block. Without those, `sweep: pass`
 // is indistinguishable from a run of one test file, which is exactly what a
@@ -44,7 +44,7 @@ const HOST_HEALTH = require('./lib/host-health.js');
 // (python), so its net is the harness-leaks orphan reaper's run.py pattern.
 const PARENT_WATCH = path.join(__dirname, 'lib', 'parent-watch.js');
 
-// Cross-tree preflight (todos/0341) — FIRST, before --diff reads git or any
+// Cross-tree preflight (docs/archive/0341) — FIRST, before --diff reads git or any
 // suite is spawned. This dispatcher hands every sub-runner `cwd: ROOT`
 // (runProcess below), i.e. it NORMALIZES the cwd away: launch the main-tree
 // copy of this file from a worktree and each child then looks perfectly
@@ -83,16 +83,16 @@ const SUITES = {
              heavyLock: true },
   host:    { desc: 'host.js Node output path + serve.js first-run (Node-only)',
              cmd: ['node', 'tests/host/run.js'], supports: [] },
-  todos:   { desc: 'liability register validator + Lnn id-allocator tests (todos/done/0286)',
-             cmd: ['node', 'tests/todos/run.js'], supports: ['filter'] },
-  'netsurf-patch': { desc: 'vendor/netsurf patch-record invariant, offline half (todos/0423)',
+  liabilities: { desc: 'liability register validator + Lnn id-allocator tests (docs/archive/0286)',
+             cmd: ['node', 'tests/liabilities/run.js'], supports: ['filter'] },
+  'netsurf-patch': { desc: 'vendor/netsurf patch-record invariant, offline half (docs/archive/0423)',
              cmd: ['node', 'tests/netsurf/run.js'], supports: ['filter'] },
 };
 
 // run.py categories exposed as suites. `unit`/`blockfs` are DELIBERATELY not
 // here — the dedicated runners above are faster and own those names.
 const PY_CATEGORIES = [
-  'ast', 'extra', 'ext', 'projects', 'zlib', 'lua', 'freetype', 'libpng',
+  'ast', 'extra', 'projects', 'zlib', 'lua', 'freetype', 'libpng',
   'libjpeg', 'cairo', 'micropython', 'micropython-upstream', 'sqlite', 'disw',
   'sourcemap', 'tcc', 'libc', 'fuzz', 'fakegit',
 ];
@@ -102,10 +102,10 @@ for (const cat of PY_CATEGORIES) {
 
 // Execution order: cheap-and-fast first, the image-baking kernel suite and
 // the heavy browser sweep last. Any suite not listed here falls after.
-const RUN_ORDER = ['todos', 'netsurf-patch', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
+const RUN_ORDER = ['liabilities', 'netsurf-patch', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
 
 // `all` = the entire estate.
-const ALL_SUITES = ['todos', 'netsurf-patch', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
+const ALL_SUITES = ['liabilities', 'netsurf-patch', 'unit', 'host', 'blockfs', ...PY_CATEGORIES, 'kernel', 'sweep'];
 
 // ---------- Tiers (#576 F1) ----------
 //
@@ -154,7 +154,7 @@ const SMOKE_KERNEL_FILTER = [
 const TIERS = {
   smoke: {
     desc: 'fast confidence check (~3-5 min): cheap suites + blockfs + disw + a filtered kernel leg incl. one real OS boot',
-    suites: ['todos', 'netsurf-patch', 'unit', 'host', 'blockfs', 'disw', 'kernel'],
+    suites: ['liabilities', 'netsurf-patch', 'unit', 'host', 'blockfs', 'disw', 'kernel'],
     filters: { kernel: SMOKE_KERNEL_FILTER },
   },
   diff: {
@@ -175,18 +175,18 @@ const TIERS = {
 // UNMAPPED (warned, not silently skipped) so the table stays honest.
 
 const IGNORE = [
-  /^logs\//, /^old\//, /\.md$/i, /^HANDOFF/,
+  /^logs\//, /^old\//, /\.md$/i,
   /^LICENSE$/, /^CONTRIBUTING/, /(^|\/)\.gitignore$/, /(^|\/)\.git\//,
   /^media\//, /(^|\/)README/i,
 ];
 
-// The liability register (todos/0286) pins a literal line in each file it
+// The liability register (docs/archive/0286) pins a literal line in each file it
 // cites, so an edit to any of them can invalidate an entry. Derived from the
 // register itself: a new entry enrols its own file with no rule to remember.
 // A register that will not parse yields a match-everything pattern, so the
-// `todos` suite runs on any diff at all and reports the parse error — a
+// `liabilities` suite runs on any diff at all and reports the parse error — a
 // broken register widens the gate rather than quietly opening it.
-const LIABILITIES = require('../todos/liabilities.js');
+const LIABILITIES = require('../tools/liabilities/liabilities.js');
 const CITED = LIABILITIES.citedFiles();
 const CITED_RE = CITED.ok && CITED.files.length
   ? new RegExp('^(' + CITED.files.map(f => f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')$')
@@ -260,10 +260,10 @@ const BAKED_DOCS_RE = BAKED_DOCS.ok
       : /(?!)/)   // parse-ok + no docs-shaped baked inputs: a legitimate state, match nothing
   : /^/;
 
-// IGNORE drops docs-shaped paths, but todos/, the register's cited files and
+// IGNORE drops docs-shaped paths, but docs/, the register's cited files and
 // the baked docs-shaped image inputs are gated: checked BEFORE it, so `.md$`
 // and friends can't swallow them.
-const FORCE = [/^todos\//, CITED_RE, BAKED_DOCS_RE];
+const FORCE = [/^docs\/LIABILITIES\.md$/, CITED_RE, BAKED_DOCS_RE];
 
 // ---- os/'s RUNTIME-ONLY files (ticket #428) ----
 //
@@ -313,31 +313,32 @@ const RULES = [
   // the cc ticket tracker, 2026-07-30). Their only other trigger is the
   // per-clone-opt-in pre-commit hook, so without this rule they are
   // validators nobody invokes.
-  [/^todos\//, ['todos'], 'the liability register and its validator'],
-  [CITED_RE, ['todos'], 'cited by todos/LIABILITIES.md — an edit here can invalidate an entry',
+  [/^(docs\/LIABILITIES\.md|tools\/liabilities\/|tools\/githooks\/)/, ['liabilities'],
+    'the liability register, its validator and the pre-commit hook'],
+  [CITED_RE, ['liabilities'], 'cited by docs/LIABILITIES.md — an edit here can invalidate an entry',
     CITED.ok ? `LIABILITIES.md cites ${CITED.files.length} file(s)` : `LIABILITIES.md UNPARSABLE: ${CITED.error}`],
 
   // Core compiler — the whole language surface + every consumer of it.
   // (host: the single-file .js/.html emitters live in compiler.js — CD15;
   // blockfs: test_e2e.js compiles C.) EVERY run.py category is in the closure
-  // (todos/0362): each one either compiles with compiler.js or runs its
+  // (docs/archive/0362): each one either compiles with compiler.js or runs its
   // output — verified per category, including disw (tests/disw/compiler/
   // build.py feeds it compiler output) and ast (two files execute under
-  // host.js what compiler.js emitted). The firing example is todos/0356: a
+  // host.js what compiler.js emitted). The firing example is docs/archive/0356: a
   // promoteExprType miscompile caught ONLY by micropython-upstream, with
   // `unit` green — the old four-suite list would have reported that change
   // as covered. `sweep` is the bake-input radius: compiler.js recompiles
   // every seeded binary (newestBakeInput lists it first), and a rendering
   // break in the re-baked blob is invisible to the compositor-less headless
   // suites (the vendor-block axis-1 rule). Nothing is deliberately excluded
-  // — `todos` joins via CITED_RE when the register cites compiler.js, and
+  // — `liabilities` joins via CITED_RE when the register cites compiler.js, and
   // gates nothing compiled. Guard: tests/host/test_diff_rules.js.
   [/^compiler\.js$/, ['unit', 'kernel', 'blockfs', 'host', 'sweep', ...PY_CATEGORIES],
     'the compiler drives every wasm binary — every run.py category, the OS suites, and the re-baked blob the sweep boots'],
 
   // host.js carries BOTH BlockFS/MountFS AND the per-process SDL/fd runtime —
   // and it is what run.py and run-unit.js execute every compiled wasm under
-  // (run.py's HOST_JS, run-unit.js's runModule; todos/0362). Deliberately
+  // (run.py's HOST_JS, run-unit.js's runModule; docs/archive/0362). Deliberately
   // excluded, the only two categories that never execute wasm: `disw` (a
   // clang-built native disassembler; its build.py inputs don't run) and
   // `sourcemap` (compiles, then verifies the map with its own verify.js).
@@ -382,7 +383,7 @@ const RULES = [
   // and it is runtime-only, so the sweep is blind to an edit here.
   [/^os\/boot\.js$/, ['kernel'],
     'the headless Node host — every kernel e2e drives it; no browser test loads it and it is not a bake input'],
-  // The ksvc kernel service blob (todos/0275): /usr/lib/ksvc.wasm + its
+  // The ksvc kernel service blob (docs/archive/0275): /usr/lib/ksvc.wasm + its
   // loader feed BOTH composites' label text — explicit so a future ^os/
   // rule split can't orphan it (same suites as ^os/ today).
   [/^os\/ksvc(\/|\.js$)/, ['kernel', 'sweep'], 'the kernel text service — chrome text in both composites'],
@@ -425,7 +426,7 @@ const RULES = [
     BAKED_DOCS.ok ? `baked docs-shaped inputs (${BAKED_DOCS.files.length} file(s))`
                   : `os/image.json UNPARSABLE: ${BAKED_DOCS.error}`],
   [/^tools\/mkpkg\.js$/, ['kernel', 'host'], 'builds the gucman package pool test_gucman_e2e installs from; host holds the mkpkg --clang guardrail'],
-  // The overlay-drift gate's exemption list (todos/0337): an edit here changes
+  // The overlay-drift gate's exemption list (docs/archive/0337): an edit here changes
   // which published clang apps mkpkg --clang accepts as unpackaged, which is
   // exactly what the host guardrail asserts.
   [/^tools\/clang-unpackaged\.json$/, ['host'], 'the mkpkg --clang overlay-drift exemption list the host guardrail exercises'],
@@ -460,7 +461,7 @@ const RULES = [
   [/^tools\/net-bridge-ssh\.js$/, [],
     'operator-side ssh wrapper -- ships net-bridge.js verbatim, changes no contract; needs a live sshd, so no suite covers it'],
 
-  // ---- the rest of tools/ (todos/0333) ----
+  // ---- the rest of tools/ (docs/archive/0333) ----
   //
   // There is deliberately NO blanket `^tools/` rule. tools/ mixes load-bearing
   // build tooling with one-shot asset generators and self-contained side
@@ -486,30 +487,15 @@ const RULES = [
     'generates os/doc/sdl-api-index.md (#677) — test_sdl_api_index.js runs its --check drift gate + red controls'],
   [/^tools\/mkgit2srclib\.js$/, ['fakegit', 'projects', 'kernel'],
     'generates vendor/libgit2\'s srclib forwarders + git2_srclib.h — the fakegit/projects build is what a missing forwarder breaks, and test_gucman_libgit2_e2e.js runs its --check'],
-  [/^tools\/build-libc-ext\.js$/, ['ext', 'unit', 'libc'],
-    'generates libc-ext.js — the ext category pins its optional-library contract (and runs its --check), the unit ext_* goldens and the libc-test search/fnmatch corpus consume it'],
-  // The libc extension surface itself (#534). ext/ holds the vendored sources
-  // (TRE regex, fnmatch/glob, the search.h family); libc-ext.js is their
-  // GENERATED-AND-COMMITTED artifact, loaded by compiler.js when it sits next
-  // to it — so an edit here reaches every C program including these headers.
-  // Three consumers, each covering what the others cannot: the ext category
-  // pins the optional-library contract and runs build-libc-ext.js --check
-  // (without that sync check an ext/ edit that skips regeneration is invisible
-  // to EVERY suite — the artifact, not the sources, is what compiles); the
-  // unit ext_* goldens EXECUTE regex/fnmatch/glob; and the libc-test
-  // functional corpus is the only suite that executes the search.h family
-  // (search_tsearch/hsearch/lsearch/insque, plus its own fnmatch).
-  [/^ext\//, ['ext', 'unit', 'libc'],
-    'the libc extension sources — ext contract+sync check, unit ext_* goldens, libc-test search.h/fnmatch'],
-  [/^libc-ext\.js$/, ['ext', 'unit', 'libc'],
-    'the generated-and-committed extension artifact compiler.js loads — same consumers as ext/'],
 
   // OS-driving harnesses. They gate nothing themselves; they RIDE a test seam,
   // and the suite that proves the seam is what tells their editor the ground
   // under them still holds — the ^tools/os-drive precedent above.
+  [/^tools\/minesweeper-demo\//, ['sweep'],
+    'Minesweeper demonstration drivers (not swept) riding tests/browser/lib/os-harness.mjs — the sweep proves the seam under them'],
   [/^tools\/(idlemeter|peek-repro)\.mjs$/, ['sweep'],
     'drive os.html via tests/browser/lib/os-harness.mjs, like tools/os-drive'],
-  // The (ours|clang) x (CPython|MicroPython) measurement harness — todos/0332
+  // The (ours|clang) x (CPython|MicroPython) measurement harness — docs/archive/0332
   // is its live customer. Every cell runs `node host.js <wasm>` standalone, so
   // the cheap host suite is the seam under it. Its in-OS leg (inos-startup.js)
   // additionally drives os/boot.js: pulling the HEAVY kernel suite for a
@@ -560,7 +546,7 @@ const RULES = [
   // (test_win32_ports.js).
   [/^tools\/win32ports\.js$/, ['kernel'], 'the win32 port compile harness'],
 
-  // The MicroPython port (todos/0117). Its two run.py categories are the
+  // The MicroPython port (docs/archive/0117). Its two run.py categories are the
   // 639-file upstream corpus; the kernel suite builds it twice (the REPL pty
   // e2e + the script-runner e2e); and it is a gucman package, so it also
   // folds into the fat image fixture every browser boot comes out of —
@@ -602,13 +588,13 @@ const RULES = [
     'the browser install pre-flight — launch assert (sweep) + gate-start check (host-tested, #559)'],
   [/^tests\/browser\//, ['sweep'], null],
   [/^tests\/host\//, ['host'], null],
-  [/^tests\/todos\//, ['todos'], null],
+  [/^tests\/liabilities\//, ['liabilities'], null],
   [/^tests\/netsurf\//, ['netsurf-patch'], null],
   [/^tests\/serve\//, ['host'], null],
   [/^tests\/spawn\//, ['host'], 'the posix_spawn ABI test drives host.js with fake spawnHooks — Node-only, so it rides the host suite (enrolled by #167/#431; it was UNMAPPED and in no suite)'],
   [/^tests\/run\.js$/, ['host'], 'the dispatcher itself — its RULES-closure guard (test_diff_rules.js) is a host test'],
-  [/^tests\/bench\//, [], 'informational perf bench (todos/0186) — opt-in, ROM-gated, never a gating suite'],
-  [/^tests\/flake\.js$/, [], 'the flake-gate orchestrator (todos/0147) — wraps other suites, no suite of its own'],
+  [/^tests\/bench\//, [], 'informational perf bench (docs/archive/0186) — opt-in, ROM-gated, never a gating suite'],
+  [/^tests\/flake\.js$/, [], 'the flake-gate orchestrator (docs/archive/0147) — wraps other suites, no suite of its own'],
   [/^tests\/run\.py$/, PY_CATEGORIES.concat(['unit', 'blockfs']), 'the python runner backs every py category'],
   // #582: a baseline edit is a CLAIM about what the py leg skips — only
   // running the categories verifies it (host carries the shape guard,
@@ -621,12 +607,11 @@ const RULES = [
   [/^tests\/sqlite\//, ['sqlite'], null],
   [/^tests\/fakegit\//, ['fakegit'], null],
   [/^tests\/ast\//, ['ast'], null],
-  [/^tests\/ext\//, ['ext'], null],
   [/^tests\/extra\//, ['extra'], null],
   [/^tests\/projects\//, ['projects'], null],
   [/^tests\/micropython\//, ['micropython', 'micropython-upstream'], null],
 
-  // ---- vendored projects (todos/0318) ----
+  // ---- vendored projects (docs/archive/0318) ----
   //
   // Three axes decide a vendor dir's gate. Every dir below states which of
   // them it answers to; a dir answering none falls to the catch-all at the
@@ -731,7 +716,7 @@ const RULES = [
     'baked faces + two font packages — a face edit moves every rendered glyph'],
   // cJSON is compiled INTO five seeded projects (gucman, software, deck,
   // gcode, deskdefaults) via their `sources`, not their `deps` — so it has no
-  // bin.json of its own and `projects` cannot build it. Since todos/0354 the
+  // bin.json of its own and `projects` cannot build it. Since docs/archive/0354 the
   // closure follows `sources` too, so axis 1 now derives this row on its own
   // (an edit here restales the fat fixture like any other seeded source);
   // `kernel` + `sweep` is that radius, not a hand-made exception.
@@ -763,7 +748,7 @@ const RULES = [
   // gucOS frontend (gucos/) is seeded as /usr/bin/netsurf and exercised
   // in-window by the test_netsurf_*_e2e family. `sweep` was originally
   // declined here on the grounds that no browser leg names netsurf — true,
-  // but it weighs the wrong thing (todos/0318): gucos/ is in the bake
+  // but it weighs the wrong thing (docs/archive/0318): gucos/ is in the bake
   // closure and packages/netsurf-demos.json folds in too, so an edit here
   // changes the BLOB every browser boot comes out of, exactly like the
   // seeded apps below. The headless suite has no compositor, so it cannot
@@ -771,7 +756,7 @@ const RULES = [
   // vendor/netsurf/smoke.mjs (JS off) and smoke-js.mjs (the JS gate), stay
   // manual recipes documented in vendor/netsurf/README.md: they each rebuild
   // the whole ~850-TU constellation, which the projects suite already covers.
-  // `netsurf-patch` rides along (todos/0423): any edit under vendor/netsurf/
+  // `netsurf-patch` rides along (docs/archive/0423): any edit under vendor/netsurf/
   // — a component tree, patches/, UPSTREAM.json — must keep the patch record
   // self-consistent (patchcheck.mjs's frame + manifest + differential), or
   // the next update.sh run silently destroys the unmirrored change.
@@ -983,7 +968,7 @@ function suiteArtifact(suite) {
   return dir ? path.join('build', dir, 'summary.json') : null;
 }
 
-// The suite's own record of what it selected (todos/0339). Only the three
+// The suite's own record of what it selected (docs/archive/0339). Only the three
 // suite-runner-backed suites keep one; for the rest the absence of a count is
 // deliberate — a missing number is honest, an invented one is not. The
 // top-level `filter` below always records what THIS dispatcher forwarded.
@@ -1029,7 +1014,7 @@ function readSuiteTallies(artifactAbs) {
 //     fixer claims the win) or the test vanished — either way the baseline
 //     is stale and the same commit must update it.
 // An intentional new gate is a one-line baseline update carrying its
-// attribution (todos/NNNN). `exemptPrefixes` covers the one legitimately
+// attribution (docs/NNNN). `exemptPrefixes` covers the one legitimately
 // nondeterministic family (fuzz/live-<random seed>, present only where
 // csmith is installed and dependent on the native leg's behavior).
 // Enforcement only on UNFILTERED runs — a --filter run's skip set is a
@@ -1814,7 +1799,7 @@ function classify(r, heavyLock) {
 }
 
 // The run record. `filter` and `suites` are what this invocation SELECTED;
-// each artifact-backed result carries the suite's own `files` block (todos/
+// each artifact-backed result carries the suite's own `files` block (docs/
 // 0339). Without them a `sweep: pass` line is indistinguishable from a run of
 // a single test file — which is exactly what a split sweep used to leave
 // behind. A reader must be able to see `filter: null` + `files.recorded: 40`
@@ -1891,7 +1876,7 @@ function printTierBanner(tier, ordered, tierFilters, omitted) {
 }
 
 // `[N/M files]` when a suite reports its selection, marked PARTIAL when the
-// record does not account for the whole suite (todos/0339) — the one line that
+// record does not account for the whole suite (docs/archive/0339) — the one line that
 // stops "sweep: pass" from meaning "some of the sweep passed".
 function fmtCoverage(files) {
   if (!files || files.total == null) return '';
@@ -1965,7 +1950,7 @@ function printList() {
   }
   process.stdout.write('\nIgnored (never trigger tests):\n  '
     + IGNORE.map(re => re.source).join('  ') + '\n');
-  process.stdout.write('Never ignored (gated even though docs-shaped):\n  todos/  '
+  process.stdout.write('Never ignored (gated even though docs-shaped):\n  docs/  '
     + (CITED.ok ? CITED.files.join('  ') : '(register unparsable — every path)') + '\n');
   process.stdout.write('Baked docs-shaped inputs (#622 — blob bytes, gated kernel+sweep):\n  '
     + (BAKED_DOCS.ok
@@ -1974,7 +1959,7 @@ function printList() {
 }
 
 function printHelp() {
-  process.stdout.write(`Unified test entry point (todos/0084).
+  process.stdout.write(`Unified test entry point (docs/archive/0084).
 
 Usage:
   node tests/run.js smoke               fast confidence check (~3-5 min) — NOT a full gate
@@ -1993,7 +1978,7 @@ Flags (forwarded to suites that accept them):
   --resume       skip files that passed last run
   --fail-fast    stop on first failure
   --repeat N     run each file N times; per-file flake rate (kernel/blockfs/sweep)
-  --under-load[=N]  run under CPU contention (flake gate, todos/0147)
+  --under-load[=N]  run under CPU contention (flake gate, docs/archive/0147)
   --dry-run      resolve + print the plan, run nothing
   --out=DIR      write the run-level summary.json to DIR instead of
                  build/test-run (#561b) — for NESTED invocations (guard tests,

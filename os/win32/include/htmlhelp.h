@@ -1,4 +1,4 @@
-/* htmlhelp.h — hhctrl surface for the port corpus (todos/0060).
+/* htmlhelp.h — hhctrl surface for the port corpus (docs/archive/0060).
  * Declaration-only (calc's help window). */
 #pragma once
 

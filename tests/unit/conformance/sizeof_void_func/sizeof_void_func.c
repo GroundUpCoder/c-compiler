@@ -1,8 +1,8 @@
 // BUG: the sizeof OPERATOR read raw type.size, so sizeof(void),
 // sizeof(*voidp) and sizeof(function) all evaluated to 0 — even though
-// pointer arithmetic already used the GNU stride-1 clamp (G1/todos/0203),
+// pointer arithmetic already used the GNU stride-1 clamp (G1/docs/archive/0203),
 // so `p += sizeof(*p)` on void* silently stayed put. Bug-hunt G21
-// (todos/0227).
+// (docs/archive/0227).
 // C11: 6.5.3.4 (sizeof) + the GNU extension: sizeof(void) == 1 and
 // sizeof applied to a function type == 1 (gcc/clang -std=gnu11).
 // EXPECT: matches gcc/clang: void/function yield 1; a GNU empty struct

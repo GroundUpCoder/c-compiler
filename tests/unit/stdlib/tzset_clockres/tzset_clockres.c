@@ -1,4 +1,4 @@
-// todos/0325 Group A — tzset() (ownership: 0325; todos/0382 gap 6 defers to
+// docs/archive/0325 Group A — tzset() (ownership: 0325; docs/archive/0382 gap 6 defers to
 // it) and clock_getres().
 //
 // The host owns the timezone, so absolute offsets are NOT assertable here —
@@ -30,7 +30,7 @@ int main(void) {
   gmtime_r(&now, &ut);
   printf("gmt_offset_zero=%d gmt_zone=%s\n", ut.tm_gmtoff == 0, ut.tm_zone);
 
-  // tm_zone is populated for localtime too (todos/0325 Group B: shipping
+  // tm_zone is populated for localtime too (docs/archive/0325 Group B: shipping
   // tm_gmtoff without tm_zone was the surprising half).
   printf("local_zone_set=%d\n", lt.tm_zone != 0 && lt.tm_zone[0] != 0);
 

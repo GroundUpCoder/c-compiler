@@ -3,7 +3,7 @@
 //      its zero-padding to the sign flip, and %s (which feeds the same year
 //      into the fields->seconds arithmetic) came out negative. The C
 //      standard specifies no range for tm_year, so INT_MAX is a valid value
-//      (ticket #113 / todos/0307, class 1).
+//      (ticket #113 / docs/archive/0307, class 1).
 // C11: 7.27.3.5 (strftime); the tm_year range note is musl libc-test's
 //      (vendor/libc-test/src/functional/strftime.c, the INT_MAX block).
 // EXPECT: musl semantics per that test — NOT host-clang-verified: BSD libc

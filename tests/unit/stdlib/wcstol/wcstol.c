@@ -1,4 +1,4 @@
-// todos/0325 Group A — the wcstol family. BEHAVIOUR: parsed value, endptr
+// docs/archive/0325 Group A — the wcstol family. BEHAVIOUR: parsed value, endptr
 // position, and errno, which is where a lazy "narrow it and call strtol"
 // implementation goes wrong. Host-independent, so clang-verifiable.
 #include <stdio.h>

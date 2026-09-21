@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Tests for vendor/netsurf/patchcheck.mjs (todos/0423).
+// Tests for vendor/netsurf/patchcheck.mjs (docs/archive/0423).
 //
 // Two halves:
 //  - unit: parseDiff + reverseApply driven over REAL `diff -urN` output
@@ -131,7 +131,7 @@ const LINES = (n, tag) => Array.from({ length: n }, (_, i) => `${tag} line ${i +
   check('unit: EOL drift at a covered EOF is a frame failure', !r2wrong.ok, r2wrong && r2wrong.err);
 }
 
-// ---------- unit: clipPair (todos/0436) ----------
+// ---------- unit: clipPair (docs/archive/0436) ----------
 
 {
   // Near-start difference in short lines: shown whole, no ellipsis, col named.
@@ -177,7 +177,7 @@ const LINES = (n, tag) => Array.from({ length: n }, (_, i) => `${tag} line ${i +
 }
 
 {
-  // ⭐ todos/0436 acceptance as a regression guard: a tamper DEEP in a long
+  // ⭐ docs/archive/0436 acceptance as a regression guard: a tamper DEEP in a long
   // line must render two DIFFERENT quoted strings and name the column. The
   // old head-anchored clip printed two identical 57-char prefixes here.
   const long = 'bool content_key_release(struct hlcache_handle *h, uint32_t key)';
@@ -432,7 +432,7 @@ function haveCommit(sha) {
   } else check('history pin: 0422 commit present (skip: shallow clone?)', true);
 
   // 1a0909c4: a 0407 drift commit — landed netsurf sources, never touched
-  // patches/. The incident that motivated todos/0423.
+  // patches/. The incident that motivated docs/archive/0423.
   if (haveCommit('1a0909c4')) {
     const r = run(process.execPath, [PATCHCHECK, '--repo', REPO, '--commit', '1a0909c4']);
     check('history pin: 0407\'s drift commit fails', r.status === 1, String(r.status));

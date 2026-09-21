@@ -1,5 +1,5 @@
 #!/bin/sh
-# todos/0350 — fetch + unpack the two zip-library candidates into
+# docs/archive/0350 — fetch + unpack the two zip-library candidates into
 # build/zipmeasure (gitignored). Pinned versions + checksums; refuses a
 # checksum mismatch.
 set -e

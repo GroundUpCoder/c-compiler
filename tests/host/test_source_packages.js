@@ -128,8 +128,8 @@ const libc = byName.get('libc-sources');
 check('libc-sources exists (builtin derivation)', libc && libc.kind === 'builtin');
 check('libc-sources version is the image version', libc && libc.def.version === imageVersion,
   libc && libc.def.version);
-check('libc-sources inputs name the literal-map files',
-  libc && JSON.stringify(libc.inputs) === JSON.stringify(['compiler.js', 'libc-ext.js']),
+check('libc-sources inputs name the literal-map file',
+  libc && JSON.stringify(libc.inputs) === JSON.stringify(['compiler.js']),
   libc && JSON.stringify(libc.inputs));
 {
   const hdrs = COMMON.stdlibHeaderMap(CompilerJS);
@@ -140,22 +140,6 @@ check('libc-sources inputs name the literal-map files',
   check('libc-sources carries every builtin .c unit BYTE-EQUAL to the compiler map',
     libc && Object.keys(srcs).every((n) => libc.def.files[n] &&
       libc.def.files[n].content === srcs[n]));
-  // Derived from libc-ext.js, not hardcoded (#535): the original list pinned
-  // the 6 launch units, so the 8 search.h-family units #111 added got ZERO
-  // payload coverage while the test stayed green. The .c filter is
-  // load-bearing — libc-ext.js also carries headers (search.h, tsearch.h),
-  // which ride the merged HEADER map, not this assertion.
-  const extMap = JSON.parse((() => {
-    const t = fs.readFileSync(path.join(ROOT, 'libc-ext.js'), 'utf-8');
-    return t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1);
-  })());
-  const extC = Object.keys(extMap).filter((n) => n.endsWith('.c'));
-  check('libc-ext.js yields a non-empty ext .c unit list (parse sanity)',
-    extC.length > 0, String(extC.length));
-  check(`libc-sources carries every ext .c unit BYTE-EQUAL to libc-ext.js (${extC.length} units)`,
-    libc && extC.every((n) => libc.def.files[n] &&
-      libc.def.files[n].content === extMap[n]),
-    libc && JSON.stringify(extC.filter((n) => !libc.def.files[n])));
 }
 check('sourcePackageDefs without CompilerJS fails loud (never a silently smaller index)', (() => {
   try { COMMON.sourcePackageDefs(fs, path, ROOT, {}); return false; }
@@ -289,7 +273,6 @@ check('#617: 🔴 gcode REBUILDS from payload-only inputs (the dogfood loop, her
     fs.writeFileSync(p, text);
   };
   fs.writeFileSync(path.join(fixRoot, 'outside.c'), 'int outside;\n');   // exists, but OUTSIDE the root
-  wf('libc-ext.js', 'var EXT_LIB_MAP = {};\n');
   wf('src/app/bin.json', JSON.stringify({
     bin: true, name: 'app', sources: ['app.c'], compilerArgs: ['-I../../inc'],
   }) + '\n');

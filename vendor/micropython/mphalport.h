@@ -1,4 +1,4 @@
-// The clock lives in mphal.c, NOT here. Before todos/0117 R2 this header
+// The clock lives in mphal.c, NOT here. Before docs/archive/0117 R2 this header
 // carried `static inline mp_uint_t mp_hal_ticks_ms(void) { return 0; }` — a
 // stub nothing called, because `time` was not compiled in. `time` IS compiled
 // in now, so every tick function is load-bearing (a stubbed tick makes
@@ -22,7 +22,7 @@ static inline void mp_hal_set_interrupt_char(char c) {
 // chance to raise the pending exception (KeyboardInterrupt) in between.
 // Verbatim from upstream ports/unix/mphalport.h — the gucOS kernel's
 // cooperative signals surface as EINTR on brokered reads/writes exactly
-// like a real one, so file.c needs the same wrapper (todos/0117 R1).
+// like a real one, so file.c needs the same wrapper (docs/archive/0117 R1).
 // Expanded only at its use sites, which include <errno.h>, py/runtime.h
 // (mp_handle_pending) and py/mpthread.h (the GIL no-ops).
 #define MP_HAL_RETRY_SYSCALL(ret, syscall, raise) { \

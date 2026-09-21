@@ -1,7 +1,7 @@
 {
   "bin": true,
   "name": "calc",
-  "description": "ReactOS calc, IEEE-754 build (todos/0060 win32 port corpus)",
+  "description": "ReactOS calc, IEEE-754 build (docs/archive/0060 win32 port corpus)",
   "deps": [
     "../../os/win32/lib.json"
   ],

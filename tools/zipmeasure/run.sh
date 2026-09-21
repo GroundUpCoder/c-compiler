@@ -1,5 +1,5 @@
 #!/bin/sh
-# todos/0350 — build the three measurement binaries and print the size table.
+# docs/archive/0350 — build the three measurement binaries and print the size table.
 # Run tools/zipmeasure/fetch.sh first. Outputs land in build/zipmeasure/out.
 set -e
 cd "$(dirname "$0")/../.."

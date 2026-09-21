@@ -3,7 +3,7 @@
 // Per-test-file peak-RSS sampler (#576 A4) — the instrument behind the
 // kernel suite's per-class RAM weights (tests/kernel/run.js). The
 // weighted pool is only as safe as its weights are honest, and the old
-// uniform 4 GB/job figure predates the prebaked fixture (todos/0082), so
+// uniform 4 GB/job figure predates the prebaked fixture (docs/archive/0082), so
 // re-measure here whenever the boot path's memory profile might have moved:
 //
 //   node tests/lib/rss-sample.js [--out=FILE] [--interval=MS] -- CMD ARGS...

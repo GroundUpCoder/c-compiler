@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// todos/0410: an <img> must keep rendering after a mutation-triggered live
+// docs/archive/0410: an <img> must keep rendering after a mutation-triggered live
 // re-conversion (NetSurf JS Lane B).  The pre-fix defect: any class toggle
 // scheduled the whole-document re-conversion; its refetch of the image
 // completed against a document whose status was already DONE, so the

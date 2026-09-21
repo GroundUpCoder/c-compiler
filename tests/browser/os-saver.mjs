@@ -60,7 +60,7 @@ try {
   const TEAL = [0, 128, 128], BLACK = [0, 0, 0];
 
   // ---- a short-timeout marquee config, typed on VT1 (the desktop tab is
-  // the default after ready, todos/0070 — switch first; the settle keeps
+  // the default after ready, docs/archive/0070 — switch first; the settle keeps
   // the ready auto-switch from racing this one) ----
   await setVt(1);
   await new Promise(r => setTimeout(r, 800));

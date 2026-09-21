@@ -1,4 +1,4 @@
-// todos/0325 Group A — isascii/toascii (XSI). _decimal.c calls isascii.
+// docs/archive/0325 Group A — isascii/toascii (XSI). _decimal.c calls isascii.
 //
 // The point of these over the is*() family is that they are defined for the
 // WHOLE int range, not just unsigned char + EOF, so the negative and

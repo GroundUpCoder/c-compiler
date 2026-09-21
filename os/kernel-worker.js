@@ -1,8 +1,8 @@
-// kernel-worker.js — the OS's kernel worker (todos/0004; layout in
-// todos/OS.md "Reference build"). Runs once per tab: mounts BlockFS on OPFS
+// kernel-worker.js — the OS's kernel worker (docs/archive/0004; layout in
+// docs/OS.md "Reference build"). Runs once per tab: mounts BlockFS on OPFS
 // (SyncAccessHandle is worker-only — this is WHY the kernel lives in a
 // worker) — a writable root volume at / plus the read-only baked system
-// blob at /usr (todos/0040; materialized by fetch-or-bake when missing or
+// blob at /usr (docs/archive/0040; materialized by fetch-or-bake when missing or
 // stale), owns the process table + tty + fd layer (kernel.js), backs
 // /bin/cc with compiler.js, and spawns one nested process worker per pid.
 //
@@ -10,33 +10,33 @@
 //   page -> kernel: {type:'input', data}         raw tty bytes/keystrokes
 //                   {type:'resize', cols, rows}
 //                   {type:'eof'}
-//                   {type:'boot-retry'}          two-tab guard (todos/0045):
+//                   {type:'boot-retry'}          two-tab guard (docs/archive/0045):
 //                                                re-attempt the boot lock
 //                                                after a boot-locked
 //                   {type:'wm-canvas', canvas}   the desktop OffscreenCanvas
-//                                                (todos/WM.md — the kernel
+//                                                (docs/WM.md — the kernel
 //                                                composites in-worker)
 //                   {type:'wm-input', ev}        raw desktop key/pointer input
 //                   {type:'screen-resize', w, h} dynamic screen resolution
-//                                                (todos/0023): resize the
+//                                                (docs/archive/0023): resize the
 //                                                OffscreenCanvas + wmSetScreen
 //                                                (-> EV_SCREEN to the wm)
 //                   {type:'drop-file', name, [rel], [episode], bytes}
 //                                                host file dropped on the
-//                                                desktop (todos/0067): write
+//                                                desktop (docs/archive/0067): write
 //                                                bytes to /root/Desktop/<name>
 //                                                (kernel-side fs — no process,
 //                                                no RPC); /bin/wm's coarse
 //                                                re-read grows the icon ~1s
 //                                                later. bytes is a transferred
 //                                                ArrayBuffer (zero-copy).
-//                                                rel/episode (todos/0398): a
+//                                                rel/episode (docs/archive/0398): a
 //                                                directory drop's tree path —
 //                                                the root uniquifies once per
 //                                                episode, parents mkdir -p.
 //                   {type:'host-paste-files', files:[{name, bytes}]}
 //                                                host paste chord carried
-//                                                files (todos/0398 D6): wipe +
+//                                                files (docs/archive/0398 D6): wipe +
 //                                                repopulate /root/.hoststage,
 //                                                publish an fmt-2 "copy" list
 //                                                on the kernel slot, stamp
@@ -72,7 +72,7 @@
 //                                                timeout is the backstop,
 //                                                not the plan)
 //                   {type:'egress', dispo, name, bytes}
-//                                                egress (todos/0398): ONE
+//                                                egress (docs/archive/0398): ONE
 //                                                kernel-materialized artifact;
 //                                                the page downloads it (or
 //                                                raises the saveas picker)
@@ -81,11 +81,11 @@
 //                                                is transferred.
 //                   {type:'boot-log', msg}       boot progress / kernel log
 //                   {type:'boot-error', msg}
-//                   {type:'boot-locked'}         two-tab guard (todos/0045):
+//                   {type:'boot-locked'}         two-tab guard (docs/archive/0045):
 //                                                another tab holds the boot
 //                                                lock — nothing was mounted;
 //                                                the page shows retry
-//                   {type:'boot-nogpu'}          WebGPU guard (todos/0055):
+//                   {type:'boot-nogpu'}          WebGPU guard (docs/archive/0055):
 //                                                no adapter/device in this
 //                                                worker — the compositor IS
 //                                                WebGPU (no fallback), so
@@ -95,9 +95,9 @@
 //                   {type:'halt', status}        pid 1 exited
 //                   {type:'audio', sab, bufferSize, freq, channels, format}
 //                                                the mixer's output ring
-//                                                (todos/0017) — play with
+//                                                (docs/archive/0017) — play with
 //                                                host.js createAudioReceiver
-//                   {type:'pointer-lock', wanted}  relative mouse (todos/0018):
+//                   {type:'pointer-lock', wanted}  relative mouse (docs/archive/0018):
 //                                                the focused surface wants the
 //                                                pointer lock (page arms
 //                                                click-to-lock / exits); the
@@ -105,7 +105,7 @@
 //                                                as a {kind:'lockchange'}
 //                                                wm-input event
 //                   {type:'cursor', shape}       the effective pointer cursor
-//                                                changed (todos/0105) — the
+//                                                changed (docs/archive/0105) — the
 //                                                page sets canvas.style.cursor
 //                                                from an SDL_SystemCursor shape
 //                                                (-1 = hidden); chrome resize
@@ -113,21 +113,16 @@
 'use strict';
 
 importScripts('../host.js', '../kernel.js', '../compiler.js', 'os-common.js', 'ksvc.js', 'compositor.js');
-try {
-  // Optional libc extension (fnmatch/glob/regex — busybox hush needs it).
-  // compiler.js's getExtLibMap picks up the EXT_LIB_MAP global it defines.
-  importScripts('../libc-ext.js');
-} catch (e) { /* absent is fine; cc just lacks the ext headers */ }
 // worker globals: BLOCK_FS, runModule (host.js); KERNEL (kernel.js);
 // CompilerJS (compiler.js); OS_COMMON (os-common.js)
 
 var kernel = null;
 var tty = null;
-var kfs = null;        // the kernel's MountFS (drop-file writes; todos/0067)
+var kfs = null;        // the kernel's MountFS (drop-file writes; docs/archive/0067)
 var wmCanvas = null;   // the desktop OffscreenCanvas (screen-resize target)
 var compositor = null; // {scheduleFrame,setFrozen,stats} once wm-canvas
-                       // arrives (todos/0169 — the on-demand rAF)
-var gpuDevice = null;  // the compositor's WebGPU device (todos/0055 boot guard)
+                       // arrives (docs/archive/0169 — the on-demand rAF)
+var gpuDevice = null;  // the compositor's WebGPU device (docs/archive/0055 boot guard)
 var displayAnnounce = null;   // display-density bridge (set at boot, below)
 var post = function (m) { self.postMessage(m); };
 var pending = [];   // input that raced the boot
@@ -269,7 +264,7 @@ function poolFill() {
 self.onmessage = function (e) {
   var m = e.data;
   if (!m) return;
-  // Two-tab guard (todos/0045): boot-retry must bypass the pending queue —
+  // Two-tab guard (docs/archive/0045): boot-retry must bypass the pending queue —
   // it drives the boot, it can't wait for one.
   if (m.type === 'boot-retry') { startBoot(); return; }
   // Warm-pool probe (ticket #351): answered even before (or without) a boot
@@ -290,25 +285,25 @@ self.onmessage = function (e) {
     compositor = OS_COMPOSITOR.startCompositor(kernel, m.canvas, gpuDevice);
     kernel.captureSurface = compositor.captureSurface;
   } else if (m.type === 'screen-resize') {
-    // Dynamic screen resolution (todos/0023): the page tracks the viewport;
+    // Dynamic screen resolution (docs/archive/0023): the page tracks the viewport;
     // the OffscreenCanvas is resized HERE (a transferred canvas can't be
     // resized from the page) and wmSetScreen emits EV_SCREEN + the clamp.
     if (wmCanvas && m.w > 0 && m.h > 0) {
       wmCanvas.width = m.w | 0;
       wmCanvas.height = m.h | 0;
       kernel.wmSetScreen(m.w | 0, m.h | 0);
-      if (compositor) compositor.scheduleFrame();   // wake table (todos/0169)
+      if (compositor) compositor.scheduleFrame();   // wake table (docs/archive/0169)
     }
   } else if (m.type === 'wm-input') {
     OS_COMPOSITOR.routeInput(kernel, SDL_WEB, m.ev);
-    // Wake table (todos/0169): raw input re-arms the parked rAF even when
+    // Wake table (docs/archive/0169): raw input re-arms the parked rAF even when
     // no kernel state changed — the routed app may only now start drawing.
     if (compositor) compositor.scheduleFrame();
   } else if (m.type === 'drop-file') {
     dropFile(m);
-    if (compositor) compositor.scheduleFrame();     // wake table (todos/0169)
+    if (compositor) compositor.scheduleFrame();     // wake table (docs/archive/0169)
   } else if (m.type === 'host-paste-files') {
-    // Host file paste (todos/0398): stage + publish the fmt-2 list. The
+    // Host file paste (docs/archive/0398): stage + publish the fmt-2 list. The
     // forwarded chord follows on this same FIFO channel and wakes the app.
     hostPasteFiles(m);
   } else if (m.type === 'display-set') {
@@ -328,7 +323,7 @@ self.onmessage = function (e) {
     // page really did just read the host clipboard.
     clipReadSettle();
   } else if (m.type === 'compositor-stats') {
-    // On-demand-compositor probe (todos/0169): frames/submits/skipped/
+    // On-demand-compositor probe (docs/archive/0169): frames/submits/skipped/
     // parks/wakes from the compositor + the kernel's cumulative per-pcb
     // vsync-notify count (the app-worker-wake proof — flat while parked).
     post({ type: 'compositor-stats',
@@ -347,7 +342,7 @@ self.onmessage = function (e) {
     // device.lost path, recovery included (tests/browser/os-devloss.mjs).
     if (compositor && compositor.killDevice) compositor.killDevice();
   } else if (m.type === 'compositor-freeze') {
-    // Synthetic vsync-stop (test-only, todos/0169): the hidden-tab honest
+    // Synthetic vsync-stop (test-only, docs/archive/0169): the hidden-tab honest
     // pause is not automatable in Playwright — freeze the clock instead
     // and let the test watch every wake counter go flat.
     if (compositor) compositor.setFrozen(!!m.on);
@@ -360,7 +355,7 @@ self.onmessage = function (e) {
   }
 };
 
-// Host-file drop (todos/0067): the page posts each dropped File's name +
+// Host-file drop (docs/archive/0067): the page posts each dropped File's name +
 // bytes; the kernel writes them under /root/Desktop, where /bin/wm's coarse
 // per-second re-read (desk_load) grows an icon with no notify plumbing.
 // Direct kernel-side fs write — no process, no fd RPC round-trip. Policy:
@@ -391,7 +386,7 @@ function uniqName(dir, name) {
   }
   return final;
 }
-// Tree drops (todos/0398): a directory drop's files arrive with a
+// Tree drops (docs/archive/0398): a directory drop's files arrive with a
 // tree-relative `rel` — the dropped ROOT is uniquified ONCE per drop
 // episode (so a folder never merges into an existing one) and remembered
 // here for the episode's remaining files.
@@ -442,7 +437,7 @@ function dropFile(m) {
   }
 }
 
-// Host paste staging (todos/0398 D6): pasted files land in a hidden
+// Host paste staging (docs/archive/0398 D6): pasted files land in a hidden
 // staging dir — WIPED and repopulated per host paste (no collision
 // suffixes needed; paste-twice re-pastes the same staged list, copy
 // semantics) — and the list is published on the kernel slot as an
@@ -552,13 +547,13 @@ function createWorker(procSpec) {
     path: procSpec.path, argv: procSpec.argv, envp: procSpec.envp,
     cwd: procSpec.cwd, actions: procSpec.actions, flags: procSpec.flags,
     image: procSpec.image,
-    module: procSpec.module || null,   // pre-compiled Module (todos/0037)
+    module: procSpec.module || null,   // pre-compiled Module (docs/archive/0037)
     kernelPage: procSpec.kernelPage,
     ttySab: procSpec.ttySab || null,
     brokered: !!procSpec.brokered,
-    // Read-only volume (todos/0180): { prefix, sab } — the SAB shares.
+    // Read-only volume (docs/archive/0180): { prefix, sab } — the SAB shares.
     ro: procSpec.ro || null,
-    // SPSC pipe rings (todos/0181): [{fd, end, sab}] — the SABs share.
+    // SPSC pipe rings (docs/archive/0181): [{fd, end, sab}] — the SABs share.
     pipeRings: procSpec.pipeRings || null,
   });
   if (SPAWN_TRACE) {
@@ -592,7 +587,7 @@ function createWorker(procSpec) {
   };
 }
 
-// Two-tab boot guard (todos/0045): two tabs would run two KERNELS — two
+// Two-tab boot guard (docs/archive/0045): two tabs would run two KERNELS — two
 // process tables, two compositors, two fd brokers — over the same OPFS
 // images; BlockFS's dual-instance coherence does not cover that. A Web Lock
 // named after the image pair (so unrelated dev pages on this origin never
@@ -617,7 +612,7 @@ function acquireBootLock() {
   });
 }
 
-// WebGPU boot guard (todos/0055): the compositor IS WebGPU — no Canvas2D
+// WebGPU boot guard (docs/archive/0055): the compositor IS WebGPU — no Canvas2D
 // fallback (a fallback is two compositors, one a permanently undertested
 // zombie; decision log logs/2026-07-09/webgpu-mvu-direction.md). Probe the
 // full adapter->device chain HERE, before anything mounts, so a browser
@@ -651,7 +646,7 @@ function materializeBlob(store, bytes) {
 
 async function boot() {
   gpuDevice = await probeGPU();
-  if (!gpuDevice) {                // todos/0055: terminal — no lock taken,
+  if (!gpuDevice) {                // docs/archive/0055: terminal — no lock taken,
     post({ type: 'boot-nogpu' });  // nothing mounted, `booting` stays set
     return;
   }
@@ -708,7 +703,7 @@ async function boot() {
     log: function (m) { post({ type: 'boot-log', msg: m }); },
   };
 
-  // The system blob (todos/0040): a sealed, read-only BlockFS image mounted
+  // The system blob (docs/archive/0040): a sealed, read-only BlockFS image mounted
   // at /usr. Materialize when the OPFS copy is missing or version-stale
   // ("upgrade = swap the blob"): prefer a prebaked os/os-system.img served
   // beside the page (tools/mkimage.js output — zero compilation on the boot
@@ -740,7 +735,7 @@ async function boot() {
   if (OS_COMMON.bakedVersion(BLOCK_FS, sysStore) < (manifest.version | 0) || !smallMatches(sysStore)) {
     sysMode = null;
     try {
-      // manifest.image (todos/0249): a DEPLOY may publish the blob under a
+      // manifest.image (docs/archive/0249): a DEPLOY may publish the blob under a
       // content-hashed name (os-system.<sha>.img, immutable cache headers)
       // and names it here via its transformed image.json. The repo manifest
       // carries no `image` field, so every dev/test path (serve.js overlay
@@ -765,7 +760,7 @@ async function boot() {
     }
   }
   var sysFs = BLOCK_FS.createV4(sysStore, { readonly: true });
-  // Process-side read-only /usr (todos/0180): ONE SAB copy of the sealed
+  // Process-side read-only /usr (docs/archive/0180): ONE SAB copy of the sealed
   // system image, shipped to every process worker at spawn — /usr reads
   // (fonts, configs, assets) stop crossing the RPC boundary.
   var roSab = BLOCK_FS.storeToSab(sysStore);
@@ -777,9 +772,9 @@ async function boot() {
   // "migrated" into an OS volume — that file has never existed, so the
   // legacy path is inert.)
   var wsRoot = await BLOCK_FS.openWorkspace({ v4Name: ROOT_IMG, v3Name: 'os-root.v3.img' });
-  // /proc (todos/0043): a synthetic kernel-rendered volume — the Kernel
+  // /proc (docs/archive/0043): a synthetic kernel-rendered volume — the Kernel
   // constructor binds itself to it via the mount table. (Worker-global:
-  // the drop-file handler writes through it — todos/0067.)
+  // the drop-file handler writes through it — docs/archive/0067.)
   kfs = new BLOCK_FS.MountFS({ '/': wsRoot.fs, '/usr': sysFs, '/proc': new KERNEL.ProcFS() });
   if (wsRoot.mode === 'fresh') {
     post({ type: 'boot-log', msg: 'seeding user volume (manifest v' + manifest.version + ')…' });
@@ -803,7 +798,7 @@ async function boot() {
   OS_COMMON.writeHostPlatform(kfs, HOST_PLATFORM);
   var ccCompile = OS_COMMON.createCcDriver(CompilerJS, kfs);
 
-  // Kernel text service (todos/0275): the ksvc blob from the sealed system
+  // Kernel text service (docs/archive/0275): the ksvc blob from the sealed system
   // image, instantiated synchronously in THIS worker. A throw here is a
   // boot-error (boot()'s catch) — no zombie Canvas2D fallback exists, so a
   // boot that can't render chrome text must not reach the desktop.
@@ -820,9 +815,9 @@ async function boot() {
   kernel = new KERNEL.Kernel({
     fs: kfs,
     fetch: netFetch,   // #349 — the Tier 2.5 net-bridge wrapper
-    textService: textService,   // todos/0275 — compositor + headless text
-    roImage: { prefix: '/usr', sab: roSab },   // todos/0180
-    vsync: true,   // the compositor rAF calls vsyncTick() (todos/0100)
+    textService: textService,   // docs/archive/0275 — compositor + headless text
+    roImage: { prefix: '/usr', sab: roSab },   // docs/archive/0180
+    vsync: true,   // the compositor rAF calls vsyncTick() (docs/archive/0100)
     createWorker: createWorker,
     loadImage: function (p) { return OS_COMMON.readFileBytes(kfs, p); },
     compile: ccCompile,
@@ -858,7 +853,7 @@ async function boot() {
       post({ type: 'clip-read' });
       clipReadTimer = setTimeout(clipReadSettle, CLIP_READ_TIMEOUT_MS);
     },
-    // Egress (todos/0398): the kernel materialized ONE artifact; hand it to
+    // Egress (docs/archive/0398): the kernel materialized ONE artifact; hand it to
     // the page, buffer TRANSFERRED (up to EGRESS_MAX — never structured-
     // cloned). The page acts inside the still-live transient activation of
     // the menu click that started the chain: anchor download, or the
@@ -921,12 +916,12 @@ async function boot() {
     post({ type: 'net-config', on: cfg.on, url: cfg.url });
   });
 
-  // The WM control plane (todos/0014): the kernel-owned endpoint first, then
+  // The WM control plane (docs/archive/0014): the kernel-owned endpoint first, then
   // /bin/wm as a kernel service after pid 1. Failure is non-fatal by design —
   // kernel-chrome is the fallback policy; `wm &` respawns it from the shell.
   kernel.wmServe();
 
-  // The audio mixer (todos/0017): one page-owned output ring, kernel-side
+  // The audio mixer (docs/archive/0017): one page-owned output ring, kernel-side
   // mixing on a 20ms pump. The page plays it with host.js's
   // createAudioReceiver (resumed on first user gesture — autoplay policy).
   // The pump is gated on live streams (IDLE-POWER audioPump gate): parked
@@ -947,7 +942,7 @@ async function boot() {
   }
   await kernel.boot({
     path: '/bin/sh',
-    // "-sh": login shell — sources /etc/profile then ~/.profile (todos/0174)
+    // "-sh": login shell — sources /etc/profile then ~/.profile (docs/archive/0174)
     argv: ['-sh'],
     envp: ['PATH=/usr/local/bin:/bin', 'HOME=/root', 'TERM=xterm-256color'],
     cwd: '/root',
@@ -974,7 +969,7 @@ async function boot() {
   queued.forEach(function (m) { self.onmessage({ data: m }); });
 }
 
-// Boot entry — also the boot-retry target (todos/0045). `booting` blocks
+// Boot entry — also the boot-retry target (docs/archive/0045). `booting` blocks
 // double entry (retry clicks while a boot is in flight or after one won);
 // only the lock-lost path resets it. A real boot failure stays terminal
 // (reload to reboot), as before.

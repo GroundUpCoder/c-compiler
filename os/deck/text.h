@@ -1,5 +1,5 @@
-/* text.h — /bin/deck's text layer (todos/0284, design §1.3): the shared
- * fontcore.h glyph pipeline (todos/0277 — face 0 = baked Noto Sans Mono,
+/* text.h — /bin/deck's text layer (docs/archive/0284, design §1.3): the shared
+ * fontcore.h glyph pipeline (docs/archive/0277 — face 0 = baked Noto Sans Mono,
  * fallback chain, tofu) behind a greedy word-wrap + align/valign layout.
  *
  * Text renders at FINAL pixel size straight onto the 1x (post-downsample)

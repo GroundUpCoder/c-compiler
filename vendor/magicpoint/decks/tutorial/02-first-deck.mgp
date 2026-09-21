@@ -1,4 +1,4 @@
-%% 02-first-deck.mgp - learn MagicPoint on gucOS, deck 2 of 10 (todos/0202).
+%% 02-first-deck.mgp - learn MagicPoint on gucOS, deck 2 of 10 (docs/archive/0202).
 %% Deck anatomy: pages, text lines, directive lines, comments, escaping.
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"
 %default 1 area 90 90, size 2, fore "white", back "DarkSlateGray", font "standard"

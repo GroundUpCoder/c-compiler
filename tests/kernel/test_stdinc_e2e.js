@@ -107,24 +107,19 @@ async function main() {
   check('/usr/local/src/libc -> /opt/libc-sources (the payload root)',
     p.split('\n').some((l) => l.trim() === '/opt/libc-sources'), p);
   const srcs = CompilerJS.getStdlibSources();
-  const ext = JSON.parse((() => {
-    const t = fs.readFileSync(path.join(ROOT, 'libc-ext.js'), 'utf-8');
-    return t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1);
-  })());
-  // Headers + stdlib .c units + the ext .c units, the last DERIVED from
-  // libc-ext.js (a hardcoded 6 went stale the first time ext/ grew — #111
-  // added the search.h family and the count moved to 14).
-  const extCUnits = Object.keys(ext).filter((n) => n.endsWith('.c')).length;
-  const nFiles = hdrs.size + Object.keys(srcs).length + extCUnits;
+  // Headers + every builtin .c unit — the musl regex/fnmatch/glob/search.h
+  // units are ordinary builtin sources since the 2026-09-21 fold (before it
+  // they were DERIVED from libc-ext.js; a hardcoded 6 had gone stale once).
+  const nFiles = hdrs.size + Object.keys(srcs).length;
   check(`the source tree carries all ${nFiles} files`,
     p.split('\n').some((l) => l.trim() === String(nFiles)), p);
   const psums = parseSums(p);
   check('__stdio.c is BYTE-EXACT vs the in-compiler literal map',
     psums.get('/usr/local/src/libc/__stdio.c') === sha(srcs['__stdio.c']), p);
-  check('regcomp.c (TRE, via libc-ext.js) is BYTE-EXACT',
-    psums.get('/usr/local/src/libc/regcomp.c') === sha(ext['regcomp.c']), p);
-  check('fnmatch.c (musl, via libc-ext.js) is BYTE-EXACT',
-    psums.get('/usr/local/src/libc/fnmatch.c') === sha(ext['fnmatch.c']), p);
+  check('regcomp.c (TRE, folded musl) is BYTE-EXACT',
+    psums.get('/usr/local/src/libc/regcomp.c') === sha(srcs['regcomp.c']), p);
+  check('fnmatch.c (folded musl) is BYTE-EXACT',
+    psums.get('/usr/local/src/libc/fnmatch.c') === sha(srcs['fnmatch.c']), p);
   check('the source tree carries the headers too (stdio.h byte-exact)',
     psums.get('/usr/local/src/libc/stdio.h') === sha(hdrs.get('stdio.h')), p);
 

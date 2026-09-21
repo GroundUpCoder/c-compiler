@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Phase 4 job control end-to-end (todos/0003): real C in worker_threads.
+// Phase 4 job control end-to-end (docs/archive/0003): real C in worker_threads.
 // A ticker child emits a byte every 50ms; the JS harness (as the embedder)
 // sends SIGSTOP/SIGCONT/SIGTERM while the C init observes the transitions
 // through waitpid(WUNTRACED / WCONTINUED / 0). Proves:

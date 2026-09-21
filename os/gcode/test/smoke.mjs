@@ -1,4 +1,4 @@
-// Native smoke test for /bin/gcode (todos/0174) — no network, no API key.
+// Native smoke test for /bin/gcode (docs/archive/0174) — no network, no API key.
 // Starts a scripted fake /v1/messages SSE server, builds gcode.c natively
 // (real libcurl + cJSON), and drives it through a text turn and a tool-use
 // round-trip. This is the reference-oracle harness; test_code_e2e.js will

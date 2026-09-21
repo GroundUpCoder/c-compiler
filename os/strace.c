@@ -1,4 +1,4 @@
-/* strace (todos/0046) — per-pid syscall-RPC trace.
+/* strace (docs/archive/0046) — per-pid syscall-RPC trace.
  *
  * Usage: strace [-f] [-o FILE] CMD [ARGS...]
  *

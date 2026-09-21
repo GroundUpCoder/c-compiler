@@ -1,4 +1,4 @@
-/* windows.h — the Win32 veneer for this OS (todos/WIN32.md).
+/* windows.h — the Win32 veneer for this OS (docs/WIN32.md).
  *
  * 0057: the gdi32 drawing subset (CPU rasterizer into the shm surface —
  * the DWM redirection model: CPU draw -> shm -> GPU composite).
@@ -32,7 +32,7 @@
  * analog; WRES format spec in that tool, loader in user32.c res_*).
  * UNICODE GUI ports whose entry is wWinMain list os/win32/wwinmain.c in
  * their bin.json sources (the CRT entry shim). Icons/cursors are stub
- * handles; PlaySound is REAL since todos/0094 (winmm.c over os/sounds.h:
+ * handles; PlaySound is REAL since docs/archive/0094 (winmm.c over os/sounds.h:
  * WAVs through the 0017 kernel mixer; SND_RESOURCE stays silent success —
  * the corpus wave assets are not vendored), and MessageBox/MessageBeep
  * play the event-scheme sounds (user32.c).
@@ -540,7 +540,7 @@ int __gdi_object_count(void);
 int __gdi_dc_count(void);
 
 /* ================================================================
- * user32 (todos/0058): classes, windows, messages, input, controls.
+ * user32 (docs/archive/0058): classes, windows, messages, input, controls.
  * ================================================================ */
 
 typedef LRESULT (*WNDPROC)(HWND, UINT, WPARAM, LPARAM);
@@ -599,7 +599,7 @@ typedef struct tagCREATESTRUCT {
 #define CS_VREDRAW  0x0001
 #define CS_HREDRAW  0x0002
 #define CS_DBLCLKS  0x0008
-/* gucOS extension (todos/0258, menu-arch §3.7/A6): the app presents its
+/* gucOS extension (docs/archive/0258, menu-arch §3.7/A6): the app presents its
  * own CLIENT plane (webgpu.h, or any self-presented transport) — user32
  * never synthesizes WM_PAINT for such a window and never touches its
  * window surface; GetDC on it fails loud (no CPU plane to wrap). The
@@ -1114,7 +1114,7 @@ DWORD    GetSysColor(int index);
 HBRUSH   GetSysColorBrush(int index);
 
 /* ================================================================
- * The 0060 port-corpus surface (todos/0060, design todos/WIN32.md).
+ * The 0060 port-corpus surface (docs/archive/0060, design docs/WIN32.md).
  *
  * Everything below is DECLARATION-ONLY unless os/win32/{gdi32,user32}.c
  * (or a later veneer slice) implements it: ported apps compile against
@@ -1285,7 +1285,7 @@ LONG_PTR SetWindowLongPtrW(HWND hwnd, int index, LONG_PTR value);
 int  MessageBoxW(HWND owner, LPCWSTR text, LPCWSTR caption, UINT type);
 BOOL IsDialogMessageW(HWND hDlg, MSG *msg);
 
-/* ---------------- kernel32 (implemented by kernel32.c, todos/0059) ----
+/* ---------------- kernel32 (implemented by kernel32.c, docs/archive/0059) ----
  * kernel32 is W-NATIVE, unlike gdi32/user32: it arrived with the UNICODE
  * port corpus, so the W names are the implemented symbols and there are
  * no ANSI generic entries (they grow if an ANSI corpus app ever demands
@@ -1795,7 +1795,7 @@ BOOL IsClipboardFormatAvailable(UINT format);
 #define CF_BITMAP      2
 #define CF_UNICODETEXT 13
 
-/* gucOS extension (todos/0258, menu-arch §3.7a): the SDL window under a
+/* gucOS extension (docs/archive/0258, menu-arch §3.7a): the SDL window under a
  * top-level HWND, so a CS_OWNCLIENT app can bind its own present path to
  * it (SDL_GetWGPUSurface). Any HWND resolves to its top-level's window;
  * NULL for a destroyed window. SDL_Window is a named-struct typedef in

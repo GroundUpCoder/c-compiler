@@ -1,6 +1,6 @@
 {
   "name": "mgpp",
-  "description": "MagicPointPlus (todos/0272): a thin -DMGPP fork of mgp — left-half click / Left arrow go BACKWARD, right-half / Right arrow forward; everything else identical. Shares every source with bin.json.",
+  "description": "MagicPointPlus (docs/archive/0272): a thin -DMGPP fork of mgp — left-half click / Left arrow go BACKWARD, right-half / Right arrow forward; everything else identical. Shares every source with bin.json.",
   "compilerArgs": [
     "-DMGPP",
     "-DFREETYPE",

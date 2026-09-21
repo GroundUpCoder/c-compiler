@@ -4,7 +4,7 @@ puNES (`punesemu/puNES`, aka FHorse) is a cycle-accurate NES/Famicom emulator
 — accuracy tier, second only to Mesen on the standard test-ROM suites, with a
 large mapper set and the 2A03 APU. Its **emulation core is plain C**; only the
 Qt shell and a handful of exotic expansion-audio DSP files are C++. This is the
-NES counterpart to `vendor/sameboy` (`/bin/sameboy`), ported per `todos/0088`.
+NES counterpart to `vendor/sameboy` (`/bin/sameboy`), ported per `docs/archive/0088`.
 
 - **Upstream**: https://github.com/punesemu/puNES
 - **Pinned commit**: `2ed5b1b2cffcde48ff36f359091756d17d8fe193` (2025-12-31)

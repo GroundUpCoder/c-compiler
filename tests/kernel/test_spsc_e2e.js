@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPSC pipe fast path end-to-end (todos/0181): REAL C pipelines in
+// SPSC pipe fast path end-to-end (docs/archive/0181): REAL C pipelines in
 // worker_threads over the brokered kernel, the rofs-e2e RPC-op-counter
 // pattern. Three boots:
 //

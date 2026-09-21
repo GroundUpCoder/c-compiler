@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// THE CORE SELECT MENU OF /bin/netsurf (todos/0422).
+// THE CORE SELECT MENU OF /bin/netsurf (docs/archive/0422).
 //
 // A <select> click used to reach NEITHER of NetSurf's two menus: the core
 // menu was gated behind nsoption_bool(core_select_menu) (false by default,
@@ -38,7 +38,7 @@
 //             state (o1 off, o2 on) is read back by a button click AFTER
 //             dismissal — a change listener must not touch the DOM while
 //             the menu is open, because a mutation-driven re-conversion
-//             dismisses the menu by design (todos/0422 notes).
+//             dismisses the menu by design (docs/archive/0422 notes).
 //
 // GEOMETRY IS MEASURED, NEVER DERIVED FROM FONT MATH: a first session
 // opens the menu and shoots it; Node reads the selected-row highlight band
@@ -136,7 +136,7 @@ s.addEventListener('change', function () {
 
 /* The multi select.  NO change listener: a DOM write while the menu is
  * open would re-convert the document and dismiss the menu (deliberate,
- * todos/0422 notes) — the toggles are asserted off the highlight bands,
+ * docs/archive/0422 notes) — the toggles are asserted off the highlight bands,
  * and #readbtn paints the final DOM state after the menu is gone. */
 const PAGE_MULTI = `<!DOCTYPE html><html><head><title>NsSelM</title><style>
 body { margin: 0; background: #ffffff; }

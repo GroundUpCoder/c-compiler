@@ -3,7 +3,7 @@
 // through pointer-to-const, to a const member, to a member of a const
 // struct (C11 6.5.2.3p3 qualifier propagation), and whole-struct
 // assignment onto a struct with a const member. Deferred from 0217/G10,
-// closed as bug-hunt G22 (todos/0227).
+// closed as bug-hunt G22 (docs/archive/0227).
 // C11: 6.5.16p2 / 6.5.3.1p1 / 6.5.2.4p1 (constraints) — the target shall
 // be a MODIFIABLE lvalue; 6.3.2.1p1 excludes const-qualified types and
 // aggregates with const members.

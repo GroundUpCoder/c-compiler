@@ -277,7 +277,7 @@ function assertAbsent(entries, strippedSurface) {
     for (const n of e.absent) {
       if (new RegExp('\\b' + n + '\\b').test(strippedSurface))
         throw new Error('"notably absent" claims ' + n + ' but the header surface HAS it — ' +
-          'the absence was filled (two-sided edit, todos/PRINCIPLES.md): update the ABSENT list in tools/mksdlindex.js');
+          'the absence was filled (two-sided edit, docs/PRINCIPLES.md): update the ABSENT list in tools/mksdlindex.js');
     }
     for (const n of (e.see || [])) {
       if (!new RegExp('\\b' + n + '\\b').test(strippedSurface))
@@ -465,7 +465,7 @@ function check(targetPath) {
 module.exports = { generate, check, groupFor, clusterFor, assertAbsent, parseHeader, OUT };
 
 if (require.main === module) {
-  // Cross-tree preflight (todos/0341): this tool writes os/doc/ next to
+  // Cross-tree preflight (docs/archive/0341): this tool writes os/doc/ next to
   // itself; a cross-tree launch would rewrite another tree's committed doc.
   require(path.join(__dirname, '../tests/lib/tree-guard.js'))
     .assertSameTree(__dirname, { label: 'tools/mksdlindex.js' });

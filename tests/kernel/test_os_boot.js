@@ -182,7 +182,7 @@ for (let i = 0; i < expectCu.length; i++) {
 // misc (yes/seq/env/expr/date/uname/usleep/which/cksum/base64), hashes,
 // and the single-user stubs (whoami/id/hostname). `yes | head` doubles as
 // the EPIPE-terminates-the-writer check; `env /bin/true` exercises the
-// bare-exec emulation the multicall gained with todos/0035 (spawn + wait
+// bare-exec emulation the multicall gained with docs/archive/0035 (spawn + wait
 // + exit-with-child-status behind the scenes).
 r = session([
   'cd /tmp && mkdir cu2 && cd cu2',
@@ -230,7 +230,7 @@ const expectCu2 = [
   '1',                                      // dd bs=1 count=1
   '2',                                      // split -b 2, first part
   'f.txt', 'unlink-ok',                     // readlink, unlink
-  '/usr/tmp',                               // realpath resolves PHYSICALLY (todos/0263): /bin is a symlink to /usr/bin, so /bin/../tmp -> /usr/tmp, NOT the lexical /tmp
+  '/usr/tmp',                               // realpath resolves PHYSICALLY (docs/archive/0263): /bin is a symlink to /usr/bin, so /bin/../tmp -> /usr/tmp, NOT the lexical /tmp
   'y', 'y',                                 // yes stops on EPIPE
   '2 copy',                                 // tee
   '1',                                      // expr 7 % 3
@@ -253,7 +253,7 @@ for (let i = 0; i < expectCu2.length; i++) {
   check('coreutils2[' + i + '] = ' + JSON.stringify(expectCu2[i]), cu2[i] === expectCu2[i], JSON.stringify(cu2[i]));
 }
 
-// ---- coreutils batch 3: the spawn-capable applets (todos/0035) ----
+// ---- coreutils batch 3: the spawn-capable applets (docs/archive/0035) ----
 // find -exec / xargs spawn real processes through the vfork-on-__spawn
 // shim (now linked into the multicall); awk exercises popen (cmd |
 // getline) and system(); tar -z covers BOTH shim paths — create spawns
@@ -330,7 +330,7 @@ r = session([
 check('procps session exits clean', r.status === 0, String(r.status) + ' ' + (r.stderr || '').slice(-200));
 {
   const pp = r.stdout.split('\n');
-  // pid 1 is a LOGIN shell since todos/0174 (argv[0] "-sh"): ps's COMMAND
+  // pid 1 is a LOGIN shell since docs/archive/0174 (argv[0] "-sh"): ps's COMMAND
   // column renders the argv dash (Linux shows "-bash" the same way), while
   // /proc/1/comm stays "sh" (ProcFS strips the login dash — Linux comm
   // comes from the exec'd file, so pgrep/pkill by name keep matching).
@@ -389,7 +389,7 @@ check('time/strings session exits clean', r.status === 0, String(r.status) + ' '
     JSON.stringify(ts.slice(-6)));
 }
 
-// ---- shebang exec (todos/0065): `./script` runs via its #! line ----
+// ---- shebang exec (docs/archive/0065): `./script` runs via its #! line ----
 // The kernel re-dispatches a "#!" image to its interpreter, so a shell
 // script is directly executable (no explicit `sh`) — the 0066 launcher
 // primitive. `-e` rides through as one interpreter arg; a shebang cycle
@@ -479,8 +479,8 @@ check('environ-immortality session exits clean', r.status === 0,
   }
 }
 
-// ---- login-shell $() re-exec must not re-source profiles (todos/0177) ----
-// pid 1 is a login shell (argv[0] "-sh", todos/0174). Every $() runs via the
+// ---- login-shell $() re-exec must not re-source profiles (docs/archive/0177) ----
+// pid 1 is a login shell (argv[0] "-sh", docs/archive/0174). Every $() runs via the
 // NOMMU re-exec-self machinery, which carries argv[0] into the subshell; the
 // dash must be STRIPPED there, or the subshell also looks like a login shell
 // and re-sources ~/.profile. Two symptoms if it does: (1) profile stdout

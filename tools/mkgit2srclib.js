@@ -44,7 +44,7 @@ const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 
-// Cross-tree preflight (todos/0341, extended by #142): regenerates committed
+// Cross-tree preflight (docs/archive/0341, extended by #142): regenerates committed
 // srclib artifacts next to itself. The --check spawn
 // (test_gucman_libgit2_e2e.js) inherits the kernel suite's in-tree cwd —
 // measured at #142.

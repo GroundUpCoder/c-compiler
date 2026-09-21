@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MicroPython sys.path + stdlib e2e (todos/0117 R2). The third sibling of
+// MicroPython sys.path + stdlib e2e (docs/archive/0117 R2). The third sibling of
 // test_repl_pty_e2e.js (the interactive REPL) and test_micropython_script_e2e.js
 // (the R1 CLI): this one proves the R2 deliverables — the SEARCH PATH policy
 // and the curated module set — against a real kernel, real BlockFS and a real
@@ -70,10 +70,10 @@ const RUNME_PY = 'import sys\nprint("DASHM=" + __name__ + " argv0=" + sys.argv[0
 const PKG_INIT_PY = 'NAME = "thepkg"\n';
 const PKG_MAIN_PY = 'print("PKGMAIN=" + __name__)\n';
 
-// A #! script (todos/0065 _spawnShebang). Proves the shebang story needs no
+// A #! script (docs/archive/0065 _spawnShebang). Proves the shebang story needs no
 // new mechanism: the kernel re-dispatches to the interpreter with the script
 // path as argv[1], which is exactly the CLI R1 built. It also pins the thing
-// that matters for todos/0338 — the interpreter path in a shebang is resolved
+// that matters for docs/archive/0338 — the interpreter path in a shebang is resolved
 // like any other spawn, so a script naming the dispatch link /bin/python
 // reaches whatever cmdalt resolves, with no shebang mechanism change. (This
 // fixture plants its own /usr/local/bin/python; the shipped package claims the
@@ -418,7 +418,7 @@ const watchdog = setTimeout(() => {
   check('-m failure reported on fd 2', /no_such_module|module not found/.test(err),
         JSON.stringify(err.slice(0, 300)));
 
-  // --- shebang (todos/0065 _spawnShebang) --------------------------------
+  // --- shebang (docs/archive/0065 _spawnShebang) --------------------------------
   check('a #!/usr/local/bin/python script runs as its own command',
         has("SHEBANG=via-shebang argv=['/root/shb/run.py', 'zed']"), line('SHEBANG='));
   check('shebang script exited 0', has('shebang_status=0'));

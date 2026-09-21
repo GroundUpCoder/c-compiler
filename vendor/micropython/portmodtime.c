@@ -1,5 +1,5 @@
 // gucOS MicroPython port — the two hooks extmod/modtime.c asks the port for
-// (todos/0117 R2). Named by MICROPY_PY_TIME_INCLUDEFILE and #included INTO
+// (docs/archive/0117 R2). Named by MICROPY_PY_TIME_INCLUDEFILE and #included INTO
 // modtime.c, not compiled separately — that is upstream's mechanism, and it is
 // why this file lists no includes of its own and is not in bin.json's sources.
 //

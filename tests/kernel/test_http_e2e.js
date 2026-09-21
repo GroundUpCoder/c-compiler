@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// HTTP transport end-to-end (todos/0172; fd-shaped since todos/0417): a real
+// HTTP transport end-to-end (docs/archive/0172; fd-shaped since docs/archive/0417): a real
 // C process in a worker_thread drives the FULL stack — C extern __http_* +
 // read()/close()/__wait -> host.js env imports -> KernelClient RPC -> kernel
 // 0x06xx/0x04xx -> Node's global fetch -> a local HTTP server. Proves the
@@ -42,7 +42,7 @@ const INIT_C = `
 #include <errno.h>
 #include <unistd.h>
 
-/* The kernel HTTP primitive (todos/0172, fd-shaped todos/0417), surfaced by
+/* The kernel HTTP primitive (docs/archive/0172, fd-shaped docs/archive/0417), surfaced by
    host.js as env imports and declared __import by the compiler prelude. The
    libcurl veneer (0173) wraps these; here we drive them directly, with the
    WAIT-first consumer contract: park on the fd, consume the status once,

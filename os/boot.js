@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// boot.js — headless boot of the reference OS (todos/0004; OS.md
+// boot.js — headless boot of the reference OS (docs/archive/0004; OS.md
 // "agent-friendly by construction"). Same kernel, same image manifest, same
 // shell as os/os.html — but under plain Node with the tty on stdio, so
 // agents and CI drive the OS with pipes and exit codes:
@@ -8,11 +8,11 @@
 //   printf 'cc hello.c && ./a.out\nexit\n' | node os/boot.js
 //   node os/boot.js                    # interactive (raw-mode terminal)
 //
-// The OS lives on TWO volumes (todos/0026 + the 0040 flip): a WRITABLE root
+// The OS lives on TWO volumes (docs/archive/0026 + the 0040 flip): a WRITABLE root
 // volume at `/` (/etc, /var, /tmp, /root, /dev, /run — user territory, never
 // touched by upgrades) and a READ-ONLY baked system blob mounted at `/usr`
 // (`/bin` is a root-volume symlink to /usr/bin). The blob is materialized
-// here on demand — a missing, version-stale, or input-stale (todos/0082)
+// here on demand — a missing, version-stale, or input-stale (docs/archive/0082)
 // system image installs a prebaked fixture when one is fresh, else re-bakes
 // from os/image.json (the same pipeline as tools/mkimage.js); the root volume is
 // seeded once, when freshly created, from the manifest's `user` section.
@@ -21,7 +21,7 @@
 //   --image=PATH   system image file (default: os/os-system.img); the root
 //                  image lives beside it (foo-system.img -> foo-root.img)
 //   --fixture=PATH prebaked blob to INSTALL (file copy, no compiling) when
-//                  the system image must be materialized (todos/0082).
+//                  the system image must be materialized (docs/archive/0082).
 //                  Default: os/os-system.img (tools/mkimage.js output).
 //                  Used only if version-current AND input-fresh.
 //   --no-fixture   never install a prebaked blob — a needed blob really
@@ -32,7 +32,7 @@
 //   --fresh        discard BOTH images: re-materialize + re-seed
 //   --fresh-system re-BAKE the system blob outright (user files survive;
 //                  implies --no-fixture)
-//   --overlay=<id> enable a declared image overlay (todos/0118, repeatable);
+//   --overlay=<id> enable a declared image overlay (docs/archive/0118, repeatable);
 //                  --overlays=all enables all. Forces a system re-bake (the
 //                  prebaked fixture and any reused blob are base-only).
 //   --require-clean-overlays  a dirty overlay provenance is fatal (else warns)
@@ -58,18 +58,18 @@
 //                  running suite.
 //   --quiet        suppress boot progress on stderr
 //   --screen=WxH   headless screen dims (default: the kernel's 1024x768) —
-//                  small-viewport runs (todos/0282)
+//                  small-viewport runs (docs/archive/0282)
 //   --vsync[=hz]   drive kernel.vsyncTick() from a host timer (ticket #424;
 //                  default 60, want 1..1000 — a ms timer can't honestly
 //                  deliver more). The headless twin of the browser
-//                  compositor's rAF (todos/0100): the kernel advertises a
+//                  compositor's rAF (docs/archive/0100): the kernel advertises a
 //                  frame clock at spawn, so SDL frame loops pace off
 //                  vsyncWait instead of host.js's deadline pacer — the seam
 //                  for testing frame-paced code without a browser. rAF
 //                  semantics on overrun: missed ticks are skipped, never
 //                  queued. Off by default: a plain boot advertises nothing
 //                  and is byte-identical to today. The timer never parks
-//                  (no compositor here; the todos/0169 park protocol is the
+//                  (no compositor here; the docs/archive/0169 park protocol is the
 //                  browser's power model) and never holds the process open.
 //   --tty-out      fd 1/2 tty-kind even under pipes (isatty(1) true, so
 //                  shells go interactive — drive prompts/job control from
@@ -82,7 +82,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 
-// Cross-tree preflight (todos/0341, extended by #142): boot.js re-bakes and
+// Cross-tree preflight (docs/archive/0341, extended by #142): boot.js re-bakes and
 // installs ITS OWN tree's image fixture, so a foreign-cwd launch silently
 // rewrites another tree's blob. GUARDED, not exempted — the #142 survey
 // measured every harness spawn: the kernel e2es inherit the suite-runner's
@@ -90,7 +90,7 @@ const ROOT = path.resolve(__dirname, '..');
 // dir is only the --image= argument, never the cwd), and test_heavylock_e2e
 // sets ROOT-based cwds explicitly. Ahead of the heavy requires and the
 // heavy-lock join below — refuse before you load a compiler or take a
-// machine-wide lock (the todos/0341 order).
+// machine-wide lock (the docs/archive/0341 order).
 require(path.join(ROOT, 'tests/lib/tree-guard.js'))
   .assertSameTree(__dirname, { label: 'os/boot.js' });
 
@@ -126,7 +126,7 @@ let waitLockMs = 0;         // --wait-lock[=SECS]: loud wait on the heavy-test
                             // host lock instead of the fail-fast exit 3
                             // (0 = fail fast, Infinity = no deadline)
 let egressDir = null;       // --egress-dir=DIR: the headless onEgress twin
-                            // (todos/0398) — artifacts land as host files.
+                            // (docs/archive/0398) — artifacts land as host files.
                             // Flag absent -> no hook -> the RPC answers
                             // ENOSYS (deliberately no silent fallback).
 const requestedOverlays = new Set();
@@ -138,7 +138,7 @@ for (const a of process.argv.slice(2)) {
   else if (a === '--fresh') freshBoot = true;
   else if (a === '--fresh-system') freshSystem = true;
   else if (a === '--quiet') quiet = true;
-  else if (a.startsWith('--screen=')) {           // WxH (todos/0282: small-
+  else if (a.startsWith('--screen=')) {           // WxH (docs/archive/0282: small-
     const m = /^(\d+)x(\d+)$/.exec(a.slice(9));   // viewport headless runs)
     if (!m) { process.stderr.write('boot: bad --screen (want WxH)\n'); process.exit(2); }
     screenDims = { w: +m[1], h: +m[2] };
@@ -215,7 +215,7 @@ try {
   process.exit(2);
 }
 
-// Optional opt-in image overlays (todos/0118): resolve requested ids against
+// Optional opt-in image overlays (docs/archive/0118): resolve requested ids against
 // image.json `overlays[]` (unknown id -> exit 2, before any work). Overlays are
 // baked into the system blob, so requesting any forces a real bake — the
 // prebaked fixture and any reused/version-current blob are base-only.
@@ -258,9 +258,9 @@ if (resolvedOverlays.length) {
   }
 }
 
-/* ---- single-instance image guard (todos/0293, the 0045 follow-up) ---- */
+/* ---- single-instance image guard (docs/archive/0293, the 0045 follow-up) ---- */
 // The browser side has always been guarded (one kernel per origin: a Web
-// Lock named after the OPFS image pair, todos/0045); headless boot.js was
+// Lock named after the OPFS image pair, docs/archive/0045); headless boot.js was
 // "safe by isolation, not by design" — the kernel e2es mint a fresh mkdtemp
 // pair per boot, so nothing ever collided IN TESTS, but two hand-run boots
 // against the default os/ pair are two live BlockFS instances over one
@@ -323,7 +323,7 @@ const IMAGE_LOCK_PATH = rootImagePath + '.lock';
   }
 }
 
-/* ---- heavy-test host lock (todos/0342, closing todos/0303) ---- */
+/* ---- heavy-test host lock (docs/archive/0342, closing docs/archive/0303) ---- */
 // A full-OS boot is the unit of RAM the heavy lock bounds (~2-4 GB per boot
 // node), so the guard runs HERE — where the boot starts — not in whichever
 // runner or e2e spawned it. Under a suite runner the runner already owns the
@@ -333,7 +333,7 @@ const IMAGE_LOCK_PATH = rootImagePath + '.lock';
 // bare boot, a single-file e2e, or a bench tool contends normally: own the
 // lock, or exit 3 naming the holder (--wait-lock[=SECS] opts in to a loud
 // wait instead). All argument validation stays ABOVE this call — refuse
-// before you take a machine-wide lock (the todos/0341 order).
+// before you take a machine-wide lock (the docs/archive/0341 order).
 require(path.join(ROOT, 'tests/lib/heavy-lock.js'))
   .joinHeavyLock({ name: 'os/boot.js', waitMs: waitLockMs });
 
@@ -350,7 +350,7 @@ async function mountAndBoot() {
    * re-materializes. STRICTLY older re-bakes; a NEWER blob (an upgrade
    * swapped in from outside, e.g. mkimage against a bumped manifest) is
    * kept as-is — "upgrade = swap the blob". A blob at EXACTLY the manifest
-   * version must also be input-fresh (todos/0082): bake inputs newer than
+   * version must also be input-fresh (docs/archive/0082): bake inputs newer than
    * the blob's mtime mean it predates the current tree — never silently
    * reuse it (--stale-ok overrides). Materialization prefers INSTALLING a
    * prebaked fixture (file copy ≪ bake; --fixture=, default the repo's
@@ -431,7 +431,7 @@ async function mountAndBoot() {
     sysMode = 'baked';
   }
   const sysFs = BLOCK_FS.createV4(store, { readonly: true });
-  // Process-side read-only /usr (todos/0180): ONE SAB copy of the sealed
+  // Process-side read-only /usr (docs/archive/0180): ONE SAB copy of the sealed
   // system image, shipped to every process worker at spawn — /usr reads
   // (fonts, configs, assets) stop crossing the RPC boundary.
   const roSab = BLOCK_FS.storeToSab(store);
@@ -442,7 +442,7 @@ async function mountAndBoot() {
   const rootFresh = freshBoot || !fs.existsSync(rootImagePath);
   const rootStore = new COMMON.NodeFileStore(fs, rootImagePath, freshBoot);
   const rootFs = BLOCK_FS.createV4(rootStore);   // devNodes ON: its /dev IS /dev
-  // /proc (todos/0043): a synthetic kernel-rendered volume — the Kernel
+  // /proc (docs/archive/0043): a synthetic kernel-rendered volume — the Kernel
   // constructor binds itself to it via the mount table.
   const kfs = new BLOCK_FS.MountFS({ '/': rootFs, '/usr': sysFs, '/proc': new K.ProcFS() });
   if (rootFresh) {
@@ -470,7 +470,7 @@ async function mountAndBoot() {
   const ccCompile = COMMON.createCcDriver(CompilerJS, kfs);
   const interactive = !!process.stdin.isTTY;
 
-  // Kernel text service (todos/0275): same blob, same loader as the browser
+  // Kernel text service (docs/archive/0275): same blob, same loader as the browser
   // kernel worker — a throw here fails the boot loudly (nonzero exit), so
   // headless composites can never quietly go textless.
   const textService = OS_KSVC.load(kfs, { log: quiet ? () => {} : bootLog });
@@ -484,12 +484,12 @@ async function mountAndBoot() {
   const kernel = new K.Kernel({
     fs: kfs,
     fetch: netFetch,   // #349 — the Tier 2.5 net-bridge wrapper
-    screen: screenDims || undefined,   // --screen=WxH (todos/0282)
+    screen: screenDims || undefined,   // --screen=WxH (docs/archive/0282)
     vsync: vsyncHz != null,   // --vsync[=hz] (#424): advertise the frame
                               // clock at spawn; the timer below is its
                               // source. False = today's no-clock boot.
-    textService,   // todos/0275 — headless composite label text
-    roImage: { prefix: '/usr', sab: roSab },   // todos/0180
+    textService,   // docs/archive/0275 — headless composite label text
+    roImage: { prefix: '/usr', sab: roSab },   // docs/archive/0180
     createWorker: K.nodeCreateWorker({ hostPath: HOST, kernelPath: KERNEL }),
     loadImage: (p) => COMMON.readFileBytes(kfs, p),
     compile: ccCompile,
@@ -504,7 +504,7 @@ async function mountAndBoot() {
       const sig = status & 0x7f;
       process.exit(sig ? 128 + sig : (status >> 8) & 0xff);
     },
-    // Egress (todos/0398): the headless twin of the browser download/save
+    // Egress (docs/archive/0398): the headless twin of the browser download/save
     // actor — the finished artifact lands as a host file under --egress-dir
     // (both dispositions; there is no picker to raise here). Collisions get
     // the dropFile '-N' suffix: an egress never overwrites an earlier one.
@@ -529,7 +529,7 @@ async function mountAndBoot() {
   /* ---- headless frame clock (--vsync[=hz], ticket #424) ----
    * The browser twin is the compositor rAF calling vsyncTick() per composite
    * (os/compositor.js). Here a drift-corrected setTimeout chain aims at an
-   * absolute hz schedule (the todos/0100 pacer lesson: naive fixed-delay
+   * absolute hz schedule (the docs/archive/0100 pacer lesson: naive fixed-delay
    * timers add callback time to the period). Overrun keeps rAF semantics:
    * missed ticks are SKIPPED, never queued — vsyncWait's catch-up collapses
    * them to one immediate frame, same as a browser tab that stalled. The
@@ -597,14 +597,14 @@ async function mountAndBoot() {
   // settled write to any `net` store layer retargets the NEXT transfer.
   COMMON.netFetchAttach(netFetch, kernel, kfs);
 
-  // The WM control plane (todos/0014) — same shape as kernel-worker.js:
+  // The WM control plane (docs/archive/0014) — same shape as kernel-worker.js:
   // endpoint first, /bin/wm as a kernel service after pid 1 (non-fatal;
   // kernel-chrome is the fallback, `wm &` respawns).
   kernel.wmServe();
   await kernel.boot({
     path: '/bin/sh',
     // "-sh": login shell — hush sources /etc/profile then ~/.profile, where
-    // per-user exports (ANTHROPIC_* for /bin/code) live (todos/0174)
+    // per-user exports (ANTHROPIC_* for /bin/code) live (docs/archive/0174)
     argv: ['-sh'],
     envp: ['PATH=/usr/local/bin:/bin', 'HOME=/root', 'TERM=xterm-256color'],
     cwd: '/root',

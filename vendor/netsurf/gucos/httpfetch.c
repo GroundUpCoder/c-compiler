@@ -13,9 +13,9 @@
 
 /**
  * \file
- * gucOS http/https fetcher (ticket #182, todos/0437 — Option B of the
+ * gucOS http/https fetcher (ticket #182, docs/archive/0437 — Option B of the
  * networking assessment): NetSurf's per-scheme fetcher contract implemented
- * over the kernel HTTP transport (todos/0172, fd-shaped todos/0417 —
+ * over the kernel HTTP transport (docs/archive/0172, fd-shaped docs/archive/0417 —
  * __http_open / __http_status / read / close), the same primitive under
  * os/curl/libcurl.c and the Control Panel Network applet.  Upstream's
  * fetchers/curl.c stays excluded (curl_multi/socket/SSL-ctx callbacks are
@@ -50,7 +50,7 @@
  *
  * v1 scope (descoped DELIBERATELY, per the ticket — say it, don't absorb):
  *   - urlenc POST: yes.  multipart POST: NO — loud FETCH_ERROR; it is what
- *     todos/0433's file-upload residual waits on.
+ *     docs/archive/0433's file-upload residual waits on.
  *   - cookies: NO.  Browser direct mode forbids them outright (fetch
  *     forbidden-header rules: Cookie banned, Set-Cookie hidden), so the
  *     urldb jar cannot function there regardless of effort.
@@ -417,9 +417,9 @@ static void fetch_gucos_http_progress(struct fetch_gucos_http_ctx *c)
 	fetch_msg msg;
 
 	if (c->multipart) {
-		/* todos/0433's residual — loud, not silent (v1 fence). */
+		/* docs/archive/0433's residual — loud, not silent (v1 fence). */
 		fetch_gucos_http_error(c,
-			"multipart POST is not supported yet (todos/0433)");
+			"multipart POST is not supported yet (docs/archive/0433)");
 		return;
 	}
 	if (!c->started)

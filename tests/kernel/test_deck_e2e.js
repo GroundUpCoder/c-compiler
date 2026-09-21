@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// /bin/deck end to end (todos/0284): the gucOS slide presenter.
+// /bin/deck end to end (docs/archive/0284): the gucOS slide presenter.
 //
 //   - --validate on the seeded demo deck (4 slides, 0 warnings)
 //   - --shot golden pixels on the demo's diagram slide (box fills, the

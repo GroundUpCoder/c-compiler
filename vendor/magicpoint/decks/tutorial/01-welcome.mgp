@@ -1,4 +1,4 @@
-%% 01-welcome.mgp - learn MagicPoint on gucOS, deck 1 of 10 (todos/0202).
+%% 01-welcome.mgp - learn MagicPoint on gucOS, deck 1 of 10 (docs/archive/0202).
 %% What mgp is, where it came from, how to drive the viewer, and how this
 %% tutorial series works. Teaches only directives the 0119 port renders.
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"

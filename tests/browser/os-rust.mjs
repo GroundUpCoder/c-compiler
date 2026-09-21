@@ -1,4 +1,4 @@
-// todos/0416 — the browser leg todos/0413 deferred: a RUST binary runs in a
+// docs/archive/0416 — the browser leg docs/archive/0413 deferred: a RUST binary runs in a
 // real gucOS terminal, in the browser sweep, through the full -rust package
 // channel (mkpkg --rust repo → /packages over the kernel's browser-realm
 // HTTP → gucman install → the tool on PATH).
@@ -46,7 +46,7 @@ const SIB = path.join(ROOT, 'build', 'test-rust-sibling');
 // serve.js serves /packages from dist/packages but never runs mkpkg — build
 // the wc-rust card there (base entries already present are carried forward;
 // the sweep is serial, so the shared dist/packages repo is the accepted
-// sequential thrash of todos/0388, exactly as in os-gucman.mjs). A NAMED
+// sequential thrash of docs/archive/0388, exactly as in os-gucman.mjs). A NAMED
 // build like this one gets the sibling package names appended by the helper
 // (#665): in a cold tree there is no prior index to carry them from, and
 // serve.js's #614 guard refuses an index that lacks them.

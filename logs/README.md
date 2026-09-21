@@ -2,7 +2,7 @@
 
 This folder is durable project memory, not scratch space. It captures the
 **why** behind non-trivial work — decisions, trade-offs, dead ends, gotchas —
-the things `git log` and the code can't tell you. `todos/` says where we're
+the things `git log` and the code can't tell you. `docs/` says where we're
 going; this says how we got here.
 
 ## Convention
@@ -15,7 +15,7 @@ going; this says how we got here.
 - **Content**: why this approach, what was rejected and why, what surprised
   us, what's deliberately left broken (and where that's tracked). Not a
   restatement of the diff.
-- **Cross-link**: reference queue items as `todos/NNNN`, design docs by
+- **Cross-link**: reference tickets as `#N` (legacy items as `docs/archive/NNNN`), design docs by
   name, commits by short hash. Backwards too — queue items and design docs
   may point at log entries for the full story.
 

@@ -1,4 +1,4 @@
-/* crt16.c — the 16-bit wide CRT for the Win32 veneer (todos/0059).
+/* crt16.c — the 16-bit wide CRT for the Win32 veneer (docs/archive/0059).
  *
  * tchar.h's deviation, implemented: this libc's wchar_t is 4 bytes, so
  * the msvcrt wide names (wcslen & co) can't be reused at WCHAR's 2-byte

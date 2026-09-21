@@ -105,7 +105,7 @@ function inodeOff(store, ino) {
   ok(fsck(s).some(p => /root inode is not a directory/.test(p)), 'catches non-directory root');
 }
 
-// ---- 4. Duplicate dirent names (todos/0375) ----
+// ---- 4. Duplicate dirent names (docs/archive/0375) ----
 // open(O_CREAT) through a dangling symlink used to append a SECOND dirent
 // under the link's own name — and fsck_v4 passed the image CLEAN (no
 // name-uniqueness invariant), so the corruption was invisible to the checker.
@@ -133,7 +133,7 @@ function inodeOff(store, ino) {
   }
   ok(renamed, 'dup-dirent control: surgery found and renamed the ab entry');
   ok(fsck(store).some(p => /duplicate/.test(p)),
-    'catches duplicate dirent names (todos/0375 — the invariant that made the O_CREAT-through-dangling-symlink corruption invisible)');
+    'catches duplicate dirent names (docs/archive/0375 — the invariant that made the O_CREAT-through-dangling-symlink corruption invisible)');
 }
 
 console.log(`\nfsck_v4: ${passed} passed, ${failed} failed`);

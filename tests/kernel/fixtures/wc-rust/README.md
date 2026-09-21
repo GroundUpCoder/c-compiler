@@ -1,4 +1,4 @@
-# wc-rust.wasm — the committed Rust fixture (todos/0415)
+# wc-rust.wasm — the committed Rust fixture (docs/archive/0415)
 
 `wc-rust.wasm` is a `#![no_std]` Rust tool. Stable `rustc` built it for
 the target `wasm32-unknown-unknown` in the sibling repository (default
@@ -13,9 +13,9 @@ standard input, the `-` operand, and the missing-path error with exit
 status 1. The kernel suite compares its output against the busybox applet
 on the same inputs, in the same booted OS.
 
-The read loop is the load-bearing part (`todos/0415`). The kernel
+The read loop is the load-bearing part (`docs/archive/0415`). The kernel
 reassembles short reads for a REGULAR file only (`RemoteFS.read`,
-`todos/0140`). For fd 0 on a pipe a short read really is short, so the
+`docs/archive/0140`). For fd 0 on a pipe a short read really is short, so the
 tool's own loop is what makes `cat big | wc-rust` correct. The test file
 carries one large-input leg per loop and names which loop each one proves.
 

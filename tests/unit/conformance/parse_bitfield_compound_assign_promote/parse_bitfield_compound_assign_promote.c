@@ -1,6 +1,6 @@
 // BUG: emitAssignment computed a compound assignment's operation type from
 // the DECLARED lvalue type, so `u20 /= -3` divided unsigned (quotient 0)
-// where C requires the promoted (signed int) computation (todos/0367
+// where C requires the promoted (signed int) computation (docs/archive/0367
 // residual of 0356).
 // C11: 6.5.16.2p3 — E1 op= E2 computes E1 op E2 with the usual arithmetic
 // conversions, which begin with the integer promotions (6.3.1.8); the result

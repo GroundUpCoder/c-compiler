@@ -1,8 +1,8 @@
 /*
- * curl/curl.h — gucOS libcurl veneer (todos/0173), easy interface subset.
+ * curl/curl.h — gucOS libcurl veneer (docs/archive/0173), easy interface subset.
  *
  * App-facing header for programs built for gucOS against os/curl/libcurl.c,
- * which maps the easy interface onto the kernel HTTP transport (todos/0172,
+ * which maps the easy interface onto the kernel HTTP transport (docs/archive/0172,
  * the __http_* host imports). The SAME consumer source builds natively with
  * clang -lcurl against the real libcurl headers — so every name, enum value
  * and callback signature here matches upstream curl's ABI values. Only a
@@ -19,7 +19,7 @@
  *     synthetic "HTTP/1.1 NNN \r\n" status line is prepended.
  *   - CONNECTTIMEOUT(_MS) rides the kernel HEADERS deadline; TIMEOUT(_MS)
  *     is enforced on the veneer's wall clock through __wait's timeout at
- *     every park (todos/0417 — the old SIGALRM apparatus is gone).
+ *     every park (docs/archive/0417 — the old SIGALRM apparatus is gone).
  *   - TLS is the platform's: SSL_VERIFYPEER/VERIFYHOST accepted, ignored.
  *   - ACCEPT_ENCODING accepted, ignored (fetch decompresses transparently).
  */

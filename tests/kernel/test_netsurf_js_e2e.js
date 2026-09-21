@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// NetSurf JavaScript, IN THE OS (todos/NETSURF-JS.md Lane A).  The monkey
+// NetSurf JavaScript, IN THE OS (docs/NETSURF-JS.md Lane A).  The monkey
 // gate (vendor/netsurf/smoke-js.mjs) proves the engine and the shared core;
 // this proves the three things that are the gucOS FRONTEND's own and that
 // monkey cannot speak for:

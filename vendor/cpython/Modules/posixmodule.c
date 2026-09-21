@@ -6708,7 +6708,7 @@ os__exit_impl(PyObject *module, int status)
 #define EXECV_CHAR char
 #endif
 
-/* gucOS vendor patch (todos/0340, CPYTHON.md §4.2): free_string_array /
+/* gucOS vendor patch (docs/archive/0340, CPYTHON.md §4.2): free_string_array /
    parse_envlist / parse_arglist are the argv/envp marshallers os.posix_spawn
    itself calls, but upstream gates them on the execv/spawnv/RTP families only.
    A configuration with HAVE_POSIX_SPAWN and no execv — which is exactly gucOS,

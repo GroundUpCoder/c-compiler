@@ -1,6 +1,6 @@
 # ksvc feasibility spike (FROZEN)
 
-This spike is the committed feasibility record for todos/0275 (design doc
+This spike is the committed feasibility record for docs/archive/0275 (design doc
 §2) and targets the SEED `ksvc.c` at the design commit (a281719) — the
 `ksvc_spike_*` exports it drives were replaced by the real §4 ABI when the
 implementation landed. `build.js` still builds the current blob (useful for

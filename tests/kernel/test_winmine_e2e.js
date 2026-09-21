@@ -96,7 +96,7 @@ const CELL_X = 5 + 8, CELL_Y = 33 + 8 + BAR;
 const TIMER = { x: 5, y: 5 + BAR, w: 36, h: 23 };
 
 /* Difficulty/Custom changes are owner-initiated SURFACE_RESIZEs — the new board
- * geometry shows in `wmctl list`, so poll for it (todos/0154 — a bounded
+ * geometry shows in `wmctl list`, so poll for it (docs/archive/0154 — a bounded
  * condition poll, not a fixed sync sleep). Menu open/close is waitable since
  * 0257 (the popup is a real "#32768" child window); only the gameplay shots
  * (revealed cells, the WM_TIMER LED) remain pixel-only annotated settles. */

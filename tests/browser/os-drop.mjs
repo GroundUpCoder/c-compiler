@@ -1,11 +1,11 @@
-// Host-file drag-and-drop browser acceptance (todos/0067): boot the
+// Host-file drag-and-drop browser acceptance (docs/archive/0067): boot the
 // reference OS page in headless Chromium and drop files onto the desktop
 // pane through the real DataTransfer path — page 'drop' listener ->
 // {type:'drop-file'} postMessage -> kernel-side MountFS write into
 // /root/Desktop -> /bin/wm's coarse re-read grows the icon. Covers: the
 // dragover highlight, a binary payload's byte-identity (md5 round-trip),
 // the icon appearing without a reboot, the "-N" collision suffix, a
-// dropped #!/bin/sh launcher being double-click runnable (todos/0066
+// dropped #!/bin/sh launcher being double-click runnable (docs/archive/0066
 // activate), and OPFS persistence across a page reload.
 //
 // Usage: node os-drop.mjs   (manual tier — run the os-*.mjs sweep serially)
@@ -90,7 +90,7 @@ try {
 
   // ---- drop a binary file ----
   // Seeded /root/Desktop from the harness grid model (deskEntries/deskCell,
-  // the todos/0166 rule — files + the Presentations dir + the Recycle Bin,
+  // the docs/archive/0166 rule — files + the Presentations dir + the Recycle Bin,
   // wrapping into column 1 since 0184/0185): the tail-pinned bin's tile
   // appearing at its post-drop cell is the "icon appeared" signal.
   const GRID1 = deskEntries(['blob.bin']);
@@ -129,7 +129,7 @@ try {
   await waitPixel(12 + 120, 36 + 80, ORANGE, 60000);   // first client window
   check('double-click ran the dropped launcher (winbox composited)', true);
 
-  // ---- directory-drop tree machinery (todos/0398) ----
+  // ---- directory-drop tree machinery (docs/archive/0398) ----
   // webkitGetAsEntry yields entries only on a REAL OS drag (synthetic
   // DataTransfer items return null), so the page-side walk itself cannot
   // be automated here — this leg posts exactly the messages the walk

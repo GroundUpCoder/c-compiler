@@ -1,5 +1,5 @@
 /* cmdalt.h — command alternatives: ONE name, a switchable implementation
- * (todos/0338; design `todos/COMMAND-ALTERNATIVES.md`).
+ * (docs/archive/0338; design `docs/COMMAND-ALTERNATIVES.md`).
  *
  * Header-only by design, the openwith.h precedent: the image manifest's `c`
  * entries are single-source compiles, so the policy is static functions
@@ -159,7 +159,7 @@ static int ca_candidates(const char *text, const char *key,
 /* ------------------------- the PATH-shadow diagnostic --------------------
  *
  * PATH is /usr/local/bin:/bin — user-installed binaries deliberately win
- * over baked ones (todos/0040). A package that plants /usr/local/bin/<name>
+ * over baked ones (docs/archive/0040). A package that plants /usr/local/bin/<name>
  * for a name the base image DISPATCHES therefore wins silently, and the
  * symptom is "switching the default does nothing" (never a broken command:
  * the shadow keeps running the implementation it always ran). gucman no
@@ -167,7 +167,7 @@ static int ca_candidates(const char *text, const char *key,
  * this shipped keeps it forever, because /usr/local -> /var/local is user
  * territory that an image upgrade never writes and `gucman install` has no
  * upgrade path. That population is closed at release and non-growing, so
- * this is DIAGNOSED, never auto-repaired (todos/0338 non-goals).
+ * this is DIAGNOSED, never auto-repaired (docs/archive/0338 non-goals).
  *
  * INTERLOCK: the prescribed fix below (remove + reinstall) is only correct
  * once packages CLAIM command names — `commands` in the package definition,

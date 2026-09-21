@@ -1,5 +1,5 @@
 /*
- * mGBA frontend for the C-to-WASM compiler (todos/0112).
+ * mGBA frontend for the C-to-WASM compiler (docs/archive/0112).
  *
  * Game Boy Advance emulator: drives mGBA's `mCore` interface directly (the
  * same seam the fuzz/perf harnesses use) rather than porting the Qt/SDL app.

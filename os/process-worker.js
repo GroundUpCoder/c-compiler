@@ -1,4 +1,4 @@
-// process-worker.js — the browser process bootstrap (todos/0004): one of
+// process-worker.js — the browser process bootstrap (docs/archive/0004): one of
 // these workers per pid, created by the kernel worker (nested workers). The
 // browser twin of kernel.js's Node BOOT_SOURCE, brokered arrangement only —
 // the OS kernel always owns the filesystem (KERNEL.md fd/data-plane
@@ -53,7 +53,7 @@ self.onmessage = function (e) {
   // The brokered filesystem: the kernel serves every fs syscall; the wasm
   // env is toWasmEnv REUSED over a RemoteFS (same method surface), with the
   // two in-process-state entries overridden (see kernel.js BOOT_SOURCE).
-  // wd.ro (todos/0180) is the sealed system image as an SAB — mounted
+  // wd.ro (docs/archive/0180) is the sealed system image as an SAB — mounted
   // locally so reads under its prefix (/usr) never cross the RPC boundary.
   var roFs = wd.ro
     ? BLOCK_FS.createV4(new BLOCK_FS.SabByteStore(wd.ro.sab), { readonly: true })
@@ -74,7 +74,7 @@ self.onmessage = function (e) {
       return origWrite.apply(this, arguments);
     };
   }
-  // SPSC pipe rings for inherited fds (todos/0181): fast ops gate on the
+  // SPSC pipe rings for inherited fds (docs/archive/0181): fast ops gate on the
   // ring's PR_MODE word, so registering a still-brokered ring is free.
   (wd.pipeRings || []).forEach(function (p) { rfs.registerPipeRing(p.fd, p.end, p.sab); });
   var fsFactory = function (ctx) {
@@ -103,7 +103,7 @@ self.onmessage = function (e) {
   runModule({
     onReady: function () { instantiated = true; },
     bytes: wd.image || undefined,
-    module: wd.module || undefined,   // pre-compiled Module (todos/0037)
+    module: wd.module || undefined,   // pre-compiled Module (docs/archive/0037)
     args: wd.argv,
     env: envObj(wd.envp),
     stdinSab: wd.ttySab || undefined,
@@ -111,11 +111,11 @@ self.onmessage = function (e) {
     writeOut: ship(1),
     writeErr: ship(2),
     // rfs wraps spawn() so DUP2 file-actions naming local /usr fds promote
-    // to kernel twins (todos/0180); identity when the RO volume is off.
+    // to kernel twins (docs/archive/0180); identity when the RO volume is off.
     spawnHooks: rfs.wrapSpawnHooks(client.spawnHooks()),
     pid: wd.pid,
     ppid: wd.ppid,
-    // Live ppid off the vDSO page (todos/0179): tracks reparent-to-init.
+    // Live ppid off the vDSO page (docs/archive/0179): tracks reparent-to-init.
     getppid: function () { return client.getppid(); },
   }).then(function (code) {
     // Best-effort third fragment: under the kernel this worker is usually

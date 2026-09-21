@@ -1,8 +1,8 @@
 /* clipio.h — clipboard I/O over the kernel's ONE clipboard slot, ONE
- * implementation in ONE place (todos/0397).
+ * implementation in ONE place (docs/archive/0397).
  *
  * Header-only by design (the openwith.h / fileops.h precedent): /bin/clip
- * (the Windows clip.exe shape, todos/0090), /bin/pbcopy and /bin/pbpaste
+ * (the Windows clip.exe shape, docs/archive/0090), /bin/pbcopy and /bin/pbpaste
  * (the macOS shape) are three front-ends over these two operations and
  * must stay behaviorally identical through them. The manifest stages the
  * header beside each source via image.json's `hdrs` field, so there is no
@@ -18,7 +18,7 @@
  * TEXT ONLY — bytes at or past a NUL do not ride. clipio_set_from_fd
  * still reads its input to EOF and still reports success, exactly as
  * clip.c always did; the truncation happens inside SDL_SetClipboardText.
- * This is a real constraint of the one-slot design (todos/0090), not a
+ * This is a real constraint of the one-slot design (docs/archive/0090), not a
  * defect to repair here. A binary-safe clipboard needs a second format on
  * the slot (the fileops.h FO_CLIP_FMT precedent), which is out of scope.
  *

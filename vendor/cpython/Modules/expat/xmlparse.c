@@ -1,4 +1,4 @@
-/* gucOS vendor patch (todos/0340, CPYTHON.md §4.2): the CPython build defines
+/* gucOS vendor patch (docs/archive/0340, CPYTHON.md §4.2): the CPython build defines
    -DPREFIX='"/usr/local"' globally (Modules/getpath.c consumes it), and expat
    uses PREFIX as its own function-name-mangling macro. The command-line define
    wins over expat's, so every PREFIX(x) expands to a string literal and the TU

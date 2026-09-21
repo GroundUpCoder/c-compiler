@@ -13,7 +13,7 @@
 // with recursion depth). Any array whose length is a function of the INPUT
 // (token streams, statement lists, expanded macro bodies) can cross it:
 // CPython's `_PyRuntimeState_INIT` expands to ~70k tokens and crashed the
-// preprocessor with no diagnostic and no source location (todos/0320).
+// preprocessor with no diagnostic and no source location (docs/archive/0320).
 //
 // pushAll keeps the fast spread for the overwhelmingly common small case
 // (measured 3-4x faster than a per-element loop at n<=256, and this sits in
@@ -61,7 +61,7 @@ const TokenKind = Object.freeze({
   // A structural pragma the parser needs positionally (currently only
   // `#pragma pack`). The preprocessor emits it into the token stream;
   // postProcess resolves it into a per-struct pack value and drops it, so
-  // it never reaches the parser (todos/0191).
+  // it never reaches the parser (docs/archive/0191).
   PRAGMA: "PRAGMA",
   // A non-white-space character that forms no other token (C11 6.4p1's
   // "each non-white-space character that cannot be one of the above" —
@@ -268,7 +268,7 @@ class Token {
     this.noExpand = false;
     this.flags = new TokenFlags();
     // PRAGMA tokens carry their directive here ({op, n} for `#pragma pack`);
-    // postProcess consumes and drops them (todos/0191).
+    // postProcess consumes and drops them (docs/archive/0191).
     this.pragma = null;
     // Pack alignment cap (bytes) in effect where a `struct`/`union` keyword
     // sits, stamped by postProcess from the resolved `#pragma pack` stack.
@@ -1246,7 +1246,7 @@ function postProcess(lexResult) {
     }
   }
 
-  // Resolve `#pragma pack` (todos/0191): walk the stream keeping the MSVC/gcc
+  // Resolve `#pragma pack` (docs/archive/0191): walk the stream keeping the MSVC/gcc
   // pack stack, stamp the alignment cap in effect onto each `struct`/`union`
   // keyword (parseTagSpecifier reads it), and drop the PRAGMA markers so the
   // parser never sees them.
@@ -1334,7 +1334,7 @@ class PPRegistry {
     this.onceGuards = new Set();    // Set<string> — files with #pragma once
     this.standardHeaders = new Map(); // Map<string, string> — header name -> content
     this.fileReader = null;   // function(path) -> string|null — callback to read files
-    // Filesystem resolution tiers (todos/WIN32 source-lib design, Lane A).
+    // Filesystem resolution tiers (docs/WIN32 source-lib design, Lane A).
     // All empty by default so every existing embedding is byte-identical
     // until an embedder opts in.
     this.systemIncludePaths = []; // string[] — include dirs searched AFTER builtin standardHeaders
@@ -1467,7 +1467,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
     }
   }
 
-  // `#pragma pack` (todos/0191): parse the MSVC/gcc-compatible forms into an
+  // `#pragma pack` (docs/archive/0191): parse the MSVC/gcc-compatible forms into an
   // op the parser applies to struct layout. Returns a PRAGMA marker token
   // to splice into the stream, or null if `toks` is not a pack pragma.
   //   pack(n)        -> {op:'set', n}
@@ -1518,7 +1518,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
   // Does `tok` name the `defined` operator, directly or through an
   // object-like macro alias chain (`#define D defined`)? gcc/clang honor a
   // `defined` produced by such an expansion inside `#if`/`#elif` — strictly
-  // UB per C11 6.10.1p4, but portable config headers rely on it (todos/0195).
+  // UB per C11 6.10.1p4, but portable config headers rely on it (docs/archive/0195).
   function aliasesToDefined(tok, seen) {
     if (tok.atIdent("defined")) return true;
     if (tok.kind !== TokenKind.IDENT || !macros.has(tok.text) || seen.has(tok.text)) return false;
@@ -1531,7 +1531,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
   // Resolve `defined` operators on a #if/#elif controlling line BEFORE macro
   // expansion, so the operand is taken literally and never macro-expanded
   // (C11 6.10.1p1). Handles both the literal `defined X`/`defined(X)` forms
-  // and a `defined` reached through an object-like alias (todos/0195). The
+  // and a `defined` reached through an object-like alias (docs/archive/0195). The
   // operand identifier is looked up as a macro NAME for defined-ness; it does
   // not go through expansion, so `#define FOO 1` / `#if D(FOO)` sees FOO the
   // name (defined) rather than its replacement 1.
@@ -1658,7 +1658,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
             const args = [];
             // Leading-whitespace flag of each argument-separating comma, so a
             // stringized __VA_ARGS__ keeps the space BEFORE the delimiter
-            // (`#__VA_ARGS__` of `S(a , b)` is "a , b" — todos/0196).
+            // (`#__VA_ARGS__` of `S(a , b)` is "a , b" — docs/archive/0196).
             // argCommaSpace[k] is the comma between args[k] and args[k+1].
             const argCommaSpace = [];
             let currentArg = [];
@@ -1728,7 +1728,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                   const comma = new Token(null, 0, 0, TokenKind.PUNCT, intern(","));
                   comma.punct = Punct.COMMA;
                   // Carry the original delimiter comma's leading-whitespace bit
-                  // so `#__VA_ARGS__` preserves the space before it (todos/0196).
+                  // so `#__VA_ARGS__` preserves the space before it (docs/archive/0196).
                   comma.flags.hasSpace = argCommaSpace[p - 1] || false;
                   vaRaw.push(comma);
                   vaArgs.push(comma);
@@ -1773,7 +1773,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
                     // C11 6.10.3.3p3: the concatenation must form ONE valid
                     // preprocessing token. It used to take the FIRST lexed
                     // token and silently DROP the rest (`x ## ++` became
-                    // plain `x`) — diagnose instead (todos/0227 G22).
+                    // plain `x`) — diagnose instead (docs/archive/0227 G22).
                     const isOneToken = lexed.errors.length === 0 &&
                       lexed.tokens.length > 0 && lexed.tokens[0].kind !== TokenKind.EOS &&
                       (lexed.tokens.length < 2 || lexed.tokens[1].kind === TokenKind.EOS);
@@ -2132,9 +2132,9 @@ function preprocess(filename, initialTokens, ppRegistry) {
       return { lexResult: lex(resolved, spliced, lineOffsets), resolvedFile: resolved };
     };
 
-    // Splice line continuations like the real-file path: inline core headers
+    // Splice line continuations like the real-file path: most inline headers
     // (template literals) already had their backslash-newlines elided by JS,
-    // but headers loaded from libc-ext.js (via JSON.parse) keep real
+    // but the backslash-escaped musl entries (regex.h and friends) keep real
     // backslash-newline continuations (e.g. multi-line macros) that must join.
     const loadStandard = () => {
       if (!ppRegistry.standardHeaders.has(target)) return null;
@@ -2400,7 +2400,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
               }
               while (!state.atEnd && state.peek().kind !== TokenKind.NEWLINE)
                 m.replacement.push(state.consume());
-              // C11 6.10.3.2p1 (todos/0227 G22): in a FUNCTION-LIKE macro
+              // C11 6.10.3.2p1 (docs/archive/0227 G22): in a FUNCTION-LIKE macro
               // every '#' must be followed by a parameter (or, C23,
               // __VA_OPT__). A trailing/misapplied '#' used to be accepted
               // and expand as a literal '#'. Object-like macros keep '#'
@@ -2480,13 +2480,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
               }
               const includeRes = resolveAndLex(rawPath, state.currentFile, angledInclude);
               if (!includeRes) {
-                let msg = "Could not find include file: " + rawPath;
-                if (ppRegistry.extProvidedHeaders &&
-                    ppRegistry.extProvidedHeaders.indexOf(rawPath) >= 0 &&
-                    !ppRegistry.standardHeaders.has(rawPath)) {
-                  msg += " (provided by the optional libc-ext.js, which is not present)";
-                }
-                result.errors.push(new LexError(msg, state.currentFile, dir.line));
+                result.errors.push(new LexError("Could not find include file: " + rawPath, state.currentFile, dir.line));
               } else if (ppRegistry.onceGuards.has(includeRes.resolvedFile)) {
                 // #pragma once: skip
               } else {
@@ -2546,7 +2540,7 @@ function preprocess(filename, initialTokens, ppRegistry) {
           } else if (dir.kind === TokenKind.IDENT) {
             // C11 6.10p1: a '#' line whose first token names no directive
             // is a non-directive — a constraint violation clang/gcc
-            // diagnose; it used to be silently ignored (todos/0227 G22).
+            // diagnose; it used to be silently ignored (docs/archive/0227 G22).
             // Non-IDENT forms stay accepted: `# 1 "file.c"` GNU line
             // markers (PP_NUMBER) appear in preprocessed input, and the
             // null directive (`#` alone) was consumed above. Only fires
@@ -2866,7 +2860,7 @@ class TypeInfo {
   // dispatch to `getOrCreateGCWasmTypeIdx`.
   isWasmGCType() { return false; }
 
-  // The value of the sizeof OPERATOR applied to this type (todos/0227 G21):
+  // The value of the sizeof OPERATOR applied to this type (docs/archive/0227 G21):
   // void and function types yield 1 — the GNU extension, matching the
   // void*-arithmetic stride-1 choice — while `.size` stays 0 for them
   // because layout math relies on that. Incomplete types are a constraint
@@ -3135,7 +3129,7 @@ class TagType extends TypeInfo {
   isEnum()   { return this.tagKind === TagKind.ENUM; }
   // The signedness of the enum's implementation-defined compatible type
   // (C11 6.7.2.2p4). clang/gcc pick `unsigned int` when every enumerator is
-  // >= 0, else `int`. Used for enum bit-field read extension (todos/0189).
+  // >= 0, else `int`. Used for enum bit-field read extension (docs/archive/0189).
   // An incomplete/forward enum has no enumerators yet — treat as signed.
   enumIsUnsigned() {
     if (this.tagKind !== TagKind.ENUM || !this.tagDecl) return false;
@@ -3410,7 +3404,7 @@ function computeStructLayout(members, packAlign = 0) {
   // packAlign: `#pragma pack`/attribute alignment cap in bytes (0 = natural).
   // A cap of 1 is full byte-packing (`__attribute__((packed))` / pack(1)):
   // the bit-field internals below key on that for contiguous byte-anchored
-  // packing; a cap of 2/4/8 only lowers each member's alignment (todos/0191).
+  // packing; a cap of 2/4/8 only lowers each member's alignment (docs/archive/0191).
   const isPacked = packAlign === 1;
   let size = 0;
   let maxAlign = 1;
@@ -3419,7 +3413,7 @@ function computeStructLayout(members, packAlign = 0) {
   // packed bit region measured from the struct start; each field goes at
   // the current bit cursor unless it would straddle a container boundary of
   // its own declared type, in which case it advances to the next such
-  // boundary (todos/0190 — keying the "unit" on the declared type split
+  // boundary (docs/archive/0190 — keying the "unit" on the declared type split
   // adjacent mixed-type fields into separate units, diverging from clang on
   // sizeof and on every following member's offset).
   let bfCursor = 0;     // absolute bit position (from struct start) of the next field
@@ -3439,14 +3433,14 @@ function computeStructLayout(members, packAlign = 0) {
   };
   // Close the open unit: advance past the USED bytes only — a following
   // member packs into the unit's unused tail bytes exactly as clang wasm32
-  // does (todos/0216; the old `size += bfUnitSize` advance diverged from
+  // does (docs/archive/0216; the old `size += bfUnitSize` advance diverged from
   // clang on sizeof AND on the offset of every following member). Packed
   // structs advance past the widest access window instead, so no member's
   // RMW load/store can reach beyond the struct.
   const closeBfUnit = () => {
     size = Math.max(size, (bfCursor + 7) >> 3);
     // Packed: a member's RMW window can extend past its used bits; the
-    // struct must cover it so the store never runs off the end (todos/0216).
+    // struct must cover it so the store never runs off the end (docs/archive/0216).
     if (isPacked) size = Math.max(size, bfPackedEnd);
     inBitField = false; bfCursor = 0; bfPackedEnd = 0;
   };
@@ -3461,7 +3455,7 @@ function computeStructLayout(members, packAlign = 0) {
 
     if (m.bitWidth === 0) {
       // Zero-width bitfield: finish the current unit and realign to the
-      // declared type's boundary. Two clang/GCC subtleties (todos/0216):
+      // declared type's boundary. Two clang/GCC subtleties (docs/archive/0216):
       // `:0` keeps its force-to-boundary effect inside a PACKED struct,
       // and it contributes NOTHING to the struct's alignment (clang:
       // struct {char a:3; int :0; char c;} is sizeof 5, align 1).
@@ -3531,9 +3525,9 @@ function computeUnionLayout(members, packAlign = 0) {
     m.byteOffset = 0;
     if (m.type.size > maxSize) maxSize = m.type.size;
     // Per-member _Alignas/__attribute__((aligned)) raises the union's
-    // alignment exactly as the struct path does (todos/0216 — it was
+    // alignment exactly as the struct path does (docs/archive/0216 — it was
     // silently ignored here, diverging from clang on align AND size).
-    // `#pragma pack(N)`/packed cap the natural alignment (todos/0191).
+    // `#pragma pack(N)`/packed cap the natural alignment (docs/archive/0191).
     const nat = m.type.align || 1;
     const naturalAlign = packAlign > 0 ? Math.min(nat, packAlign) : nat;
     const mAlign = m.requestedAlignment > 0 ? Math.max(naturalAlign, m.requestedAlignment) : naturalAlign;
@@ -4005,7 +3999,7 @@ function _rankToLinearity(r) {
   return r === 2 ? 'LINEAR' : r === 1 ? 'AFFINE' : 'UNRESTRICTED';
 }
 // Linearity of a memory-access expression, keyed on the accessed object's
-// type (todos/0187). C11 5.1.2.3: accesses to volatile objects are
+// type (docs/archive/0187). C11 5.1.2.3: accesses to volatile objects are
 // observable behavior — their count and order must survive optimization —
 // so a volatile access is LINEAR (evaluate exactly once, in order), never
 // UNRESTRICTED (the inliner would duplicate a >1×-used argument or drop an
@@ -4096,7 +4090,7 @@ class Expr {
     // `children` is an accessor, not a data field, so a subclass whose
     // child list MIRRORS state living outside the node (SDecl's DVar
     // initializers) can recompute it live instead of handing out a
-    // construction-time snapshot. See SDecl.children (todos/0319).
+    // construction-time snapshot. See SDecl.children (docs/archive/0319).
     get children() { return this._children; }
     // Bubble-up bag, computed on demand. See Expr.referencedFunctions
     // for rationale (handles parser-mutated children arrays cleanly).
@@ -4146,7 +4140,7 @@ class Expr {
       this.bfAccessBytes = 0;  // bit-field RMW window, set by computeStructLayout
       this.requestedAlignment = 0;
       // For an enum bit-field: the pre-erasure enum type, whose compatible
-      // type drives the read sign/zero-extension (todos/0189). Null otherwise.
+      // type drives the read sign/zero-extension (docs/archive/0189). Null otherwise.
       this.enumBitField = null;
       Object.seal(this);
     }
@@ -4161,10 +4155,10 @@ class Expr {
       // `inline` as a property of the FUNCTION (C11 6.7.4p1), accumulated
       // across every declaration of it by Parser._noteInlineHint (which
       // documents why this is NOT the same field as isInline) and read by
-      // codegen as fnMeta.inlineHint — todos/0328.
+      // codegen as fnMeta.inlineHint — docs/archive/0328.
       this.inlineHint = this.isInline;
       // Inline-policy attributes ({noinline, alwaysInline} or null),
-      // threaded parser → codegen fnMeta → WAST inliner (todos/0214).
+      // threaded parser → codegen fnMeta → WAST inliner (docs/archive/0214).
       this.fnAttrs = null;
       this.body = body || null;
       this.staticLocals = []; this.externLocals = []; this.externLocalFuncs = [];
@@ -4272,7 +4266,7 @@ class Expr {
   // this AST level: the load itself has no side effects, and reading a
   // named decl twice in adjacent positions yields the same value — unless
   // the decl is volatile-qualified, which makes the access LINEAR
-  // (todos/0187; we still don't model signal handlers or threads).
+  // (docs/archive/0187; we still don't model signal handlers or threads).
   // `decl` is required (use makeIdent for name-based lookup) — get the
   // source identifier via `this.decl.name`.
   class EIdent extends Expr {
@@ -4373,7 +4367,7 @@ class Expr {
       if (!meta) throw new Error(`EUnary: unknown op '${op}' (typo? known: ${Object.keys(UnOp).join(", ")})`);
       // `*p` where p points to volatile: the result type IS the accessed
       // object's type (computeUnaryType returns the pointee), so a
-      // volatile deref classifies LINEAR (todos/0187).
+      // volatile deref classifies LINEAR (docs/archive/0187).
       super(loc, type, [operand],
         meta.isDeref ? _accessLinearity(type) : meta.linearity);
       this.op = op; this.operand = operand;
@@ -4633,7 +4627,7 @@ class Expr {
     // emit. That is exactly how a compound literal in a declaration
     // initializer lost its frame slot: the layout walk saw the pre-fold
     // ECompoundLiteral, codegen emitted the post-fold one, and the
-    // identity-keyed offset lookup missed (todos/0319).
+    // identity-keyed offset lookup missed (docs/archive/0319).
     get children() {
       const kids = [];
       for (const d of this.declarations) {
@@ -4641,7 +4635,7 @@ class Expr {
       }
       return kids;
     }
-    // ASYMMETRY, and it is a live gap — see todos/0326. The getter above makes
+    // ASYMMETRY, and it is a live gap — see docs/archive/0326. The getter above makes
     // the READ side a fresh view, but this WRITE side is a no-op: a generic
     // children-based rewriter's new subtree is silently discarded here.
     _withChildren(_) { return this; }
@@ -5119,7 +5113,7 @@ function pointerArithElemType(leftType, rightType) {
 // left operand's value, a comma its last operand's, and pre-inc/dec is
 // sugar for `+= 1` — so `-(s.u20 = x)` promotes exactly like `-s.u20`.
 // POST-inc/dec results do NOT carry it. Both directions are clang-pinned
-// (todos/0367, tests/unit/conformance/parse_bitfield_promote_carriers).
+// (docs/archive/0367, tests/unit/conformance/parse_bitfield_promote_carriers).
 // An explicit cast severs the chain (the value is no longer "from" the
 // field); implicit casts never wrap a bit-field access whose promotion is
 // still pending, so there is nothing to walk through there.
@@ -5150,7 +5144,7 @@ function promoteExprType(e) {
     // `int`/`unsigned int` can represent *as restricted by the width*;
     // everything else is one of the "all other types [that] are unchanged".
     // A field WIDER than int keeps its declared type, so 64-bit arithmetic
-    // on it stays 64-bit (todos/0356: collapsing `uint64_t frc : 52` to
+    // on it stays 64-bit (docs/archive/0356: collapsing `uint64_t frc : 52` to
     // unsigned int truncated the operand, which made `u.p.frc == 0` true
     // for every NaN — MicroPython's IEEE-754 classifier then reported
     // OverflowError where the standard library owes ValueError).
@@ -5249,13 +5243,13 @@ function makeBinary(loc, op, left, right) {
       return new EBinary(loc, Types.TDIVERGENT, op, left, right);
     }
     // C11 6.3.2.1p1: const-qualified (or const-member-bearing) lvalues
-    // are not modifiable (todos/0227 G22).
+    // are not modifiable (docs/archive/0227 G22).
     const constViol = exprConstWriteViolation(left);
     if (constViol) {
       reportError(loc, `cannot assign to ${constViol}`);
       return new EBinary(loc, Types.TDIVERGENT, op, left, right);
     }
-    // todos/0228: a provable store through a string literal is read-only
+    // docs/archive/0228: a provable store through a string literal is read-only
     // storage — UB, diagnosed loudly.
     if (exprWritesStringLiteral(left)) {
       reportError(loc, `assignment to read-only string literal`);
@@ -5302,7 +5296,7 @@ function makeBinary(loc, op, left, right) {
   // lvalue would have after lvalue conversion (C11 6.5.16p3), NOT the
   // promoted type. Promoting it typed `(s.ull20 = x)` as int while codegen
   // reloaded the stored field at its declared 64-bit width — consuming that
-  // in arithmetic emitted invalid wasm (todos/0367; the promotion the
+  // in arithmetic emitted invalid wasm (docs/archive/0367; the promotion the
   // CONSUMER owes is applied there via sourceBitField's forwarding walk).
   const resType = computeBinaryType(op,
     meta.isAssign ? left.type : promoteExprType(left), promoteExprType(right));
@@ -5361,7 +5355,7 @@ function isLvalueExpr(e) {
 // and, for a struct/union, has no const-qualified member (recursively,
 // through nested aggregates and array elements — a pointer TO const stops
 // the walk: the pointer itself is still writable). Returns a description
-// for the diagnostic, or null if the type is writable (todos/0227 G22).
+// for the diagnostic, or null if the type is writable (docs/archive/0227 G22).
 function constWriteViolation(type, seen) {
   if (type.isConst) return `const-qualified type '${type.toString()}'`;
   const uq = type.removeQualifiers();
@@ -5425,7 +5419,7 @@ function basePathConstViolation(e) {
   return null;
 }
 
-// todos/0228: a store whose target PROVABLY addresses a string literal is a
+// docs/archive/0228: a store whose target PROVABLY addresses a string literal is a
 // write into read-only storage. Standard C gives string literals non-const
 // array type, so the type system alone won't reject `"abc"[0] = 'x'` — but
 // the write is unconditionally UB (it faults against a real .rodata target
@@ -5501,10 +5495,10 @@ function makeUnary(loc, op, operand) {
       return;
     }
     // C11 6.3.2.1p1: const-qualified operands aren't modifiable
-    // (todos/0227 G22).
+    // (docs/archive/0227 G22).
     const constViol = operand.type && exprConstWriteViolation(operand);
     if (constViol) reportError(loc, `cannot ${what} ${constViol}`);
-    // todos/0228: ++/-- through a provable string-literal address is a
+    // docs/archive/0228: ++/-- through a provable string-literal address is a
     // read-only write — UB, diagnosed loudly.
     else if (exprWritesStringLiteral(operand)) {
       reportError(loc, `cannot ${what} read-only string literal`);
@@ -5567,7 +5561,7 @@ function makeUnary(loc, op, operand) {
   }
   // C11 6.5.3.3: the integer promotions are performed ON THE OPERAND of
   // unary +/-/~, so a bit-field operand promotes per 6.3.1.1p2 BEFORE the
-  // result type is computed (todos/0367: computing from the declared type
+  // result type is computed (docs/archive/0367: computing from the declared type
   // made `-s.u20 < 0` false). The promotion is materialized as an implicit
   // cast so codegen's operand-driven wasm typing stays consistent (a narrow
   // field of a 64-bit declared type promotes to int: i64 load → i32 wrap).
@@ -5771,7 +5765,7 @@ function makeSubscript(loc, base, index) {
   // C11 6.5.2.1p2: `E1[E2]` is defined as `*((E1)+(E2))`, and addition is
   // commutative, so `N[arr]` is legal and equal to `arr[N]`. Normalize it by
   // swapping to the array/pointer-first form before the usual lowering
-  // (todos/0193).
+  // (docs/archive/0193).
   if (baseUt.isInteger() && (idxUt.isPointer() || idxUt.isArray())) {
     const tmp = base; base = index; index = tmp;
     baseUt = base.type.removeQualifiers();
@@ -5808,11 +5802,11 @@ function makeSubscript(loc, base, index) {
   // Direct declarations already carry the qualifier on the element
   // (`volatile int a[4]`), but through a typedef (`typedef int A[4];
   // volatile A a;`) it lands on the array TypeInfo itself — push it
-  // down so the access classifies volatile (todos/0187).
+  // down so the access classifies volatile (docs/archive/0187).
   if (base.type.isVolatile && base.type.removeQualifiers().isArray()) {
     elemType = elemType.addVolatile();
   }
-  // Same push-down for const (todos/0227 G22): `typedef int A[4];
+  // Same push-down for const (docs/archive/0227 G22): `typedef int A[4];
   // const A a;` must make `a[0]` a const lvalue, or the 6.3.2.1p1
   // modifiable-lvalue check misses it.
   if (base.type.isConst && base.type.removeQualifiers().isArray()) {
@@ -6526,13 +6520,13 @@ function foldStmt(stmt) {
 // folded we can read its bag to see what it transitively references.
 const _inliningStack = new Set();
 
-// Instrumentation (todos/0188): successful inlines and refusals charged
+// Instrumentation (docs/archive/0188): successful inlines and refusals charged
 // to the expansion budget, cumulative across the per-TU passes and the
 // post-link round. `optimizeLinked` snapshots its own share into
 // `stats.postLink`.
 const stats = { inlined: 0, budgetRefused: 0, noinlineRefused: 0, postLink: null };
 
-// Bounded expansion (todos/0188). Substitution duplicates each argument
+// Bounded expansion (docs/archive/0188). Substitution duplicates each argument
 // once per parameter use, and foldExpr re-folds substituted bodies, so a
 // chain of nested pure helpers (sq(sq(sq(x)))) grows multiplicatively.
 // The budget is on GROWTH per call site: the substituted expression may
@@ -6592,7 +6586,7 @@ function tryInline(callExpr) {
   if (_inliningStack.has(def)) return null;
   if (!def.body) return null;
   // __attribute__((noinline)) is a hard refusal at every inlining layer
-  // (todos/0214) — the AST rule would otherwise fold tiny accessors the
+  // (docs/archive/0214) — the AST rule would otherwise fold tiny accessors the
   // user explicitly pinned.
   if (def.fnAttrs && def.fnAttrs.noinline) { stats.noinlineRefused++; return null; }
   const returnExpr = singleReturnBody(def.body);
@@ -6609,7 +6603,7 @@ function tryInline(callExpr) {
     // Through an unprototyped decl the args carry their default-PROMOTED
     // types (double for a float arg — C89 6.5.2.2p6) while the definition's
     // param may be narrower; substituting the promoted expr verbatim would
-    // splice an f64 where the body expects f32 (todos/0159). Convert back
+    // splice an f64 where the body expects f32 (docs/archive/0159). Convert back
     // to the param's declared type when they differ.
     const pt = params[i].type.removeQualifiers();
     if (arg.type.removeQualifiers() !== pt && pt.isScalar() && arg.type.isScalar()) {
@@ -6620,7 +6614,7 @@ function tryInline(callExpr) {
   // Push self onto the stack while substituting & re-folding the body,
   // so a recursive call to `decl` inside the body sees its callee as
   // already-being-inlined and bails. Keyed on the body-bearing def so
-  // cross-TU decl aliases of one function can't slip past (todos/0188).
+  // cross-TU decl aliases of one function can't slip past (docs/archive/0188).
   _inliningStack.add(def);
   try {
     const sub = AST.substituteParams(returnExpr, paramMap);
@@ -6747,7 +6741,7 @@ function optimize(unit, options) {
   return unit;
 }
 
-// Whole-program inline+fold round (todos/0188). Runs AFTER
+// Whole-program inline+fold round (docs/archive/0188). Runs AFTER
 // linkTranslationUnits has wired decl.definition across TUs, so
 // tryInline's `decl.definition || decl` now resolves callee bodies that
 // live in OTHER translation units — the dominant refusal of the per-TU
@@ -8734,7 +8728,7 @@ function lebI64(out, value) {
 // whose ELEMENT is a matching-width character/integer type — and nothing
 // else. Every `{ "str" }` byte-copy shortcut must gate on this, or an array
 // of char* with a single string-literal initializer gets the string's BYTES
-// written into the pointer slot (todos/0176: `const char *r[] = {"cmd"}`
+// written into the pointer slot (docs/archive/0176: `const char *r[] = {"cmd"}`
 // yielded r[0] == "cmd\0" read as an address). Top-level on purpose: both
 // the Parser (compound-literal paths) and the codegen (static/frame/file-
 // scope init paths) gate on it.
@@ -9999,7 +9993,7 @@ function linkTranslationUnits(units, compilerOptions) {
   // still incomplete at end of translation unit is completed to ONE
   // element with the implicit zero initializer (gcc/clang, both warn).
   // Without this the object sized to 0 bytes at allocateStatic and the
-  // NEXT global overlapped it (todos/0204). Runs after definition merge
+  // NEXT global overlapped it (docs/archive/0204). Runs after definition merge
   // so an initialized (size-bearing) definition has already won.
   const completeTentativeArray = (decl) => {
     if (!(decl instanceof AST.DVar)) return;
@@ -10015,7 +10009,7 @@ function linkTranslationUnits(units, compilerOptions) {
     forEachDecl(unit, true, completeTentativeArray);
   }
 
-  // Whole-program inline+fold round (todos/0188): now that every decl's
+  // Whole-program inline+fold round (docs/archive/0188): now that every decl's
   // `.definition` points at its body-bearing instance, re-fold bodies so
   // cross-TU single-return callees become inline candidates. Placed here
   // (rather than in each driver) so every consumer of the linker — the
@@ -10492,7 +10486,7 @@ class Parser {
     this.parsedExceptionTags = [];
     this.parsedLabels = new Map();
     this.pendingGotos = new Map();
-    // Names declared `inline` anywhere in this translation unit (todos/0328).
+    // Names declared `inline` anywhere in this translation unit (docs/archive/0328).
     // C11 6.7.4p1 makes the specifier a property of the FUNCTION, so it must
     // survive a declaration that is dropped or goes out of scope before the
     // definition is parsed — a block-scope `inline int f(int);` in one
@@ -10539,7 +10533,7 @@ class Parser {
   warning(tok, msg) { reportWarning(Lexer.Loc.fromTok(tok), msg); }
 
   // C11 6.5.3.4p1 constraint: sizeof shall not be applied to an incomplete
-  // type (todos/0227 G21). void and function types pass — GNU accepts them
+  // type (docs/archive/0227 G21). void and function types pass — GNU accepts them
   // with result 1 (TypeInfo.sizeofResult). Divergent operands come from a
   // prior recovered error; don't cascade a second diagnostic onto them.
   checkSizeofOperand(tok, type) {
@@ -10549,7 +10543,7 @@ class Parser {
   }
 
   // C11 6.5.3.4p1 (constraint): sizeof shall not be applied to an expression
-  // that designates a bit-field member (todos/0367). Only the DIRECT member
+  // that designates a bit-field member (docs/archive/0367). Only the DIRECT member
   // access designates one — a value forwarded through assignment/comma is an
   // ordinary rvalue there.
   checkSizeofExprOperand(tok, expr) {
@@ -10702,7 +10696,7 @@ class Parser {
     return attrs;
   }
 
-  // --- C23 [[...]] attribute specifiers (todos/0214) ---
+  // --- C23 [[...]] attribute specifiers (docs/archive/0214) ---
   // Deliberately minimal: recognized only in the declaration-specifier
   // position (the placement the corpus uses — `[[gnu::noinline]] void f()`).
   // gnu::-prefixed names map onto the same flag bag parseGCCAttributes
@@ -10762,7 +10756,7 @@ class Parser {
   // FUNCTION, not of one declaration of it), so the WAST inliner sees
   // hintCalleeCap for a function whose only `inline` is on a prototype, on
   // a re-declaration after the definition, or on a block-scope declaration
-  // — todos/0328. Three directions, hence three moves:
+  // — docs/archive/0328. Three directions, hence three moves:
   //   forward  — record the name, so a definition parsed later can ask
   //              (the node may be dropped or out of scope by then);
   //   sideways — stamp THIS node, since either it or `prev` may be the one
@@ -10884,7 +10878,7 @@ class Parser {
         continue;
       }
       // C23 [[...]] attribute specifiers in the declaration-specifier
-      // position ([[gnu::noinline]] void f(...)) — todos/0214. gnu::-
+      // position ([[gnu::noinline]] void f(...)) — docs/archive/0214. gnu::-
       // prefixed names land in the same flag bag as __attribute__.
       if (this.atC23AttrStart()) {
         const attrs = { packed: false, aligned: 0, flags: new Set() };
@@ -10914,7 +10908,7 @@ class Parser {
         // storage (data section, region base 64 KiB-aligned) and automatic
         // storage (over-aligned frame slot — same path as the already-uncapped
         // __attribute__((aligned(N)))), so `_Alignas` no longer caps at 8
-        // (todos/0194). Guard only the data-section alignment ceiling here.
+        // (docs/archive/0194). Guard only the data-section alignment ceiling here.
         if (alignVal > 65536) {
           this.error(alignTok, `_Alignas(${alignVal}) exceeds maximum supported alignment of 65536`);
         }
@@ -11068,7 +11062,7 @@ class Parser {
     // the pre-erasure enum around: an enum *bit-field* must follow the
     // enum's compatible-type signedness for its read extension (C11
     // 6.7.2.2p4 — clang/gcc make an all-non-negative enum unsigned int, so
-    // the field zero-extends). See emitBitFieldLoad / todos/0189.
+    // the field zero-extends). See emitBitFieldLoad / docs/archive/0189.
     const enumType = type.isEnum() ? type : null;
     if (type.isEnum()) type = Types.TINT;
 
@@ -11082,7 +11076,7 @@ class Parser {
   parseTagSpecifier() {
     let tagKind;
     // The `#pragma pack` cap in effect at this keyword (stamped by
-    // postProcess; 0 = natural alignment). todos/0191.
+    // postProcess; 0 = natural alignment). docs/archive/0191.
     const pragmaPack = this.peek().packValue || 0;
     if (this.matchKW(Lexer.Keyword.STRUCT)) tagKind = Types.TagKind.STRUCT;
     else { this.advance(); tagKind = Types.TagKind.UNION; }
@@ -11229,7 +11223,7 @@ class Parser {
             mName, mType, Types.StorageClass.NONE, null);
           mVar.bitWidth = bitWidth;
           // An enum bit-field reads back with the signedness of the enum's
-          // compatible type, not of the erased `int` (todos/0189). The enum
+          // compatible type, not of the erased `int` (docs/archive/0189). The enum
           // is erased to int in parseDeclSpecifiers; carry the original for
           // emitBitFieldLoad's sign/zero-extension choice.
           if (bitWidth >= 0 && memSpecs.enumType) mVar.enumBitField = memSpecs.enumType;
@@ -11268,7 +11262,7 @@ class Parser {
       }
       // Tag-level __attribute__((aligned(N))) — either position (after the
       // struct/union keyword or after the closing brace) — raises the TYPE's
-      // alignment, with sizeof padded up to it (todos/0216: it used to land
+      // alignment, with sizeof padded up to it (docs/archive/0216: it used to land
       // only on the declaration's requestedAlignment, so _Alignof/sizeof of
       // the type ignored it). aligned() can only increase alignment; a
       // reduction needs packed (GCC semantics, matches clang).
@@ -11628,7 +11622,7 @@ class Parser {
         // but fits unsigned long long: C11 6.4.4.1p5's candidate list is
         // signed-only, so this is ill-formed — but gcc/clang extend it to
         // `unsigned long long` with a warning rather than silently wrapping
-        // it negative (todos/0192; the old `isDecimal ? TLLONG` wrapped it,
+        // it negative (docs/archive/0192; the old `isDecimal ? TLLONG` wrapped it,
         // flipping the signedness of every surrounding conversion).
         const oorDecimalToULL = () => {
           this.warning(t, `integer constant ${val} is so large that it is unsigned`);
@@ -11700,7 +11694,7 @@ class Parser {
         // it reaches the unit's declared-function list — the linker stitches
         // `.definition` to a cross-TU definition there (or reports a real
         // undefined-symbol error); an unregistered decl skipped linking
-        // entirely and codegen ICE'd on the unstitched node (todos/0158).
+        // entirely and codegen ICE'd on the unstitched node (docs/archive/0158).
         const ftype = Types.functionType(Types.TINT, [], false, true);
         const fdecl = new AST.DFunc({ filename: t.filename, line: t.line }, name, ftype, [], Types.StorageClass.EXTERN, false, null);
         this.varScope.set(name, fdecl);
@@ -12341,7 +12335,7 @@ class Parser {
             // Function-index-bearing opcodes (call / return_call /
             // ref.func) are refused at the head of an op group: raw
             // bytes are emitted VERBATIM, and the WAST tree-shake
-            // (todos/0214) renumbers function indices — it can neither
+            // (docs/archive/0214) renumbers function indices — it can neither
             // see nor rewrite a reference hidden in bytes. Loud refusal
             // beats a silent miscompile. (A function index was never a
             // stable, source-knowable quantity anyway.)
@@ -12873,7 +12867,7 @@ class Parser {
         // Branch operands take the integer promotions first (C11 6.5.15p5's
         // usual arithmetic conversions start at 6.3.1.8) — bit-field
         // promotion included: `c ? u20 : u20` is (signed) int arithmetic
-        // (todos/0367; the maybeImplicitCast below materializes it).
+        // (docs/archive/0367; the maybeImplicitCast below materializes it).
         const resType = this.computeTernaryType(
           AST.promoteExprType(thenExpr), AST.promoteExprType(elseExpr));
         // Both branches must produce the same type — wrap each in an
@@ -13439,9 +13433,9 @@ class Parser {
         // C11 6.2.2p4 (via p5 for no-storage-class): a block-scope
         // re-declaration of a visible static function inherits its
         // internal linkage — keep the existing binding, drop the
-        // redundant decl (todos/0219).
+        // redundant decl (docs/archive/0219).
         const prevFn = this.varScope.get(name);
-        // A block-scope declaration can carry `inline` too (todos/0328).
+        // A block-scope declaration can carry `inline` too (docs/archive/0328).
         // Record it BEFORE the drop below, which skips everything after it,
         // and back-propagate onto a definition already parsed; a definition
         // parsed LATER picks it up from fnInlineHints.
@@ -13484,7 +13478,7 @@ class Parser {
       // C11 6.2.2p4: a block-scope `extern` re-declaration of a visible
       // FILE-scope static inherits its internal linkage and denotes that
       // same object — capture the prior binding before this declarator
-      // shadows it (consumed at the extern divert below, todos/0219).
+      // shadows it (consumed at the extern divert below, docs/archive/0219).
       // Identity with the level-0 binding, not a level check: an earlier
       // extern in an enclosing block re-bound the SAME file-scope decl at
       // its own level, while a static LOCAL (no linkage, 6.2.2p6 — not
@@ -13547,7 +13541,7 @@ class Parser {
             // for STATIC storage, where the object is sized with the extra
             // (computeInitAllocSize). An automatic slot is plain sizeOf, so
             // the FAM element stores would run past the frame slot — gcc
-            // and clang both reject this (todos/0205).
+            // and clang both reject this (docs/archive/0205).
             if (specs.storageClass !== Types.StorageClass.STATIC &&
                 initListInitializesFAM(type, dvar.initExpr)) {
               this.recoverableError(eqTok,
@@ -13592,7 +13586,7 @@ class Parser {
           if (priorFileStatic instanceof AST.DVar &&
               priorFileStatic.storageClass === Types.StorageClass.STATIC) {
             // C11 6.2.2p4: re-binds the visible file-scope static; not an
-            // external-linkage declaration at all (todos/0219).
+            // external-linkage declaration at all (docs/archive/0219).
             this.varScope.replaceInCurrentScope(name, priorFileStatic);
           } else {
             this.currentParsingFunc.externLocals.push(dvar);
@@ -13683,7 +13677,7 @@ class Parser {
         // the function type's param slot (the wasm signature) to match those
         // call sites; the parameter variable keeps its declared float type
         // via _knrDeclaredTypes and codegen demotes the incoming double at
-        // function entry (todos/0159). Sub-int params need no promotion
+        // function entry (docs/archive/0159). Sub-int params need no promotion
         // here — char/short/int share the i32 wasm type.
         decl._knrDeclaredTypes = [...knrParamTypes];
         for (let i = 0; i < knrParamTypes.length; i++) {
@@ -13743,9 +13737,9 @@ class Parser {
           }
           prev.definition = funcDecl;
           // Attributes on an earlier prototype apply to the definition
-          // (gcc semantics, per-TU) — todos/0214.
+          // (gcc semantics, per-TU) — docs/archive/0214.
           funcDecl.fnAttrs = this._mergeFnAttrs(funcDecl.fnAttrs, prev.fnAttrs);
-          // …and so does `inline` — _noteInlineHint above, todos/0328.
+          // …and so does `inline` — _noteInlineHint above, docs/archive/0328.
           // C11 6.2.2p4 (via p5 for no-storage-class): a DEFINITION without
           // the `static` keyword after a visible internal-linkage declaration
           // inherits internal linkage — `static int f(void); int f(void)
@@ -13771,7 +13765,7 @@ class Parser {
             // K&R defs: the variable keeps its DECLARED type (float) while
             // the function type carries the promoted ABI slot (double) —
             // sizeof/&param semantics stay C89-correct; codegen converts at
-            // entry (todos/0159).
+            // entry (docs/archive/0159).
             const ptype = (decl._knrDeclaredTypes && i < decl._knrDeclaredTypes.length)
               ? decl._knrDeclaredTypes[i]
               : (i < paramTypes.length ? paramTypes[i] : Types.TINT);
@@ -13855,7 +13849,7 @@ class Parser {
           this.error(this.peek(), `conflicting types for '${name}' (previously declared as '${prevFunc.type.toString()}', now declared as '${funcDecl.type.toString()}')`);
         }
         // `inline` accumulates across declarations the way attributes do
-        // (todos/0328) — above the re-declaration `continue`s below, and
+        // (docs/archive/0328) — above the re-declaration `continue`s below, and
         // outside the prevFunc guard so a FIRST declaration records its
         // hint for a definition parsed later.
         this._noteInlineHint(name, funcDecl, prevFunc);
@@ -13889,10 +13883,10 @@ class Parser {
         // — it names the SAME function, not a new external one. Keep the
         // static decl in scope and drop the redundant re-declaration so
         // callers keep binding the internal definition (`static int
-        // f(void) {...} extern int f(void);` must link — todos/0219).
+        // f(void) {...} extern int f(void);` must link — docs/archive/0219).
         //
         // A re-declaration that REPEATS `static` is in the same set
-        // (todos/0321). Rebinding the scope entry to a body-less node
+        // (docs/archive/0321). Rebinding the scope entry to a body-less node
         // strands the definition: the per-TU tree-shake marks reachability
         // by NODE (`liveFuncs.has(f)` over unit.staticFunctions), so calls
         // that bind the re-declaration never mark the definition live and
@@ -14002,7 +13996,7 @@ class Parser {
       // The binding captured BEFORE the early self-registration above —
       // a fresh name must not see itself as its own predecessor here.
       const prevDecl = prevVar;
-      // C11 6.2.2p7 (todos/0227 G22): a static (internal-linkage)
+      // C11 6.2.2p7 (docs/archive/0227 G22): a static (internal-linkage)
       // declaration after a visible declaration with EXTERNAL linkage
       // conflicts — the p4 inheritance only runs the other way
       // (static first, extern after — the divert below).
@@ -14126,7 +14120,7 @@ class Parser {
             }
             // C11 6.7.6.2p1: the size must be greater than zero. Explicit
             // [0] stays accepted (GNU zero-length array); negative used to
-            // silently produce a negative-size type (todos/0227 G22).
+            // silently produce a negative-size type (docs/archive/0227 G22).
             if (sz < 0n) {
               this.error(sizeTok, `declared as an array with a negative size (${sz})`);
             }
@@ -14228,7 +14222,7 @@ class Parser {
                       if (sz == null && !firstDim) {
                         this.error(sizeTok, "variable-length arrays are not supported");
                       }
-                      // C11 6.7.6.2p1 (todos/0227 G22) — a decaying first
+                      // C11 6.7.6.2p1 (docs/archive/0227 G22) — a decaying first
                       // dim's size is still a constraint violation if negative.
                       if (sz != null && sz < 0n) {
                         this.error(sizeTok, `declared as an array with a negative size (${sz})`);
@@ -14261,7 +14255,7 @@ class Parser {
               if (this.atKW(Lexer.Keyword.X_ATTRIBUTE)) {
                 this.parseGCCAttributes();
               }
-              // C11 6.7.6.3p10 (todos/0227 G22): `void` is only valid as
+              // C11 6.7.6.3p10 (docs/archive/0227 G22): `void` is only valid as
               // the SOLE unnamed unqualified parameter. The literal
               // `f(void)` spelling was consumed before this loop; a
               // TYPEDEF'd void that satisfies the same constraints is the
@@ -15360,7 +15354,7 @@ return {
 })();
 
 // ====================
-// WAST — target-side wasm instruction layer (todos/0197)
+// WAST — target-side wasm instruction layer (docs/archive/0197)
 // ====================
 //
 // A FLAT instruction sequence below the C AST: one node per wasm
@@ -15375,7 +15369,7 @@ return {
 // transforms (inlining, peephole) safe. Nodes are inert data (opcode
 // family + immediates), dispatched by node.constructor like the AST.
 //
-// Stage 1 (todos/0197) is substrate only: WasmCode's byte encoders are
+// Stage 1 (docs/archive/0197) is substrate only: WasmCode's byte encoders are
 // RELOCATED here (byte-identical by construction) and Codegen's function
 // bodies route through nodes. WasmCode itself is demoted to the tiny
 // constant-expression byte arrays (global inits, data-segment offsets)
@@ -15563,7 +15557,7 @@ function truncSatSubop(dstWt, srcWt, sign) {
   throw new Error("truncSat: unsupported src/dst pair");
 }
 
-// WasmCode builder — DEMOTED (todos/0197): direct byte emission, kept for
+// WasmCode builder — DEMOTED (docs/archive/0197): direct byte emission, kept for
 // the tiny 2-instruction constant expressions (global inits, data-segment
 // offsets) where a node layer has zero value. Function bodies build WAST
 // nodes via WastBuilder instead.
@@ -15747,7 +15741,7 @@ class WGCOp { constructor(subop, imms) { this.subop = subop; this.imms = imms; }
 // The EWasm escape hatch: pre-encoded bytes emitted verbatim. Stack-opaque
 // — an optimization BARRIER in later stages. Real __wasm() carriers are
 // flat single instructions (no control flow), so it is structurally safe.
-// INVARIANT (todos/0214): raw bytes never encode a FUNCTION INDEX
+// INVARIANT (docs/archive/0214): raw bytes never encode a FUNCTION INDEX
 // (call/return_call/ref.func) — the tree-shake renumbers function indices
 // and treats WRaw as reference-free; the __wasm parser rejects those
 // opcodes at op-group heads. Local indices in raw bytes are fine (function-
@@ -15804,7 +15798,7 @@ class WastBuilder {
   // else must sit directly inside an if that hasn't taken one yet — a
   // second else_() on the same if is an emitter bug; catch it here at the
   // producing site instead of as V8's opaque module rejection
-  // (todos/0227 W2; validate() enforces the same rule for pass output).
+  // (docs/archive/0227 W2; validate() enforces the same rule for pass output).
   else_() {
     const top = this.ctrl[this.ctrl.length - 1];
     if (!(top instanceof WIf)) {
@@ -16081,7 +16075,7 @@ function validate(fnNodes, funcLabel) {
         if (!(top instanceof WIf)) {
           throw new Error("WAST validate: else outside an if");
         }
-        // One else per if (todos/0227 W2): a duplicate would otherwise
+        // One else per if (docs/archive/0227 W2): a duplicate would otherwise
         // surface as V8's opaque rejection of the serialized module.
         if (elseSeen.has(top)) {
           throw new Error("WAST validate: second else in one if");
@@ -16111,7 +16105,7 @@ function validate(fnNodes, funcLabel) {
 function mopIsLoad(opcode) { return opcode >= MOP.I32_LOAD && opcode <= MOP.I64_LOAD32_U; }
 function mopIsStore(opcode) { return opcode >= MOP.I32_STORE && opcode <= MOP.I64_STORE32; }
 
-// Offset-fold peephole (todos/0200). Codegen materializes every address
+// Offset-fold peephole (docs/archive/0200). Codegen materializes every address
 // displacement as an explicit `i32.const k; i32.add` and emits ALL loads/
 // stores with memarg offset 0, so the offset immediate is free real estate.
 // Collapse the adjacent pair into it:
@@ -16173,7 +16167,7 @@ function foldMemOffsets(nodes) {
   return { nodes: out, folds };
 }
 
-// ---- Whole-body inliner (todos/0201) ----
+// ---- Whole-body inliner (docs/archive/0201) ----
 //
 // Replace an eligible direct WCall with the callee's body spliced into the
 // caller. The substrate's symbolic label identities are what make this a
@@ -16213,7 +16207,7 @@ function foldMemOffsets(nodes) {
 // calls, so each splice is semantics-preserving regardless of recursion,
 // and termination is structural (one walk over each caller's original
 // nodes; spliced content is never re-scanned). The relaxation is
-// deliberate (todos/0201): SameBoy's whole main loop is one SCC closed by
+// deliberate (docs/archive/0201): SameBoy's whole main loop is one SCC closed by
 // the run-once SGB-border boot edge (GB_borrow_sgb_border->GB_run_frame),
 // so an SCC-wide refusal would exclude every hot callee.
 //
@@ -16231,14 +16225,14 @@ function foldMemOffsets(nodes) {
 // sret callee is now an ordinary callee — its hidden pointer is just its
 // first wasm parameter and the generic param-to-local splice below handles
 // it. Budgets are DELIBERATELY CONSERVATIVE (coordinator decision,
-// todos/0201): inline the small callees that fall out of the
+// docs/archive/0201): inline the small callees that fall out of the
 // representation cleanly; do NOT chase the big SameBoy hot callees
 // (GB_read_memory ~397 real nodes, GB_advance_cycles ~534, cycle_write
 // ~1211) at dozens of sites — documented deferred work with real V8
 // tier-up risk, not a bug. Inlined-away functions are deleted by the
-// tree-shake pass that follows (todos/0214) — never by the inliner itself.
+// tree-shake pass that follows (docs/archive/0214) — never by the inliner itself.
 //
-// Policy extensions (todos/0214):
+// Policy extensions (docs/archive/0214):
 // - fnMeta.noinline (__attribute__((noinline))) is a hard per-callee
 //   refusal, counted in stats.refused.noinline — even single-use.
 // - fnMeta.alwaysInline (__attribute__((always_inline))) bypasses the
@@ -16264,7 +16258,7 @@ const inlineDefaults = {
   // budgets don't see that (a tiny body can declare thousands of locals:
   // ext_regex has a ~12.5k-local helper), and wasm engines hard-fail a
   // function at 50,000 locals ("local count too large"). 45000 leaves
-  // margin while changing no current-corpus decision (todos/0209).
+  // margin while changing no current-corpus decision (docs/archive/0209).
   localCap: 45000,
 };
 
@@ -16505,7 +16499,7 @@ function inlineFunctions(wmod, optsIn) {
       // callee local. Refuse it if the caller would cross localCap —
       // the hard guard that keeps the emitted function under the wasm
       // 50,000-local engine limit no matter how the node-count budgets
-      // are tuned (todos/0209).
+      // are tuned (docs/archive/0209).
       const calleeLocals = callee.locals.reduce((a, l) => a + l.count, 0);
       if (localCount + k + calleeLocals > opts.localCap) { refuse('budgetLocals'); continue; }
 
@@ -16538,7 +16532,7 @@ function inlineFunctions(wmod, optsIn) {
   return stats;
 }
 
-// ---- Tree-shake (todos/0214) ----
+// ---- Tree-shake (docs/archive/0214) ----
 //
 // Delete defined functions unreachable from the roots over the WCall
 // graph, then remap every function index the deletion renumbered. Runs
@@ -16699,7 +16693,7 @@ function treeShakeFunctions(wmod, optsIn) {
 
 // ---- Pass hook ----
 //
-// The post-codegen, pre-serialize seam (todos/0198). When this runs, every
+// The post-codegen, pre-serialize seam (docs/archive/0198). When this runs, every
 // emitted function's node list sits complete on wmod.funcDefs[i].wast (all
 // func/global/type indices were assigned in the pre-pass) and nothing has
 // been serialized yet, so cross-function transforms (inlining) and local
@@ -16707,7 +16701,7 @@ function treeShakeFunctions(wmod, optsIn) {
 // re-run validate() on it (the per-function funcLabel isn't persisted on
 // the funcDef, so the re-validation passes null — every structural check
 // except the foreign-func-label one still runs).
-// Order matters (todos/0201/0214): the INLINER runs first (it's what
+// Order matters (docs/archive/0201/0214): the INLINER runs first (it's what
 // strands dead bodies), then the tree-shake deletes + remaps, then
 // foldMemOffsets — so const+add displacements newly exposed inside
 // inlined bodies fold too. The shake re-validates every survivor it
@@ -16765,7 +16759,7 @@ return {
 const Codegen = (() => {
 
 // Target-side wasm type/opcode tables, byte encoders and the demoted
-// WasmCode byte builder were relocated into the WAST module (todos/0197);
+// WasmCode byte builder were relocated into the WAST module (docs/archive/0197);
 // Codegen consumes them unchanged.
 const {
   WasmNumType, WT_I32, WT_I64, WT_F32, WT_F64, WT_EXTERNREF, WT_REFEXTERN,
@@ -16834,7 +16828,7 @@ class WasmModule {
     this.embeddedSources = null; // for c.sources custom section (-g2)
     // Function indices whose TABLE index (funcIdx+1) escaped as a value —
     // baked into code or data segments. Roots for the WAST tree-shake
-    // (todos/0214): these can be reached via call_indirect and their
+    // (docs/archive/0214): these can be reached via call_indirect and their
     // table slots must survive.
     this.addrTakenFuncs = new Set();
     // Set by the tree-shake when it deletes functions: {size, segments:
@@ -16882,8 +16876,8 @@ class WasmModule {
     const id = this.funcImports.length + this.funcDefs.length;
     // body: serialized bytes; wast: the function's WAST node list, set by
     // emitFunctionBody and serialized into body by emit()'s code-section
-    // writer (todos/0198); fnMeta: ABI facts for the inliner, stamped with
-    // the tree (todos/0201).
+    // writer (docs/archive/0198); fnMeta: ABI facts for the inliner, stamped with
+    // the tree (docs/archive/0201).
     this.funcDefs.push({ typeId, locals: [], body: [], wast: null, fnMeta: null });
     return id;
   }
@@ -16984,7 +16978,7 @@ class WasmModule {
 
   // Emit full WASM binary as a Uint8Array
   emit() {
-    // WAST pass seam (todos/0198): must run before ANY section is written —
+    // WAST pass seam (docs/archive/0198): must run before ANY section is written —
     // passes may add locals or types, and sections 1/3 precede the code
     // section that serializes the trees.
     WAST.runPasses(this);
@@ -17233,7 +17227,7 @@ class WasmModule {
     // Element section (9). Identity map (table[i+1] = func i) — or, after
     // a tree-shake, one active segment per surviving run: original slots,
     // remapped function indices, holes (null slots) where deleted
-    // functions sat (todos/0214).
+    // functions sat (docs/archive/0214).
     buf = [];
     if (this.tableLayout) {
       const segs = this.tableLayout.segments;
@@ -17267,7 +17261,7 @@ class WasmModule {
         wtEmit(loc.type, funcBody);
       }
       var preambleSize = funcBody.length;
-      // Function bodies arrive as WAST node lists (todos/0198); serialize
+      // Function bodies arrive as WAST node lists (docs/archive/0198); serialize
       // here — after runPasses — appending into def.body. Source-map
       // entries are recorded now (byte offsets exist only at serialize
       // time); the rebasing below sorts by absolute offset, so push order
@@ -17781,7 +17775,7 @@ function constEvalExpr(expr, policy) {
         // Only an ARRAY-typed identifier used as a value is a constant —
         // its implicit decay is the array's address (init-list elements
         // carry no EDecay wrapper; the EMember/ESubscript case below is
-        // the same rule, todos/0220). A scalar/pointer/struct global's
+        // the same rule, docs/archive/0220). A scalar/pointer/struct global's
         // STORED value is runtime state, not a constant: returning the
         // address here made local aggregate initializers bake `&var`
         // where var's VALUE belonged (`struct W w = { ptr };` — the
@@ -18036,7 +18030,7 @@ function constEvalExpr(expr, policy) {
     case AST.EDecay: {
       // Bare identifiers (globals, functions) and string literals resolve
       // directly as values. Member/subscript array lvalues (`s.b`,
-      // `t.inner.m`, `r.rows[1]` — todos/0220) have no value case; their
+      // `t.inner.m`, `r.rows[1]` — docs/archive/0220) have no value case; their
       // decay IS the address of the first element, which constEvalAddr
       // already resolves for the &s.b[k] spelling — so both spellings fold
       // through the same addr arithmetic.
@@ -18052,7 +18046,7 @@ function constEvalExpr(expr, policy) {
       // An ARRAY-typed lvalue used as a value is an implicit array-to-
       // pointer decay — init-list elements carry no EDecay wrapper
       // (normalizeInitList doesn't insert one), so `int *p[1] = {s.b};`
-      // lands here raw (todos/0220). Non-array lvalues stay non-constant:
+      // lands here raw (docs/archive/0220). Non-array lvalues stay non-constant:
       // a global's STORED value is runtime state, not a constant.
       if (!expr.type.isArray()) return null;
       const addr = constEvalAddr(expr, policy);
@@ -18080,7 +18074,7 @@ function getWasmFunctionTypeIdForCFunctionType(wmod, funcType) {
 // falls back to a linear `br_if` compare chain, which costs O(cases) per
 // dispatch — see the SSwitch arm's `dense` test.
 //
-// This used to be 512, which was the todos/0332 pathology. The bound is NOT a
+// This used to be 512, which was the docs/archive/0332 pathology. The bound is NOT a
 // code-size trade-off: the accompanying density test (>= 40%) already
 // guarantees the table holds at most 2.5 entries per case, and a table entry
 // is 1-3 LEB bytes against ~8 bytes for a compare-and-branch, so whenever the
@@ -18096,7 +18090,7 @@ function getWasmFunctionTypeIdForCFunctionType(wmod, funcType) {
 //
 // 65520 is V8's `kV8MaxWasmFunctionBrTableSize`; a larger table is rejected at
 // validation, so this is an engine ceiling, not a tuning knob. Functions with
-// more than 65520 blocks still degrade to the linear chain — see todos/0335.
+// more than 65520 blocks still degrade to the linear chain — see docs/archive/0335.
 const MAX_BR_TABLE_RANGE = 65520;
 
 class CodeGenerator {
@@ -18117,7 +18111,7 @@ class CodeGenerator {
     this.literalRangeByAddr = new Map();
     this.staticData = [];
     this.stringLiteralAddrs = new Map();
-    // todos/0228: literal-merge policy. OFF by default — each lexical string
+    // docs/archive/0228: literal-merge policy. OFF by default — each lexical string
     // literal gets its OWN linear-memory storage, so a UB write through a
     // char* stays local to that literal instead of silently corrupting every
     // same-spelling literal (wasm has no page protection to fault on it). The
@@ -18171,7 +18165,7 @@ class CodeGenerator {
     this.localIdxNames = new Map();
     // Source map tracking. sourceMapEntries ({funcIdx, entries}) are
     // produced by the code-section writer when it serializes each
-    // function's WAST tree (todos/0198); codegen only places WSrcLoc
+    // function's WAST tree (docs/archive/0198); codegen only places WSrcLoc
     // markers, gated on emitSrcLocMarkers.
     this.sourceMapEntries = [];
     this.sourceMapFiles = [];
@@ -18193,7 +18187,7 @@ class CodeGenerator {
       this.sourceMapFileIndex.set(loc.filename, fileIdx);
     }
     // Zero-width WAST marker; serialization reports its byte offset via
-    // the onSrcLoc callback (todos/0197).
+    // the onSrcLoc callback (docs/archive/0197).
     this.body.srcLoc(fileIdx, loc.line);
   }
 
@@ -18283,7 +18277,7 @@ class CodeGenerator {
   sizeOf(type) { return type.size; }
   alignOf(type) { return type.align; }
 
-  // --- String literal storage (todos/0228) ---
+  // --- String literal storage (docs/archive/0228) ---
   // `valueArray` is the literal's bytes; `node` is the lexical EString AST
   // node (its object identity), if the caller has it. Default policy: each
   // lexical literal gets its OWN storage, keyed by node identity so the SAME
@@ -18373,7 +18367,7 @@ class CodeGenerator {
     // `!== 0` guards below happily accept before degrading to an i32
     // constant of 0, i.e. the CALLER's frame base. That is silent stack
     // corruption. Every caller must have allocated a slot first, so a
-    // non-finite offset is a compiler bug: fail loud (todos/0319).
+    // non-finite offset is a compiler bug: fail loud (docs/archive/0319).
     if (!Number.isFinite(offset)) {
       throw new Error(
         `internal: frame address with non-finite offset (${offset}) — ` +
@@ -18448,7 +18442,7 @@ class CodeGenerator {
 
   // A function's table index escaping as a VALUE (into code or a data
   // segment) makes it reachable via call_indirect — record it as a
-  // tree-shake root (todos/0214). Speculative constEval attempts
+  // tree-shake root (docs/archive/0214). Speculative constEval attempts
   // over-approximate; that only keeps functions alive, which is safe.
   _funcAddrEscape(func) {
     const tIdx = this.funcDefToTableIdx.get(func);
@@ -18546,7 +18540,7 @@ class CodeGenerator {
                 // masks exact. (The runtime store path already does this.)
                 const bw = BigInt(member.bitWidth);
                 const bo = BigInt(member.bitOffset);
-                // RMW only the layout-assigned access window (todos/0216):
+                // RMW only the layout-assigned access window (docs/archive/0216):
                 // in a packed struct the declared unit's tail bytes can
                 // belong to the NEXT object in static data.
                 const unitSize = member.bfAccessBytes > 0 ? member.bfAccessBytes : this.sizeOf(member.type);
@@ -18826,7 +18820,7 @@ class CodeGenerator {
         localIdx++;
       }
       this.nextLocalIdx = localIdx;
-      // K&R promoted-ABI params (todos/0159): the signature slot carries the
+      // K&R promoted-ABI params (docs/archive/0159): the signature slot carries the
       // default-promoted type (double for a declared float — C89 6.5.2.2p6)
       // while the parameter VARIABLE keeps its declared type. When the wasm
       // types differ, give the param its own local of the declared type; the
@@ -19047,11 +19041,11 @@ class CodeGenerator {
     const funcIdx = this.funcDefToWasmFuncIdx.get(funcDef);
     this.assignLocals(funcDef);
     const defIdx = funcIdx - this.wmod.funcImports.length;
-    // Function bodies build WAST nodes (todos/0197); the sequence is
+    // Function bodies build WAST nodes (docs/archive/0197); the sequence is
     // validated at the end of this method and stored on
     // wmod.funcDefs[defIdx].wast — serialization is deferred to
     // WasmModule.emit's code-section writer so the WAST pass hook can run
-    // over the finished trees first (todos/0198).
+    // over the finished trees first (docs/archive/0198).
     this.body = new WAST.WastBuilder();
     this.currentFuncDef = funcDef;
     this.emitSrcLocMarkers = !!this.compilerOptions.emitNames;
@@ -19081,7 +19075,7 @@ class CodeGenerator {
       this.body.localSet(this.vaArgsLocalIdx);
     }
 
-    // K&R promoted-ABI entry conversions (todos/0159, see assignLocals):
+    // K&R promoted-ABI entry conversions (docs/archive/0159, see assignLocals):
     // move each promoted signature param into its declared-type local —
     // before the frame prologue, so MEMORY-param copies read the converted
     // local.
@@ -19172,7 +19166,7 @@ class CodeGenerator {
       }
       this.wmod.funcDefs[defIdx].wast = this.body.nodes;
       // ABI facts the WAST inliner can't reconstruct from nodes alone
-      // (todos/0201) — stamped only alongside a stored tree, so a raw or
+      // (docs/archive/0201) — stamped only alongside a stored tree, so a raw or
       // discarded body never carries stale metadata.
       this.wmod.funcDefs[defIdx].fnMeta = {
         variadic: this.hasVaArgs,
@@ -19180,7 +19174,7 @@ class CodeGenerator {
         overAligned: this.frameBaseLocalIdx >= 0,
         structRet: this.hasStructReturn,
         usesAlloca: this.usesAlloca,
-        // Inline-policy hints (todos/0214): noinline = hard refusal,
+        // Inline-policy hints (docs/archive/0214): noinline = hard refusal,
         // alwaysInline = bypass the size budgets, inlineHint = the plain
         // `inline` keyword (raised effective calleeCap).
         noinline: !!(funcDef.fnAttrs && funcDef.fnAttrs.noinline),
@@ -19727,7 +19721,7 @@ class CodeGenerator {
           else {
             // Multi-value catch payload: block type = function-type index
             // (the 3-way blocktype union's third arm, first-class since
-            // todos/0197 — this was a raw byte push before).
+            // docs/archive/0197 — this was a raw byte push before).
             const results = cc.tag.paramTypes.map(pt => cToWasmType(pt, this.wmod));
             const typeIdx = this.wmod.addFunctionTypeId([], results);
             this.body.block({ tag: "typeidx", idx: typeIdx });
@@ -19819,7 +19813,7 @@ class CodeGenerator {
   // divided by 0 (trap) — see tests/unit/conformance/void_ptr_arith.
   // A COMPLETE zero-size pointee (GNU empty struct) is NOT clamped: gcc
   // and clang keep the genuine stride 0 there — `p + n` stays put and a
-  // pointer difference is 0 (todos/0227 G23, empty_struct_ptr_arith).
+  // pointer difference is 0 (docs/archive/0227 G23, empty_struct_ptr_arith).
   // That makes the stride exactly the sizeof-operator result.
   ptrArithElemSize(elemType) {
     return elemType.sizeofResult();
@@ -19896,7 +19890,7 @@ class CodeGenerator {
   // --- Bitfield load/store ---
   // The unit access width is the layout-assigned window (bfAccessBytes:
   // the narrowest power-of-2 span from the unit start covering the
-  // member's bits — todos/0216), falling back to the declared type's
+  // member's bits — docs/archive/0216), falling back to the declared type's
   // size (union members, older layouts). The window is what keeps a
   // packed struct's RMW inside the struct. Loads are zero-extending;
   // the mask/shift math below owns signedness.
@@ -19919,7 +19913,7 @@ class CodeGenerator {
     const bw = field.bitWidth, bo = field.bitOffset;
     // An enum bit-field extends per its enum's compatible-type signedness
     // (C11 6.7.2.2p4), not the erased `int`: an all-non-negative enum is
-    // unsigned int in clang/gcc, so the field zero-extends (todos/0189).
+    // unsigned int in clang/gcc, so the field zero-extends (docs/archive/0189).
     const isUnsigned = field.enumBitField
       ? field.enumBitField.enumIsUnsigned()
       : this.isUnsignedType(field.type);
@@ -20024,7 +20018,7 @@ class CodeGenerator {
   // alloca() returns with a retained SP bump (the caller-frees contract: the
   // alloca'd region below the block must survive this whole call), so on
   // mismatch we leave SP alone and the block leaks until the function
-  // epilogue — the alloca contract's designated free point (todos/0208).
+  // epilogue — the alloca contract's designated free point (docs/archive/0208).
   //
   // Before #773 this test carried a `deferredDelta` correction, because
   // evaluating the arguments could ALSO bump SP for aggregate-return
@@ -20444,7 +20438,7 @@ class CodeGenerator {
         // 6.5.16.2p3's usual arithmetic conversions begin at 6.3.1.8) —
         // bit-field promotion included on BOTH sides: `u20 /= -3` is a
         // SIGNED division whose quotient converts back into the field,
-        // and `x /= s.u20` divides by a (signed) int (todos/0367; the
+        // and `x /= s.u20` divides by a (signed) int (docs/archive/0367; the
         // declared types made both unsigned).
         const plhsType = AST.promoteExprType(lhs);
         // Shifts compute in the PROMOTED LEFT type (C11 6.5.7p3 via
@@ -20780,7 +20774,7 @@ class CodeGenerator {
               // (It used to be recomputed from live SP here, which went
               // stale when a callee's alloca() retained an untracked SP
               // bump — the callee then got a garbage block pointer,
-              // todos/0208.)
+              // docs/archive/0208.)
             }
 
             // Push arg block pointer and call
@@ -20820,7 +20814,7 @@ class CodeGenerator {
             // but the wasm call must match the DEFINITION's signature
             // exactly. Diagnose arg-count skew (C89 UB — an invalid module
             // is never the right outcome) and reconcile promoted scalar
-            // types per-arg below (todos/0159).
+            // types per-arg below (docs/archive/0159).
             const viaUnprototyped = !!funcDecl.type.removeQualifiers().hasUnspecifiedParams;
             if (viaUnprototyped && expr.arguments.length !== callParamTypes.length) {
               // "Unprototyped" is only honest when NO spelling in the
@@ -20883,7 +20877,7 @@ class CodeGenerator {
           const calleeType = expr.callee.type;
           let funcType = calleeType.isPointer() ? calleeType.baseType : calleeType;
           funcType = funcType.removeQualifiers();
-          // Empty-parens function-pointer call (todos/0159): the pointer
+          // Empty-parens function-pointer call (docs/archive/0159): the pointer
           // type carries no params, but sema default-promoted the args
           // (C89 6.5.2.2p6). Type the call_indirect off the promoted
           // ARGUMENT types — the C89 contract is that a matching callee
@@ -20940,7 +20934,7 @@ class CodeGenerator {
               // (It used to be recomputed from live SP here, which went
               // stale when a callee's alloca() retained an untracked SP
               // bump — the callee then got a garbage block pointer,
-              // todos/0208.)
+              // docs/archive/0208.)
             }
             this.body.localGet(argBlockBase);
             this.emitExpr(expr.callee);
@@ -21139,7 +21133,7 @@ class CodeGenerator {
           case Types.IntrinsicKind.HEAP_BASE:
             this.body.globalGet(this.heapBaseGlobalIdx); break;
           case Types.IntrinsicKind.ALLOCA:
-            this.usesAlloca = true; // dynamic frame: excluded from WAST inlining (todos/0201)
+            this.usesAlloca = true; // dynamic frame: excluded from WAST inlining (docs/archive/0201)
             this.body.globalGet(this.stackPointerGlobalIdx);
             this.emitExpr(expr.args[0]);
             this.body.i32Const(15); this.body.aop(WT_I32, ALU.OP_ADD);
@@ -21567,7 +21561,7 @@ function generateCode(units, outputFile, options) {
     cg.stackPages = Math.max(cg.stackPages, minPages);
   }
 
-  // Register __gcstr imported string-constant globals (todos/0041).
+  // Register __gcstr imported string-constant globals (docs/archive/0041).
   // Imported globals sit at the BOTTOM of the global index space, so every
   // one must be known before the first defined global — addGlobal bakes the
   // import count into the indices it hands out, and function bodies burn
@@ -21930,7 +21924,7 @@ function generateCode(units, outputFile, options) {
       // maps) is cleared at the start of every emitFunctionBody, so it
       // doesn't need rollback — only these module-level arrays do.
       // (Bytes and source-map entries no longer need snapshots: both are
-      // produced from the WAST tree at serialize time, todos/0198.)
+      // produced from the WAST tree at serialize time, docs/archive/0198.)
       const localsLen = wd.locals.length;
       const errLen = cg.gotoErrors.length;
       const lnLen = wmod.localNames.length;
@@ -22423,23 +22417,23 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_WINDOW_MINIMIZED 0x0000000000000040ULL
 #define SDL_WINDOW_INPUT_FOCUS 0x0000000000000200ULL
 /* Borderless: under the OS WM this is a kernel surface with no chrome
-   (taskbar-class windows — todos/0014); standalone runtimes ignore it. */
+   (taskbar-class windows — docs/archive/0014); standalone runtimes ignore it. */
 #define SDL_WINDOW_BORDERLESS 0x0000000000000010ULL
 /* Resizable: declared by apps that handle SDL_EVENT_WINDOW_RESIZED (the
-   0019 renegotiation). Accepted everywhere; todos/0021 will make the WM
+   0019 renegotiation). Accepted everywhere; docs/archive/0021 will make the WM
    offer resize ONLY to windows that declare it. */
 #define SDL_WINDOW_RESIZABLE 0x0000000000000020ULL
 /* Transparent (SDL3 value): under the OS WM the surface's per-pixel alpha
-   is honored — the compositor blends it src-over (todos/0063). Standalone
+   is honored — the compositor blends it src-over (docs/archive/0063). Standalone
    runtimes ignore it (the page canvas is opaque). */
 #define SDL_WINDOW_TRANSPARENT 0x0000000040000000ULL
 /* Utility (SDL3 value): a transient/owned window that does NOT appear in the
    taskbar — under the OS WM the surface is marked transient (kernel flag bit4,
-   todos/0281) so /bin/wm gives it no taskbar button and skips it when cycling
+   docs/archive/0281) so /bin/wm gives it no taskbar button and skips it when cycling
    (owned modals — MessageBox, dialogs — are never taskbar entries in Win95).
    Standalone runtimes ignore it. */
 #define SDL_WINDOW_UTILITY 0x0000000000020000ULL
-/* Popup windows (SDL3 values; todos/0256): created via SDL_CreatePopupWindow
+/* Popup windows (SDL3 values; docs/archive/0256): created via SDL_CreatePopupWindow
    as kernel ANCHORED CHILD surfaces — borderless, pinned to their parent at
    a fixed offset, moved/hidden/raised/destroyed/scaled with it, never
    focused. POPUP_MENU additionally holds the kernel GRAB while it lives: a
@@ -22458,7 +22452,7 @@ typedef Uint64 SDL_WindowFlags;
 /* SDL3 event types (SDL_EVENT_*). Values are unchanged from SDL2. */
 #define SDL_EVENT_QUIT 0x100
 /* SDL3 window events (flattened enum, one type per event). Only RESIZED is
-   delivered today — the OS WM's client-resize protocol (todos/0019); the
+   delivered today — the OS WM's client-resize protocol (docs/archive/0019); the
    rest of the block is defined for source compatibility. */
 #define SDL_EVENT_WINDOW_SHOWN 0x202
 #define SDL_EVENT_WINDOW_HIDDEN 0x203
@@ -22466,13 +22460,13 @@ typedef Uint64 SDL_WindowFlags;
 #define SDL_EVENT_WINDOW_MOVED 0x205
 #define SDL_EVENT_WINDOW_RESIZED 0x206
 #define SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED 0x207
-/* The owner focus pair (todos/0256): the kernel emits these at EVERY focus
+/* The owner focus pair (docs/archive/0256): the kernel emits these at EVERY focus
    transition — another window's create-steal, a click/WM focus, and the
    focus fall after a destroy/minimize — via its single focus choke point. */
 #define SDL_EVENT_WINDOW_FOCUS_GAINED 0x20E
 #define SDL_EVENT_WINDOW_FOCUS_LOST 0x20F
 /* Delivered when the kernel's close request ('x' / wmctl close) names a
-   window and OTHER windows are still live (todos/0089) — a multi-window
+   window and OTHER windows are still live (docs/archive/0089) — a multi-window
    process closes just that window. A single (or last) window keeps the
    process-wide SDL_EVENT_QUIT it always got. */
 #define SDL_EVENT_WINDOW_CLOSE_REQUESTED 0x210
@@ -22687,7 +22681,7 @@ bool SDL_InitSubSystem(SDL_InitFlags flags);
 void SDL_QuitSubSystem(SDL_InitFlags flags);
 SDL_InitFlags SDL_WasInit(SDL_InitFlags flags);
 SDL_Window *SDL_CreateWindow(const char *title, int w, int h, SDL_WindowFlags flags);
-/* SDL_CreatePopupWindow / SDL_GetDisplayBounds (todos/0256) live in
+/* SDL_CreatePopupWindow / SDL_GetDisplayBounds (docs/archive/0256) live in
    <SDL_popup.h> — a subsidiary header on the sdl3webgpu.h precedent, so the
    popup TU (and its host imports) links only into binaries that use popups
    instead of growing every SDL binary's import table. */
@@ -22699,7 +22693,7 @@ bool SDL_GetWindowSize(SDL_Window *window, int *w, int *h);
    are 1 buffer pixel = 1 screen pixel (no HiDPI virtualization — the screen
    tracks the viewport at 1 CSS px per screen px), so the size in pixels IS
    the window size, the pixel density is 1.0 and the display scale is 1.0.
-   A WM-scaled fixed-size window (todos/0024, SET_DST) is a presentation
+   A WM-scaled fixed-size window (docs/archive/0024, SET_DST) is a presentation
    policy the app never sees: its buffer, and therefore every value here,
    stays the buffer geometry — input arrives inverse-mapped into it. */
 bool SDL_GetWindowSizeInPixels(SDL_Window *window, int *w, int *h);
@@ -22899,7 +22893,7 @@ bool SDL_SetWindowRelativeMouseMode(SDL_Window *window, bool enabled);
 bool SDL_GetWindowRelativeMouseMode(SDL_Window *window);
 void __setAnimationFrameFunc(void (*callback)(void));
 
-/* ---- Cursors (SDL_mouse.h; todos/0105) ----
+/* ---- Cursors (SDL_mouse.h; docs/archive/0105) ----
    System shapes only — the pointer is the native browser cursor (WM.md
    deviation: no kernel sprite), so a cursor is just a CSS-name enum the host
    feeds to the canvas cursor style. SDL_CreateCursor (custom pixel cursors)
@@ -22941,7 +22935,7 @@ bool SDL_ShowCursor(void);
 bool SDL_HideCursor(void);
 bool SDL_CursorVisible(void);
 
-/* ---- Clipboard (SDL_clipboard.h; todos/0090) ----
+/* ---- Clipboard (SDL_clipboard.h; docs/archive/0090) ----
    Text only. One system-wide slot held by the OS kernel — copy/paste crosses
    processes and survives the writer exiting; standalone runs get a
    process-local slot with identical semantics. Usable without SDL_Init (the
@@ -23041,7 +23035,7 @@ bool SDL_MixAudio(Uint8 *dst, const Uint8 *src, SDL_AudioFormat format, Uint32 l
    (RIFF size ignore-zero, truncation drop-block, fact chunk ignored, chunk
    limit 10000) — the hint store does not affect this loader. SDL_LoadWAV_IO
    stays ABSENT: there is no public SDL_IOStream (absence is honest,
-   todos/PRINCIPLES.md). The decoder TU is DEMAND-LINKED below: a program
+   docs/PRINCIPLES.md). The decoder TU is DEMAND-LINKED below: a program
    that never references SDL_LoadWAV pays zero compile cost and zero bytes. */
 bool SDL_LoadWAV(const char *path, SDL_AudioSpec *spec, Uint8 **audio_buf, Uint32 *audio_len);
 __require_source_if("SDL_LoadWAV", "__SDL_wave.c");
@@ -23286,7 +23280,7 @@ const char *IMG_GetError(void);
      reaches THIS header pull FreeType into the link, and building without
      the freetype package fails loud naming the missing sources
      (on a minimal boot: gucman install freetype).
-     Declared divergence (honest shape, todos/PRINCIPLES.md): this platform
+     Declared divergence (honest shape, docs/PRINCIPLES.md): this platform
      has no palettized surfaces — every SDL_Surface is RGBA32 — so ALL
      renderers return RGBA32 heap surfaces (free with SDL_DestroySurface).
      Upstream's per-mode VISUAL semantics are preserved: Solid is a fast
@@ -23401,7 +23395,7 @@ const char *TTF_GetError(void);
    (requestAdapter/requestDevice) is callback-based (NO JSPI): the host invokes
    C trampolines (__wgpu_call_*_cb) which reconstruct the by-value WGPUStringView
    and call the user callback. Frames run on the shared rAF loop via
-   wgpuSetMainLoopCallback. See todos/WEBGPU.md. */
+   wgpuSetMainLoopCallback. See docs/WEBGPU.md. */
 __require_source("__webgpu.c");
 
 #include <stddef.h>
@@ -24409,7 +24403,7 @@ void wgpuSetMainLoopCallback(void (*callback)(void));
   `,
   "SDL_popup.h": `
 #pragma once
-/* Stock SDL3 popup windows + display bounds (todos/0256, the menu-uniform
+/* Stock SDL3 popup windows + display bounds (docs/archive/0256, the menu-uniform
    architecture's kernel anchored-child primitive). A subsidiary header on
    the sdl3webgpu.h precedent: the API is bone-stock SDL3 (in upstream it
    sits in SDL_video.h), but gucOS links veneer TUs whole, so the popup
@@ -24438,7 +24432,7 @@ bool SDL_GetDisplayBounds(Uint32 displayID, SDL_Rect *rect);
   "__SDL_internal.h": `
 #pragma once
 /* __SDL.c's private window record + registry, shared with the popup TU
-   (__SDL_popup.c, todos/0256). NOT for app code — the public headers keep
+   (__SDL_popup.c, docs/archive/0256). NOT for app code — the public headers keep
    SDL_Window opaque. 'handle' is a 1-based index into the host's window
    table, reused as the SDL window ID; the registry array lets
    __sdl_push_window_event re-derive a window's surface on RESIZED — popup
@@ -24451,7 +24445,7 @@ struct SDL_Window {
     int handle;
     SDL_Surface surface;
     int pixels_cap;      /* high-water byte size of surface.pixels (resize) */
-    bool relative_mouse; /* requested relative-mouse mode (todos/0018) */
+    bool relative_mouse; /* requested relative-mouse mode (docs/archive/0018) */
     SDL_WindowFlags flags;  /* create-time flags (#601 SDL_GetWindowFlags —
                                the static contract documented in SDL.h) */
     SDL_Renderer *renderer; /* the window's one renderer, or NULL (#497 —
@@ -24659,7 +24653,7 @@ void __run_atexits(void);
   "__timespec.h": `
 #pragma once
 /* struct timespec + clockid_t, factored out so BOTH <time.h> and
-   <sys/types.h> can expose them from ONE definition (todos/0325 Group A).
+   <sys/types.h> can expose them from ONE definition (docs/archive/0325 Group A).
  *
  * CPython — like musl and wasi-libc — expects these visible via
  * <sys/types.h> before it reaches Include/cpython/pthread_stubs.h, and the
@@ -24732,7 +24726,7 @@ int isupper(int c);
 int isxdigit(int c);
 int tolower(int c);
 int toupper(int c);
-/* isascii/toascii (XSI, todos/0325 Group A — _decimal.c calls isascii).
+/* isascii/toascii (XSI, docs/archive/0325 Group A — _decimal.c calls isascii).
    Removed from POSIX.1-2008 but still universally present, and unlike the
    is*() family above they are defined for ALL int values, not just
    unsigned char and EOF — which is exactly why callers reach for isascii
@@ -24819,7 +24813,7 @@ int wctob(wint_t c);
 int mbsinit(const mbstate_t *ps);
 size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps);
 size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps);
-/* Wide numeric conversion (C95 7.24.4.1). wcstol is todos/0325 Group A —
+/* Wide numeric conversion (C95 7.24.4.1). wcstol is docs/archive/0325 Group A —
    CPython's initconfig.c calls it unconditionally; the rest of the family
    comes with it because they are one scanner. */
 long wcstol(const wchar_t *nptr, wchar_t **endptr, int base);
@@ -24827,7 +24821,7 @@ unsigned long wcstoul(const wchar_t *nptr, wchar_t **endptr, int base);
 long long wcstoll(const wchar_t *nptr, wchar_t **endptr, int base);
 unsigned long long wcstoull(const wchar_t *nptr, wchar_t **endptr, int base);
 double wcstod(const wchar_t *nptr, wchar_t **endptr);
-/* wcsftime (todos/0325 Group B): strftime's wide twin, for timemodule.c. */
+/* wcsftime (docs/archive/0325 Group B): strftime's wide twin, for timemodule.c. */
 struct tm;
 size_t wcsftime(wchar_t *dst, size_t maxsize, const wchar_t *fmt, const struct tm *tm);
 /* Wide stream I/O (C95 7.24.3, ticket #115): UTF-8 over the byte streams.
@@ -24864,7 +24858,7 @@ __import int __gettimeofday(long long *sec, long *usec);
    backend has no timestamp API and treats them as existence-checked no-ops. */
 __import int __utime(const char *path, long long atime, long long mtime);
 __import int __futime(int fd, long long atime, long long mtime);
-/* futimesat (legacy, todos/0325 Group B — posixmodule.c). Superseded by
+/* futimesat (legacy, docs/archive/0325 Group B — posixmodule.c). Superseded by
    utimensat, but still referenced. A NULL times means "now". */
 int futimesat(int dirfd, const char *path, const struct timeval times[2]);
 static inline int gettimeofday(struct timeval *tv, void *tz) {
@@ -24891,7 +24885,7 @@ static inline int futimes(int fd, const struct timeval times[2]) {
   else { a = times[0].tv_sec; m = times[1].tv_sec; }
   return __futime(fd, a, m);
 }
-/* ---- interval timers (todos/0044) ----
+/* ---- interval timers (docs/archive/0044) ----
    ONE kernel-side real-time timer per process; expiry posts SIGALRM through
    the ordinary cooperative signal path (safe points — the settled 0001
    caveat applies). ITIMER_VIRTUAL/PROF fail with EINVAL: workers run on
@@ -24956,7 +24950,7 @@ static inline int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *ex
   `,
   "sys/socket.h": `
 #pragma once
-/* AF_UNIX stream sockets over the kernel's pipe machinery (todos/0008).
+/* AF_UNIX stream sockets over the kernel's pipe machinery (docs/archive/0008).
    Only AF_UNIX + SOCK_STREAM is implemented — AF_INET needs a network relay
    and is a separate future item. The sockaddr surface is POSIX; the host
    imports speak plain fs paths (the only address family there is). The
@@ -25591,7 +25585,7 @@ void rewinddir(DIR *dirp);
 #define RTLD_NOW    0x0002
 #define RTLD_GLOBAL 0x0100
 #define RTLD_LOCAL  0x0000
-/* RTLD_NODELETE/RTLD_NOLOAD (todos/0325 Group B): CPython's dynload_shlib
+/* RTLD_NODELETE/RTLD_NOLOAD (docs/archive/0325 Group B): CPython's dynload_shlib
    references them unconditionally. Defined so that code compiles; dlopen
    above still reports failure, so their runtime meaning never arises. */
 #define RTLD_NODELETE 0x1000
@@ -25663,7 +25657,7 @@ extern int errno;
    walker sets errno 40 on overrun (host.js _walkHops). It was the one live
    kernel errno with no <errno.h> name, which broke every consumer that spells
    it — CPython's errno.py does "from errno import ELOOP", taking pathlib,
-   zipfile, zipapp and compileall down with it (todos/0340). */
+   zipfile, zipapp and compileall down with it (docs/archive/0340). */
 #define ELOOP   40
 #define EWOULDBLOCK EAGAIN
 #define ENOLCK    37
@@ -25723,7 +25717,7 @@ __require_source("__posix.c");   /* open() — <fcntl.h> declares it, so <fcntl.
 
 /* *at() anchors and flags (Linux values, like the rest of this runtime).
    Resolution rules and the reason a real dirfd cannot occur here are
-   documented at __at_ok() in __posix.c (todos/0325 Group B, todos/0400). */
+   documented at __at_ok() in __posix.c (docs/archive/0325 Group B, docs/archive/0400). */
 #define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
 #define AT_REMOVEDIR        0x200
@@ -25741,16 +25735,16 @@ struct flock {
 __import int __open_impl(const char *path, int flags, int mode);
 int open(const char *path, int flags, ...);
 /* creat(path, mode) == open(path, O_WRONLY|O_CREAT|O_TRUNC, mode); it is a
-   creation call, so it is umask-masked like the rest (todos/0382). */
+   creation call, so it is umask-masked like the rest (docs/archive/0382). */
 int creat(const char *path, mode_t mode);
 #define F_DUPFD_CLOEXEC 1030  /* Linux value; CLOEXEC is untracked (v1) */
 /* Real fcntl for the int-argument commands (F_DUPFD and friends reach the
- * host — the shell's fd-save dance needs them, todos/0005). Lock commands
+ * host — the shell's fd-save dance needs them, docs/archive/0005). Lock commands
  * (F_SETLK etc.) pass arg 0 and the host returns success: SQLite's
  * advisory locking stays a no-op in this single-user runtime. */
 __import int __fcntl3(int fd, int cmd, int arg);
 
-/* openat + the fd-based allocation calls (todos/0325 Group B). */
+/* openat + the fd-based allocation calls (docs/archive/0325 Group B). */
 int openat(int dirfd, const char *path, int flags, ...);
 
 /* posix_fadvise: the access-pattern hint. A no-op IS the correct
@@ -26316,7 +26310,7 @@ float nextafterf(float x, float y);
 double frexp(double x, int *exp);
 double ldexp(double x, int n);
 /* fma (C99 7.12.13.1) — x*y+z with a SINGLE rounding. Emulated exactly; see
-   __math.c for the method and its differential validation (todos/0325). */
+   __math.c for the method and its differential validation (docs/archive/0325). */
 double fma(double x, double y, double z);
 float fmaf(float x, float y, float z);
 float ldexpf(float x, int n);
@@ -26388,7 +26382,7 @@ typedef jmp_buf sigjmp_buf;
 `,
   "sched.h": `
 #pragma once
-/* Minimal POSIX scheduling surface (todos/0035: busybox less calls
+/* Minimal POSIX scheduling surface (docs/archive/0035: busybox less calls
    sched_yield() in its non-blocking-stdin retry loop). Processes are
    single-threaded and cooperative here — there is nobody in-process to
    yield to, so yielding is a successful no-op; real waiting happens in
@@ -26861,7 +26855,7 @@ __require_source("__string.c");
    every default configuration) make <string.h> pull in <strings.h>, so
    portable code reaches strcasecmp/strncasecmp/ffs without naming the second
    header. libzip is one such consumer and had to be shimmed for it during the
-   todos/0350 zip measurement (todos/0382 gap 3). Match the platforms code is
+   docs/archive/0350 zip measurement (docs/archive/0382 gap 3). Match the platforms code is
    actually written against. */
 #include <strings.h>
 #define NULL ((void *)0)
@@ -26894,7 +26888,7 @@ int strcoll(const char *s1, const char *s2);
 size_t strxfrm(char *dest, const char *src, size_t n);
 char *strerror(int errnum);
 char *strdup(const char *s);
-/* todos/0325 Group B. */
+/* docs/archive/0325 Group B. */
 void *memrchr(const void *s, int c, size_t n);
 /* explicit_bzero: a memset(0) the compiler is not allowed to elide as a
    dead store. _blake2's only alternative is a GCC inline-asm memory
@@ -26983,7 +26977,7 @@ struct stat {
 };
 
 /* mkdir()/mkdirat() apply the process umask, so they are real libc functions
-   over the raw host import rather than the import itself (todos/0382). The
+   over the raw host import rather than the import itself (docs/archive/0382). The
    host still exports the un-masked mkdir env entry under its own name —
    that name is part of the wasm-ld ABI the clang toolchain links against, so
    the alias is additive and nothing was renamed out from under it. */
@@ -26998,22 +26992,22 @@ __import int fstat(int fd, struct stat *buf);
    mkfifo(3) is deliberately ABSENT rather than stubbed here — a link-testable
    mkfifo that cannot rendezvous is worse than none, because it flips a
    consumer's HAVE_MKFIFO on and moves the failure from configure time to run
-   time. Funded by todos/0401, which is also what keeps todos/0382 open. */
+   time. Funded by docs/archive/0401, which is also what keeps docs/archive/0382 open. */
 static inline int mknod(const char *path, mode_t mode, dev_t dev) {
   (void)path; (void)mode; (void)dev; return -1;
 }
 
-/* umask(2) — the process file-mode creation mask (todos/0382 gap 1). Real
+/* umask(2) — the process file-mode creation mask (docs/archive/0382 gap 1). Real
    state, really applied: open(O_CREAT), creat(), mkdir() and mkdirat() all
    clear the masked bits before the mode reaches the host, so a program that
    sets a mask observes the modes POSIX says it should.
 
    The initial mask is the conventional 022. POSIX defines the starting mask
    as INHERITED, and this process model has no fork() to inherit across
-   (todos/OS.md's owner-brokered spawn), so the shell default stands in — and
+   (docs/OS.md's owner-brokered spawn), so the shell default stands in — and
    it is also what keeps every pre-0382 creation mode identical, because the
    filesystem layer used to apply exactly this mask itself. Cross-process
-   inheritance through __spawn is a separate, ticketed gap (todos/0399). */
+   inheritance through __spawn is a separate, ticketed gap (docs/archive/0399). */
 int fstatat(int dirfd, const char *path, struct stat *buf, int flags);
 int mkdirat(int dirfd, const char *path, mode_t mode);
 int fchmodat(int dirfd, const char *path, mode_t mode, int flags);
@@ -27082,7 +27076,7 @@ static inline int utime(const char *path, const struct utimbuf *times) {
   "sys/types.h": `
 #pragma once
 /* time_t, struct timespec and clockid_t. POSIX allows <sys/types.h> to
-   define them, and CPython/musl/wasi-libc all rely on it (todos/0325
+   define them, and CPython/musl/wasi-libc all rely on it (docs/archive/0325
    Group A) — see __timespec.h for why this is not just #include <time.h>. */
 #include <__timespec.h>
 typedef long ssize_t;
@@ -27178,7 +27172,7 @@ struct tm {
   int tm_yday;
   int tm_isdst;
   long tm_gmtoff;
-  /* tm_zone (BSD/glibc extension, todos/0325 Group B). Shipping tm_gmtoff
+  /* tm_zone (BSD/glibc extension, docs/archive/0325 Group B). Shipping tm_gmtoff
      without it was the surprising half: CPython's timemodule tests for
      tm_zone and, not finding it, falls back to tzset()+strftime. Points at
      static storage, as on glibc — do not free it. */
@@ -27193,7 +27187,7 @@ time_t time(time_t *t);
 clock_t clock(void);
 double difftime(time_t t1, time_t t0);
 struct tm *gmtime(const time_t *timep);
-/* gmtime_r: owned by todos/0325 Group A (todos/0382 gap 4 defers to it). */
+/* gmtime_r: owned by docs/archive/0325 Group A (docs/archive/0382 gap 4 defers to it). */
 struct tm *gmtime_r(const time_t *timep, struct tm *result);
 struct tm *localtime(const time_t *timep);
 struct tm *localtime_r(const time_t *timep, struct tm *result);
@@ -27208,15 +27202,15 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
 char *strptime(const char *s, const char *format, struct tm *tm);
 int clock_gettime(clockid_t clk_id, struct timespec *tp);
 int clock_getres(clockid_t clk_id, struct timespec *res);
-/* timegm: mktime's UTC twin (todos/0382 gap 5, todos/0325 Group B). */
+/* timegm: mktime's UTC twin (docs/archive/0382 gap 5, docs/archive/0325 Group B). */
 time_t timegm(struct tm *tm);
 /* clock_nanosleep: RETURNS an error number, does not set errno. */
 #define TIMER_ABSTIME 1
 int clock_nanosleep(clockid_t clk_id, int flags, const struct timespec *req,
                     struct timespec *rem);
 
-/* POSIX timezone state, published by tzset(). Owned by todos/0325 Group A
-   (todos/0382 gap 6 defers to it). */
+/* POSIX timezone state, published by tzset(). Owned by docs/archive/0325 Group A
+   (docs/archive/0382 gap 6 defers to it). */
 extern long timezone;      /* seconds WEST of UTC (opposite sign to tm_gmtoff) */
 extern int  daylight;      /* nonzero if the zone observes DST at some point */
 extern char *tzname[2];
@@ -27298,7 +27292,7 @@ static inline long pwrite(int fd, const void *buf, unsigned long count, long lon
 }
 __import long readlink(const char *path, char *buf, long bufsize);
 
-/* The *at() family's <unistd.h> half (todos/0325 Group B). See __at_ok() in
+/* The *at() family's <unistd.h> half (docs/archive/0325 Group B). See __at_ok() in
    __posix.c for the resolution rules. */
 int faccessat(int dirfd, const char *path, int mode, int flags);
 int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, int flags);
@@ -27310,12 +27304,12 @@ int fchownat(int dirfd, const char *path, unsigned owner, unsigned group, int fl
 /* truncate(2) — the path-based twin of ftruncate. */
 int truncate(const char *path, off_t length);
 
-/* getentropy (todos/0325 Group B) — real randomness for CPython's hash
+/* getentropy (docs/archive/0325 Group B) — real randomness for CPython's hash
    seeding. Reads /dev/urandom, which host.js backs with
    crypto.getRandomValues; POSIX/OpenBSD cap a single call at 256 bytes. */
 int getentropy(void *buf, size_t buflen);
 
-/* confstr/pathconf/fpathconf (todos/0325 Group B). */
+/* confstr/pathconf/fpathconf (docs/archive/0325 Group B). */
 #define _CS_PATH 0
 #define _PC_LINK_MAX      0
 #define _PC_NAME_MAX      3
@@ -27371,7 +27365,7 @@ struct __spawn_spec {
 };
 /* spec.flags bits. */
 #define __SPAWN_SETPGID        1u  /* pgid field valid (0 = own pid) */
-#define __SPAWN_TRACE          2u  /* trace field valid (todos/0046) */
+#define __SPAWN_TRACE          2u  /* trace field valid (docs/archive/0046) */
 #define __SPAWN_TRACE_CHILDREN 4u  /* trace descendants too (strace -f) */
 __import int __spawn(const struct __spawn_spec *spec);        /* -> pid | -1+errno */
 __import int __spawn_wait(int pid, int *status, int options); /* -> pid | -1+errno */
@@ -27400,7 +27394,7 @@ static inline int   execve(const char *p, char *const a[], char *const e[]) { (v
 /* _exit: terminate WITHOUT atexit handlers / stdio flushing (KERNEL.md
    "Exit and teardown": same __exit handshake as exit(), minus step 1).
    Was a spin-forever stub from the pre-kernel era — hush's exit path hung
-   on it (todos/0005). The loop after __exit only satisfies noreturn. */
+   on it (docs/archive/0005). The loop after __exit only satisfies noreturn. */
 __import void __exit(int status);
 static inline void  _exit(int s)            { __exit(s); for (;;) {} }
 static inline long  sysconf(int name)       { (void)name; return -1; }
@@ -27411,7 +27405,7 @@ static inline int   setgid(unsigned gid)    { (void)gid; return -1; }
    handler tables, not just the kernel RPC. __signal.c links into every
    stdlib program via abort(), so the symbol is always present. */
 int kill(int __pid, int __sig);
-/* alarm()/ualarm() are facades over the kernel's ITIMER_REAL (todos/0044,
+/* alarm()/ualarm() are facades over the kernel's ITIMER_REAL (docs/archive/0044,
    setitimer in <sys/time.h>); like kill(), the implementations live in
    __signal.c. Without a kernel they return 0 with errno ENOSYS. */
 unsigned alarm(unsigned __seconds);
@@ -27612,7 +27606,7 @@ struct termios {
 /* Full-struct transfer (control chars included) — the host reads/writes the
    struct termios layout directly: 4 x u32 flags, c_cc[NCCS]@16, speeds@36/40.
    With kernel.js attached these are RPCs into the kernel's line discipline
-   (todos/KERNEL.md Phase 3); without one, host defaults answer (canned
+   (docs/KERNEL.md Phase 3); without one, host defaults answer (canned
    values / the CLI's real terminal). The pgrp pair is ENOTTY without a
    kernel — no process groups to route to. */
 __import int __tty_getattr(int fd, struct termios *t);
@@ -27646,7 +27640,7 @@ static inline speed_t cfgetospeed(const struct termios *t) { return t->c_ospeed;
 static inline int cfsetispeed(struct termios *t, speed_t s) { t->c_ispeed = s; return 0; }
 static inline int cfsetospeed(struct termios *t, speed_t s) { t->c_ospeed = s; return 0; }
 
-/* The line-control quartet (todos/0325 Group D, landed by todos/0340 for
+/* The line-control quartet (docs/archive/0325 Group D, landed by docs/archive/0340 for
    CPython's termios module). A gucOS terminal is a kernel object, not a
    serial line: a write reaches the line discipline synchronously so there is
    no output queue to drain, there is no carrier to break, and nothing
@@ -27659,8 +27653,8 @@ static inline int cfsetospeed(struct termios *t, speed_t s) { t->c_ospeed = s; r
    line discipline DOES hold an input queue, and discarding it needs a kernel
    RPC. No shipping consumer asks for it (nothing in the CPython stdlib
    outside its own test suite calls tcflush), so it validates and reports
-   success WITHOUT discarding — recorded in todos/LIABILITIES.md against
-   todos/0325 rather than left to be rediscovered. */
+   success WITHOUT discarding — recorded in docs/LIABILITIES.md against
+   docs/archive/0325 rather than left to be rediscovered. */
 static inline int __tty_probe_fd(int fd) {
   struct termios __t;
   return __tty_getattr(fd, &__t);
@@ -27717,7 +27711,7 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
     return r;
   }
   if (request == TIOCSWINSZ) {
-    /* Pty resize (todos/0020): winsize words + SIGWINCH to the tty's
+    /* Pty resize (docs/archive/0020): winsize words + SIGWINCH to the tty's
        foreground pgroup. Needs a kernel; ENOTTY elsewhere. */
     const struct winsize *ws = (const struct winsize *)arg;
     return __ioctl_tiocswinsz(fd, (int)ws->ws_row, (int)ws->ws_col);
@@ -27733,7 +27727,7 @@ static inline int ioctl(int fd, unsigned long request, void *arg) {
   `,
   "pty.h": `
 #pragma once
-/* Ptys over the kernel pty layer (todos/0020). openpty() creates a
+/* Ptys over the kernel pty layer (docs/archive/0020). openpty() creates a
    master/slave pair; the slave is a full kernel tty (line discipline,
    termios, job control), the master is the terminal application's end.
    termp/winp are accepted for API familiarity but the caller should
@@ -27850,7 +27844,7 @@ static inline int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *
    does — so it travels as its own action (op 3) and the kernel enumerates
    at spawn time. This is what makes CPython's close_fds=True (its DEFAULT,
    and the one that keeps a child from inheriting unrelated descriptors)
-   reachable without fork; todos/0340. */
+   reachable without fork; docs/archive/0340. */
 static inline int posix_spawn_file_actions_addclosefrom_np(posix_spawn_file_actions_t *fa, int from) {
   if (fa->__n >= 32) return EINVAL;
   if (from < 0) return EBADF;
@@ -28036,6 +28030,497 @@ __import int __font_result_release(int result);
 __import void __font_dispose(void);
 #endif
 `,
+
+  // ---- POSIX pieces vendored from musl 1.2.5 (formerly the optional
+  // libc-ext.js sibling; folded in 2026-09-21). Provenance and licenses:
+  //   regex.h + regcomp.c/regexec.c/regerror.c/tre-mem.c/tre.h — the TRE
+  //     POSIX regex engine, 2-clause BSD, (c) 2001-2009 Ville Laurikari,
+  //     heavily modified by Rich Felker for musl; license text retained in
+  //     each file.
+  //   fnmatch.h/fnmatch.c, glob.h/glob.c — musl's own, MIT, (c) musl
+  //     contributors.
+  //   search.h/tsearch.h + hsearch.c/tsearch.c/tfind.c/tdelete.c/twalk.c/
+  //     tdestroy.c/lsearch.c/insque.c — musl src/search/ (POSIX <search.h>),
+  //     MIT, (c) musl contributors.
+  // Local modifications (all commented in place): tre.h and tsearch.h carry
+  // a `hidden` no-op shim (no symbol-visibility attributes here) and
+  // tsearch.h/search.h drop musl's <features.h>/<bits/alltypes.h>;
+  // hsearch.c defines the __h*_r internals directly under their public GNU
+  // names (no weak_alias); lsearch.c walks the table with byte arithmetic
+  // instead of a VLA-typed pointer. Backslashes are escaped in these
+  // template literals, so C line continuations survive verbatim and
+  // spliceLines joins them at include time.
+  "fnmatch.h": `#ifndef _FNMATCH_H
+#define _FNMATCH_H
+
+/* POSIX <fnmatch.h> for compiler.js, backed by musl's fnmatch.c (ext/src). */
+
+__require_source("fnmatch.c");
+
+#define FNM_PATHNAME    0x1
+#define FNM_NOESCAPE    0x2
+#define FNM_PERIOD      0x4
+#define FNM_LEADING_DIR 0x8
+#define FNM_CASEFOLD    0x10
+#define FNM_FILE_NAME   FNM_PATHNAME
+
+#define FNM_NOMATCH 1
+#define FNM_NOSYS   (-1)
+
+int fnmatch(const char *, const char *, int);
+
+#endif /* _FNMATCH_H */
+`,
+  "glob.h": `#ifndef _GLOB_H
+#define _GLOB_H
+
+/*
+ * POSIX <glob.h> for compiler.js, backed by musl's glob.c (ext/src). glob()
+ * walks the live filesystem via opendir/readdir/stat (provided by the core
+ * libc) and matches with fnmatch, so the fnmatch TU is pulled in too.
+ */
+
+#include <stddef.h>   /* size_t */
+
+__require_source("glob.c");
+__require_source("fnmatch.c");
+
+typedef struct {
+	size_t gl_pathc;
+	char **gl_pathv;
+	size_t gl_offs;
+	int __dummy1;
+	void *__dummy2[5];
+} glob_t;
+
+int  glob(const char *, int, int (*)(const char *, int), glob_t *);
+void globfree(glob_t *);
+
+#define GLOB_ERR      0x01
+#define GLOB_MARK     0x02
+#define GLOB_NOSORT   0x04
+#define GLOB_DOOFFS   0x08
+#define GLOB_NOCHECK  0x10
+#define GLOB_APPEND   0x20
+#define GLOB_NOESCAPE 0x40
+#define GLOB_PERIOD   0x80
+
+#define GLOB_TILDE       0x1000
+#define GLOB_TILDE_CHECK 0x4000
+
+#define GLOB_NOSPACE 1
+#define GLOB_ABORTED 2
+#define GLOB_NOMATCH 3
+#define GLOB_NOSYS   4
+
+#endif /* _GLOB_H */
+`,
+  "locale_impl.h": `#ifndef _LOCALE_IMPL_H
+#define _LOCALE_IMPL_H
+
+/*
+ * Minimal stand-in for musl's internal locale_impl.h, just enough for the
+ * vendored TRE/fnmatch sources. compiler.js is single-locale ("C"), so message
+ * translation is the identity and MB_CUR_MAX comes from <stdlib.h>.
+ */
+
+#include <stdlib.h>   /* MB_CUR_MAX */
+
+#define LCTRANS(msg, lc, loc) (msg)
+#define LCTRANS_CUR(msg)      (msg)
+
+#endif /* _LOCALE_IMPL_H */
+`,
+  "regex.h": `#ifndef _REGEX_H
+#define _REGEX_H
+
+/*
+ * POSIX <regex.h> for compiler.js, backed by the vendored TRE engine
+ * (ext/src/reg*.c, tre*). Self-contained: uses the compiler's own size_t
+ * instead of musl's bits/alltypes machinery.
+ *
+ * Pulling in this header compiles the TRE translation units via the
+ * compiler's __require_source mechanism (builtin sources).
+ */
+
+#include <stddef.h>   /* size_t */
+
+__require_source("regcomp.c");
+__require_source("regexec.c");
+__require_source("regerror.c");
+__require_source("tre-mem.c");
+
+typedef long regoff_t;
+
+/* Layout must match what reg*.c expect (taken from musl's regex.h). */
+typedef struct re_pattern_buffer {
+	size_t re_nsub;
+	void *__opaque, *__padding[4];
+	size_t __nsub2;
+	char __padding2;
+} regex_t;
+
+typedef struct {
+	regoff_t rm_so;
+	regoff_t rm_eo;
+} regmatch_t;
+
+#define REG_EXTENDED 1
+#define REG_ICASE    2
+#define REG_NEWLINE  4
+#define REG_NOSUB    8
+
+#define REG_NOTBOL   1
+#define REG_NOTEOL   2
+
+#define REG_OK        0
+#define REG_NOMATCH   1
+#define REG_BADPAT    2
+#define REG_ECOLLATE  3
+#define REG_ECTYPE    4
+#define REG_EESCAPE   5
+#define REG_ESUBREG   6
+#define REG_EBRACK    7
+#define REG_EPAREN    8
+#define REG_EBRACE    9
+#define REG_BADBR    10
+#define REG_ERANGE   11
+#define REG_ESPACE   12
+#define REG_BADRPT   13
+
+#define REG_ENOSYS   (-1)
+
+int regcomp(regex_t *, const char *, int);
+int regexec(const regex_t *, const char *, size_t, regmatch_t *, int);
+void regfree(regex_t *);
+size_t regerror(int, const regex_t *, char *, size_t);
+
+#endif /* _REGEX_H */
+`,
+  "search.h": `#ifndef _SEARCH_H
+#define _SEARCH_H
+
+/* POSIX <search.h> for compiler.js, backed by musl 1.2.5's src/search/
+   (ext/src): hsearch.c, tsearch.c + tfind.c + tdelete.c + twalk.c +
+   tdestroy.c, lsearch.c, insque.c. Ticket #111. */
+
+__require_source("hsearch.c");
+__require_source("tsearch.c");
+__require_source("tfind.c");
+__require_source("tdelete.c");
+__require_source("twalk.c");
+__require_source("tdestroy.c");
+__require_source("lsearch.c");
+__require_source("insque.c");
+
+#include <stddef.h>
+
+typedef enum { FIND, ENTER } ACTION;
+typedef enum { preorder, postorder, endorder, leaf } VISIT;
+
+typedef struct entry {
+	char *key;
+	void *data;
+} ENTRY;
+
+int hcreate(size_t);
+void hdestroy(void);
+ENTRY *hsearch(ENTRY, ACTION);
+
+#ifdef _GNU_SOURCE
+struct hsearch_data {
+	struct __tab *__tab;
+	unsigned int __unused1;
+	unsigned int __unused2;
+};
+
+int hcreate_r(size_t, struct hsearch_data *);
+void hdestroy_r(struct hsearch_data *);
+int hsearch_r(ENTRY, ACTION, ENTRY **, struct hsearch_data *);
+#endif
+
+void insque(void *, void *);
+void remque(void *);
+
+void *lsearch(const void *, void *, size_t *, size_t,
+	int (*)(const void *, const void *));
+void *lfind(const void *, const void *, size_t *, size_t,
+	int (*)(const void *, const void *));
+
+void *tdelete(const void *__restrict, void **__restrict, int(*)(const void *, const void *));
+void *tfind(const void *, void *const *, int(*)(const void *, const void *));
+void *tsearch(const void *, void **, int (*)(const void *, const void *));
+void twalk(const void *, void (*)(const void *, VISIT, int));
+
+#ifdef _GNU_SOURCE
+struct qelem {
+	struct qelem *q_forw, *q_back;
+	char q_data[1];
+};
+
+void tdestroy(void *, void (*)(void *));
+#endif
+
+#endif /* _SEARCH_H */
+`,
+  "tre.h": `/*
+  tre-internal.h - TRE internal definitions
+
+  Copyright (c) 2001-2009 Ville Laurikari <vl@iki.fi>
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions
+  are met:
+
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER AND CONTRIBUTORS
+  \`\`AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+  A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT
+  HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
+
+
+/* Local modification for compiler.js (musl fold): this build emits no symbol
+   visibility attributes, so neutralize musl's internal \`hidden\` marker. */
+#ifndef hidden
+#define hidden
+#endif
+
+#include <regex.h>
+#include <wchar.h>
+#include <wctype.h>
+
+#undef  TRE_MBSTATE
+
+#define NDEBUG
+
+#define TRE_REGEX_T_FIELD __opaque
+typedef int reg_errcode_t;
+
+typedef wchar_t tre_char_t;
+
+#define DPRINT(msg) do { } while(0)
+
+#define elementsof(x)	( sizeof(x) / sizeof(x[0]) )
+
+#define tre_mbrtowc(pwc, s, n, ps) (mbtowc((pwc), (s), (n)))
+
+/* Wide characters. */
+typedef wint_t tre_cint_t;
+#define TRE_CHAR_MAX 0x10ffff
+
+#define tre_isalnum iswalnum
+#define tre_isalpha iswalpha
+#define tre_isblank iswblank
+#define tre_iscntrl iswcntrl
+#define tre_isdigit iswdigit
+#define tre_isgraph iswgraph
+#define tre_islower iswlower
+#define tre_isprint iswprint
+#define tre_ispunct iswpunct
+#define tre_isspace iswspace
+#define tre_isupper iswupper
+#define tre_isxdigit iswxdigit
+
+#define tre_tolower towlower
+#define tre_toupper towupper
+#define tre_strlen  wcslen
+
+/* Use system provided iswctype() and wctype(). */
+typedef wctype_t tre_ctype_t;
+#define tre_isctype iswctype
+#define tre_ctype   wctype
+
+/* Returns number of bytes to add to (char *)ptr to make it
+   properly aligned for the type. */
+#define ALIGN(ptr, type) \\
+  ((((long)ptr) % sizeof(type)) \\
+   ? (sizeof(type) - (((long)ptr) % sizeof(type))) \\
+   : 0)
+
+#undef MAX
+#undef MIN
+#define MAX(a, b) (((a) >= (b)) ? (a) : (b))
+#define MIN(a, b) (((a) <= (b)) ? (a) : (b))
+
+/* TNFA transition type. A TNFA state is an array of transitions,
+   the terminator is a transition with NULL \`state'. */
+typedef struct tnfa_transition tre_tnfa_transition_t;
+
+struct tnfa_transition {
+  /* Range of accepted characters. */
+  tre_cint_t code_min;
+  tre_cint_t code_max;
+  /* Pointer to the destination state. */
+  tre_tnfa_transition_t *state;
+  /* ID number of the destination state. */
+  int state_id;
+  /* -1 terminated array of tags (or NULL). */
+  int *tags;
+  /* Assertion bitmap. */
+  int assertions;
+  /* Assertion parameters. */
+  union {
+    /* Character class assertion. */
+    tre_ctype_t class;
+    /* Back reference assertion. */
+    int backref;
+  } u;
+  /* Negative character class assertions. */
+  tre_ctype_t *neg_classes;
+};
+
+
+/* Assertions. */
+#define ASSERT_AT_BOL		  1   /* Beginning of line. */
+#define ASSERT_AT_EOL		  2   /* End of line. */
+#define ASSERT_CHAR_CLASS	  4   /* Character class in \`class'. */
+#define ASSERT_CHAR_CLASS_NEG	  8   /* Character classes in \`neg_classes'. */
+#define ASSERT_AT_BOW		 16   /* Beginning of word. */
+#define ASSERT_AT_EOW		 32   /* End of word. */
+#define ASSERT_AT_WB		 64   /* Word boundary. */
+#define ASSERT_AT_WB_NEG	128   /* Not a word boundary. */
+#define ASSERT_BACKREF		256   /* A back reference in \`backref'. */
+#define ASSERT_LAST		256
+
+/* Tag directions. */
+typedef enum {
+  TRE_TAG_MINIMIZE = 0,
+  TRE_TAG_MAXIMIZE = 1
+} tre_tag_direction_t;
+
+/* Instructions to compute submatch register values from tag values
+   after a successful match.  */
+struct tre_submatch_data {
+  /* Tag that gives the value for rm_so (submatch start offset). */
+  int so_tag;
+  /* Tag that gives the value for rm_eo (submatch end offset). */
+  int eo_tag;
+  /* List of submatches this submatch is contained in. */
+  int *parents;
+};
+
+typedef struct tre_submatch_data tre_submatch_data_t;
+
+
+/* TNFA definition. */
+typedef struct tnfa tre_tnfa_t;
+
+struct tnfa {
+  tre_tnfa_transition_t *transitions;
+  unsigned int num_transitions;
+  tre_tnfa_transition_t *initial;
+  tre_tnfa_transition_t *final;
+  tre_submatch_data_t *submatch_data;
+  char *firstpos_chars;
+  int first_char;
+  unsigned int num_submatches;
+  tre_tag_direction_t *tag_directions;
+  int *minimal_tags;
+  int num_tags;
+  int num_minimals;
+  int end_tag;
+  int num_states;
+  int cflags;
+  int have_backrefs;
+  int have_approx;
+};
+
+/* from tre-mem.h: */
+
+#define TRE_MEM_BLOCK_SIZE 1024
+
+typedef struct tre_list {
+  void *data;
+  struct tre_list *next;
+} tre_list_t;
+
+typedef struct tre_mem_struct {
+  tre_list_t *blocks;
+  tre_list_t *current;
+  char *ptr;
+  size_t n;
+  int failed;
+  void **provided;
+} *tre_mem_t;
+
+#define tre_mem_new_impl   __tre_mem_new_impl
+#define tre_mem_alloc_impl __tre_mem_alloc_impl
+#define tre_mem_destroy    __tre_mem_destroy
+
+hidden tre_mem_t tre_mem_new_impl(int provided, void *provided_block);
+hidden void *tre_mem_alloc_impl(tre_mem_t mem, int provided, void *provided_block,
+                                int zero, size_t size);
+
+/* Returns a new memory allocator or NULL if out of memory. */
+#define tre_mem_new()  tre_mem_new_impl(0, NULL)
+
+/* Allocates a block of \`size' bytes from \`mem'.  Returns a pointer to the
+   allocated block or NULL if an underlying malloc() failed. */
+#define tre_mem_alloc(mem, size) tre_mem_alloc_impl(mem, 0, NULL, 0, size)
+
+/* Allocates a block of \`size' bytes from \`mem'.  Returns a pointer to the
+   allocated block or NULL if an underlying malloc() failed.  The memory
+   is set to zero. */
+#define tre_mem_calloc(mem, size) tre_mem_alloc_impl(mem, 0, NULL, 1, size)
+
+#ifdef TRE_USE_ALLOCA
+/* alloca() versions.  Like above, but memory is allocated with alloca()
+   instead of malloc(). */
+
+#define tre_mem_newa() \\
+  tre_mem_new_impl(1, alloca(sizeof(struct tre_mem_struct)))
+
+#define tre_mem_alloca(mem, size)					      \\
+  ((mem)->n >= (size)							      \\
+   ? tre_mem_alloc_impl((mem), 1, NULL, 0, (size))			      \\
+   : tre_mem_alloc_impl((mem), 1, alloca(TRE_MEM_BLOCK_SIZE), 0, (size)))
+#endif /* TRE_USE_ALLOCA */
+
+
+/* Frees the memory allocator and all memory allocated with it. */
+hidden void tre_mem_destroy(tre_mem_t mem);
+
+#define xmalloc malloc
+#define xcalloc calloc
+#define xfree free
+#define xrealloc realloc
+
+`,
+  "tsearch.h": `#include <search.h>
+
+/* Local modification (same shim as tre.h): this build emits no
+   symbol-visibility attributes, so musl's \`hidden\` marker is neutralized. */
+#ifndef hidden
+#define hidden
+#endif
+
+/* AVL tree height < 1.44*log2(nodes+2)-0.3, MAXH is a safe upper bound.  */
+#define MAXH (sizeof(void*)*8*3/2)
+
+struct node {
+	const void *key;
+	void *a[2];
+	int h;
+};
+
+hidden int __tsearch_balance(void **);
+`,
 };
 
 // Embedded standard library sources
@@ -28065,14 +28550,14 @@ __externref __jss(const char *s) {
    and event windowID fields carry it). This is fine because we
    control the entire stack — the real @kmamal/sdl window ID
    never leaks to C code. The struct + registry decl live in
-   __SDL_internal.h since todos/0256 (shared with __SDL_popup.c). */
+   __SDL_internal.h since docs/archive/0256 (shared with __SDL_popup.c). */
 #include <__SDL_internal.h>
 
 /* Window registry: __sdl_push_window_event must find the SDL_Window by
-   handle to re-derive its surface on RESIZED (todos/0019). Windows are
+   handle to re-derive its surface on RESIZED (docs/archive/0019). Windows are
    few; a small fixed table with linear scans is fine. A window past the
    cap still works — it just never re-derives on resize. The ARRAY is
-   non-static since todos/0256 (declared in __SDL_internal.h): the popup TU
+   non-static since docs/archive/0256 (declared in __SDL_internal.h): the popup TU
    registers its windows by slotting into it directly, so RESIZED
    re-derivation covers popups too — while the register/unregister/lookup
    helpers stay static (a second reference would defeat their single-use
@@ -28130,13 +28615,13 @@ __import int __sdl_create_window(const char *title, int x, int y, int w, int h, 
 __import void __sdl_destroy_window(int handle);
 __import void __sdl_set_window_title(int handle, const char *title);
 __import void __sdl_set_relative_mouse_mode(int handle, int enabled);
-/* Per-surface cursor (todos/0105): shape is an SDL_SystemCursor value, or
+/* Per-surface cursor (docs/archive/0105): shape is an SDL_SystemCursor value, or
    -1 to hide (CSS cursor:none). handle names the process's window. */
 __import void __sdl_set_cursor(int handle, int shape);
 __import int __sdl_set_window_size(int handle, int w, int h);
 __import int __sdl_update_window_surface(int handle, const void *pixels, int w, int h, int pitch);
 __import void __sdl_delay(int ms);
-/* Blocking input park (todos/0161; host.js pumpWait — the same seam user32's
+/* Blocking input park (docs/archive/0161; host.js pumpWait — the same seam user32's
    GetMessage uses): drain the OS input ring into the wasm event queue and, if
    dry, park on the ring until the kernel's next push or timeoutMs. Returns 1
    if a ring exists (a window was created), 0 otherwise (caller paces itself).
@@ -28166,7 +28651,7 @@ __import int __nanosleep(long sec, long nsec);
    sub-ms part. */
 __import double __sdl_get_ticks(void);
 __import void __sdl_set_animation_frame_func(void (*callback)(void));
-/* System clipboard (todos/0090; host.js createClipboard). __clip_has is
+/* System clipboard (docs/archive/0090; host.js createClipboard). __clip_has is
    the PEEK: same total/-1 answer as a cap-0 __clip_get but served from the
    cached slot — it never triggers the kernel's deferred host-clipboard
    refresh (the clipboard seam), so availability probes (menu graying)
@@ -28174,7 +28659,7 @@ __import void __sdl_set_animation_frame_func(void (*callback)(void));
 __import int __clip_set(int fmt, const void *bytes, int len);
 __import int __clip_get(int fmt, void *out, int cap);
 __import int __clip_has(int fmt);
-/* HTTP transport (todos/0172; fd-shaped since todos/0417 — host.js
+/* HTTP transport (docs/archive/0172; fd-shaped since docs/archive/0417 — host.js
    createHttp). The libcurl veneer (0173) sits on these. headers is a
    NUL-terminated blob of "Name: Value" lines joined by newlines (or
    empty). __http_open starts the transfer and returns an ORDINARY fd.
@@ -28442,7 +28927,7 @@ int guc_window_viewable(SDL_Window *window) {
     return v;
 }
 
-/* Ask the window system for a new size (todos/0068). ASYNC like upstream
+/* Ask the window system for a new size (docs/archive/0068). ASYNC like upstream
    SDL3 under a real WM: success means the request was accepted; the actual
    size change arrives as SDL_EVENT_WINDOW_RESIZED (which re-derives the
    window surface in place — see __sdl_push_window_event). Only the
@@ -28561,7 +29046,7 @@ void __sdl_push_quit_event(int window_id) {
        carries the sid; the host maps it to our handle). With several
        windows live, deliver a per-window SDL_EVENT_WINDOW_CLOSE_REQUESTED
        so a multi-window app (the user32 veneer) closes just that window
-       (todos/0089). The only/last window keeps the historical process-wide
+       (docs/archive/0089). The only/last window keeps the historical process-wide
        SDL_EVENT_QUIT. Divergence from upstream SDL3 (which sends
        CLOSE_REQUESTED and then QUIT for the last window) is deliberate:
        one event per request, so a queued pair can't double-close. */
@@ -28602,7 +29087,7 @@ void __sdl_push_popup_dismissed(int window_id, int reason) {
 }
 __export __sdl_push_popup_dismissed = __sdl_push_popup_dismissed;
 
-/* Kernel-WM window events (todos/0019). RESIZED re-derives the window
+/* Kernel-WM window events (docs/archive/0019). RESIZED re-derives the window
    surface IN PLACE before the event is queued: w/h/pitch update, but the
    pixel allocation only ever GROWS (high-water) — a program that keeps
    drawing with stale dimensions writes inside the allocation instead of
@@ -28718,7 +29203,7 @@ void __sdl_push_mouse_motion_event(int window_id, double x, double y, int state)
 }
 __export __sdl_push_mouse_motion_event = __sdl_push_mouse_motion_event;
 
-/* Relative-mode motion (todos/0018): the host passes TRUE deltas (pointer-lock
+/* Relative-mode motion (docs/archive/0018): the host passes TRUE deltas (pointer-lock
    movementX/Y or an injected rel record) — x/y stay at the last tracked
    position (SDL3 semantics: the position freezes while relative mode is on)
    and the tracked position is NOT advanced by deltas. */
@@ -29102,7 +29587,7 @@ bool SDL_PollEvent(SDL_Event *event) {
     return 1;
 }
 
-/* SDL_WaitEvent / SDL_WaitEventTimeout (todos/0161, IDLE-POWER Stage 2 —
+/* SDL_WaitEvent / SDL_WaitEventTimeout (docs/archive/0161, IDLE-POWER Stage 2 —
    the real SDL idiom for event-driven apps: block, don't poll).
    Parks on the OS input ring via __sdl_pump_wait (host.js pumpWait, the seam
    user32's blocking GetMessage has used since 0058), so a waiting app is off
@@ -30788,7 +31273,7 @@ SDL_MouseButtonFlags SDL_GetGlobalMouseState(float *x, float *y) {
     return 0;
 }
 
-/* ---- Clipboard (todos/0090) ----
+/* ---- Clipboard (docs/archive/0090) ----
    Thin wrappers over the host's __clip_* primitives (kernel slot under the
    OS, process-local slot standalone — host.js createClipboard; the imports
    are declared with the other __sdl_* imports above). fmt 1 is UTF-8 text;
@@ -30837,7 +31322,7 @@ bool SDL_ClearClipboardData(void) {
 void SDL_free(void *mem) { free(mem); }
 
 /* ---- Allocation family (#601) ----
-   SDL_free landed with the clipboard (todos/0090); these complete the family
+   SDL_free landed with the clipboard (docs/archive/0090); these complete the family
    over the same libc heap, with SDL3's zero-size contract (a zero request is
    bumped to 1, so the return is never NULL for lack of size). */
 
@@ -31002,7 +31487,7 @@ bool SDL_SetWindowTitle(SDL_Window *window, const char *title) {
     return 1;
 }
 
-/* ---- Relative mouse mode (todos/0018) ----
+/* ---- Relative mouse mode (docs/archive/0018) ----
    The REQUESTED mode is tracked here (SDL3: Get returns what Set asked for);
    the host arms the actual pointer-lock machinery (browser: lock on the next
    click into the window; the user can drop the lock with ESC and re-lock by
@@ -31021,7 +31506,7 @@ bool SDL_GetWindowRelativeMouseMode(SDL_Window *window) {
     return window->relative_mouse;
 }
 
-/* ---- Cursors (todos/0105) ----
+/* ---- Cursors (docs/archive/0105) ----
    A cursor object is just its shape id. The active cursor + visibility are
    application-global (SDL semantics); the effective shape pushed to the host
    is the current cursor's shape while visible, -1 (hidden) otherwise. With
@@ -34844,7 +35329,7 @@ SDL_Surface *TTF_RenderGlyph_Blended(TTF_Font *font, Uint32 ch, SDL_Color fg) {
 
 /* Low-level host imports — primitives only (handles are i32 indices into the
    host handle table; pointers are i32; clear color is f64). host.js never reads
-   C struct layouts: __webgpu.c flattens descriptors here. See todos/WEBGPU.md. */
+   C struct layouts: __webgpu.c flattens descriptors here. See docs/WEBGPU.md. */
 __import int  __wgpu_create_instance(void);
 __import int  __wgpu_instance_create_surface(int instance);
 __import void __wgpu_instance_request_adapter(int instance, WGPURequestAdapterCallback cb, void *ud1, void *ud2);
@@ -35489,7 +35974,7 @@ void wgpuSetMainLoopCallback(void (*callback)(void)) {
 #include <stdlib.h>
 #include <string.h>
 
-/* Stock SDL3 popup windows + display bounds (todos/0256) — its own TU (see
+/* Stock SDL3 popup windows + display bounds (docs/archive/0256) — its own TU (see
    SDL_popup.h) so these two imports never land in a non-popup binary's
    import table. */
 
@@ -35626,7 +36111,7 @@ void __run_atexits(void) {
 __export __run_atexits = __run_atexits;
   `,
   "__ctype.c": `
-/* isascii/toascii (XSI, todos/0325 Group A). Defined over the whole int
+/* isascii/toascii (XSI, docs/archive/0325 Group A). Defined over the whole int
    range by design — no undefined behaviour for negative or large values. */
 int isascii(int c) { return (unsigned)c < 128u; }
 int toascii(int c) { return c & 0x7f; }
@@ -35662,7 +36147,7 @@ int toupper(int c) { return islower(c) ? c + ('A' - 'a') : c; }
 #include <stdarg.h>
 #include <wchar.h>
 
-/* ---- wcstol family (C95 7.24.4.1, todos/0325 Group A) ------------------
+/* ---- wcstol family (C95 7.24.4.1, docs/archive/0325 Group A) ------------------
  *
  * CPython's Python/initconfig.c calls wcstol unconditionally. Implemented as
  * a real wide parser rather than "narrow the string and call strtol": the
@@ -35762,7 +36247,7 @@ unsigned long long wcstoull(const wchar_t *nptr, wchar_t **endptr, int base) {
   return neg ? (unsigned long long)(-(long long)acc) : acc;
 }
 
-/* wcsftime (C95 7.24.5.1, todos/0325 Group B) — strftime's wide twin.
+/* wcsftime (C95 7.24.5.1, docs/archive/0325 Group B) — strftime's wide twin.
    Round-trips through the narrow formatter via the real multibyte codec
    (wcrtomb/mbrtowc) rather than truncating to ASCII: a format string may
    legitimately contain non-ASCII literal text around the conversion
@@ -36537,14 +37022,14 @@ int getopt_long_only(int argc, char *const argv[], const char *optstring,
 #include <errno.h>
 #include <stddef.h>
 #include <unistd.h>   /* getpid */
-#include <sys/time.h> /* struct itimerval / ITIMER_REAL (todos/0044) */
+#include <sys/time.h> /* struct itimerval / ITIMER_REAL (docs/archive/0044) */
 __import void __exit(int status);
 
 /* Per-process disposition state (the libc owns it — sigaction set it here).
    A running wasm instance can't be preempted, so delivery happens at SAFE
    POINTS: raise()/abort() deliver synchronously, and with a kernel attached
    (kernel.js) the host claims kernel-posted signals at every syscall
-   boundary and calls the exported __sig_dispatch (todos/KERNEL.md Phase 2).
+   boundary and calls the exported __sig_dispatch (docs/KERNEL.md Phase 2).
    The runtime is told the disposition KIND via __on_sigdisp so kill()
    applies the right action, and the blocked mask via __on_sigmask so the
    kernel parks blocked signals as pending. Pure-compute loops never reach a
@@ -36606,7 +37091,7 @@ static int __sig_deliver(int sig, int async) {
   __sighandler_t h = __sig_h[sig];
   if (h == SIG_IGN) return 1;
   if (h == SIG_DFL) {
-    if (__sig_default_action(sig) != 0) return 1;   /* ignore; stop/cont → todos/0003 */
+    if (__sig_default_action(sig) != 0) return 1;   /* ignore; stop/cont → docs/archive/0003 */
     /* Terminate: prefer the kernel — kill-self makes the termsig round-trip
        to the parent as WIFSIGNALED. Without a kernel (__spawn_kill ENOSYS
        and returns), approximate with the classic 128+sig exit. */
@@ -36754,7 +37239,7 @@ int killpg(int pgrp, int sig) {
   return kill(pgrp == 0 ? 0 : -pgrp, sig);
 }
 
-/* ---- interval timers (todos/0044): ITIMER_REAL -> SIGALRM ----
+/* ---- interval timers (docs/archive/0044): ITIMER_REAL -> SIGALRM ----
    The kernel owns ONE real-time timer per process (kernel.js; VIRTUAL/PROF
    answer EINVAL — no CPU accounting). The wire ABI is milliseconds; these
    wrappers own the timeval <-> ms conversion. out2/old2 = {value_ms,
@@ -37336,7 +37821,7 @@ void __inspect_heap(struct __heap_info *info) {
   "__math.c": `
 #include <math.h>
 
-/* ---- fma (C99 7.12.13.1, todos/0325 Group A) --------------------------
+/* ---- fma (C99 7.12.13.1, docs/archive/0325 Group A) --------------------------
  *
  * x*y + z with a SINGLE rounding. WebAssembly has no fused-multiply-add
  * instruction, so this is emulated — and the emulation has to be exactly
@@ -38215,7 +38700,7 @@ int fgetpos(FILE *stream, fpos_t *pos) {
 }
 
 /* fseeko/ftello: the POSIX off_t-wide fseek/ftell (od's dump_skip seeks
-   with fseeko — todos/0034). Same buffer discipline as fseek/ftell, at
+   with fseeko — docs/archive/0034). Same buffer discipline as fseek/ftell, at
    64-bit width like fgetpos/fsetpos. */
 int fseeko(FILE *stream, off_t offset, int whence) {
   fflush(stream);
@@ -38428,7 +38913,7 @@ int snprintf(char *buf, size_t size, const char *fmt, ...) {
   return r;
 }
 
-// open() moved to __posix.c (todos/0382): <fcntl.h> declares it, so <fcntl.h>
+// open() moved to __posix.c (docs/archive/0382): <fcntl.h> declares it, so <fcntl.h>
 // alone must LINK it — while it lived here, the POSIX-correct include set
 // failed at link time and only worked by accident of <stdio.h> also being
 // included. It also has to sit next to the umask state it now consults.
@@ -38788,7 +39273,7 @@ int mkstemp(char *template_) {
 }
 
 /* mktemp/mkdtemp: same XXXXXX churn as mkstemp (busybox's mktemp applet
-   wants all three — todos/0034). mktemp() only NAMES a path (that's why
+   wants all three — docs/archive/0034). mktemp() only NAMES a path (that's why
    POSIX withdrew it — the classic TOCTOU); callers here accept that.
    Failure protocol differs per spec: mktemp returns template_ with
    template_[0] = '\\0', mkdtemp returns NULL. */
@@ -39545,7 +40030,7 @@ size_t wcstombs(char *dest, const wchar_t *src, size_t n) {
 }
   `,
   "__posix.c": `
-/* POSIX process/file-creation layer (todos/0382, todos/0325).
+/* POSIX process/file-creation layer (docs/archive/0382, docs/archive/0325).
  *
  * Home for the calls that need real per-process state or real path work
  * rather than a one-line forward to a host import:
@@ -39615,7 +40100,7 @@ int mkdir(const char *path, mode_t mode) {
   return __mkdir_impl(path, (int)(mode & ~__umask_val));
 }
 
-/* ---- getentropy (todos/0325 Group B) ----------------------------------
+/* ---- getentropy (docs/archive/0325 Group B) ----------------------------------
  *
  * CPython's bootstrap_hash.c uses this to seed hash randomisation, so weak
  * or fabricated entropy here would be a silent security regression rather
@@ -39634,7 +40119,7 @@ int getentropy(void *buf, size_t buflen) {
   return 0;
 }
 
-/* ---- confstr / pathconf / fpathconf (todos/0325 Group B) ---------------
+/* ---- confstr / pathconf / fpathconf (docs/archive/0325 Group B) ---------------
  *
  * Real values, from this system's real limits, so a caller sizing a buffer
  * from pathconf() gets an answer it can trust. An unrecognised name is -1
@@ -39681,9 +40166,9 @@ long fpathconf(int fd, int name) {
   return __pathconf_value(name);
 }
 
-/* ---- the *at() family (todos/0382 gaps 7-8, todos/0325 Group B) --------
+/* ---- the *at() family (docs/archive/0382 gaps 7-8, docs/archive/0325 Group B) --------
  *
- * OWNED BY todos/0325 Group B, which lists the whole family; todos/0382
+ * OWNED BY docs/archive/0325 Group B, which lists the whole family; docs/archive/0382
  * names openat/fstatat and defers to it. Both tickets record that.
  *
  * POSIX resolution rules, in order:
@@ -39693,7 +40178,7 @@ long fpathconf(int fd, int name) {
  *
  * Cases 1 and 2 are implemented exactly. Case 3 cannot arise FROM C CODE
  * on this platform: the fs layer grew O_DIRECTORY directory fds in
- * todos/0442 (the wasip1 "/" preopen must be a real fd), but this libc
+ * docs/archive/0442 (the wasip1 "/" preopen must be a real fd), but this libc
  * still exposes no O_DIRECTORY constant, no dirfd(3) and no fdopendir(3)
  * (opendir(3) returns a DIR* from a separate handle namespace, not an
  * fd) — so no fd a C program can mint refers to a directory, and the
@@ -39704,8 +40189,8 @@ long fpathconf(int fd, int name) {
  * work.
  *
  * That is a real limit, not a shortcut, and it is the remaining content of
- * todos/0400 (directory file descriptors: O_DIRECTORY, dirfd(3), fdopendir(3))
- * — the fs/kernel substrate landed via todos/0442; the libc surface (the
+ * docs/archive/0400 (directory file descriptors: O_DIRECTORY, dirfd(3), fdopendir(3))
+ * — the fs/kernel substrate landed via docs/archive/0442; the libc surface (the
  * O_DIRECTORY constant, dirfd/fdopendir, fchdir, this recovery) is what
  * is left. When it lands, __at_ok() is the ONE function that changes and
  * the entire family below becomes dirfd-capable for free.
@@ -39813,7 +40298,7 @@ int futimesat(int dirfd, const char *path, const struct timeval times[2]) {
   return __utime(path, times[0].tv_sec, times[1].tv_sec);
 }
 
-/* ---- truncate / posix_fallocate / posix_fadvise (todos/0325 Group B) ---- */
+/* ---- truncate / posix_fallocate / posix_fadvise (docs/archive/0325 Group B) ---- */
 
 int truncate(const char *path, off_t length) {
   int fd = open(path, O_WRONLY);
@@ -39845,7 +40330,7 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
 #include <signal.h>   /* strsignal's table; __signal.c is already universal
                          (abort() pulls it into every stdlib program) */
 
-/* memrchr (GNU/POSIX-adjacent, todos/0325 Group B) — the last occurrence.
+/* memrchr (GNU/POSIX-adjacent, docs/archive/0325 Group B) — the last occurrence.
    Objects/bytes*.c and unicodeobject.c use it on a real performance path. */
 void *memrchr(const void *s, int c, size_t n) {
   const unsigned char *p = (const unsigned char *)s;
@@ -40159,7 +40644,7 @@ char *strerror(int errnum) {
   case ENOLCK:     return "No locks available";
   case EOVERFLOW:  return "Value too large for defined data type";
   case EILSEQ:     return "Invalid or incomplete multibyte or wide character";
-  /* Socket family (todos/0008 errno.h; strings match glibc wording). */
+  /* Socket family (docs/archive/0008 errno.h; strings match glibc wording). */
   case ENOTSOCK:   return "Socket operation on non-socket";
   case EDESTADDRREQ: return "Destination address required";
   case EPROTOTYPE: return "Protocol wrong type for socket";
@@ -40326,8 +40811,8 @@ struct tm *gmtime(const time_t *timep) {
   return &__gmtime_buf;
 }
 
-/* gmtime_r (POSIX) — the reentrant twin. OWNED BY todos/0325 Group A, which
-   is where the overlap with todos/0382 gap 4 was resolved; both tickets
+/* gmtime_r (POSIX) — the reentrant twin. OWNED BY docs/archive/0325 Group A, which
+   is where the overlap with docs/archive/0382 gap 4 was resolved; both tickets
    record it. CPython calls it unconditionally (Python/pytime.c), and it is
    the form portable code should prefer: gmtime's static buffer is shared
    with every other caller in the process. */
@@ -40339,9 +40824,9 @@ struct tm *gmtime_r(const time_t *timep, struct tm *result) {
   return result;
 }
 
-/* ---- timezone state (POSIX tzset, todos/0325 Group A) -----------------
+/* ---- timezone state (POSIX tzset, docs/archive/0325 Group A) -----------------
  *
- * OWNED BY todos/0325 Group A; todos/0382 gap 6 names the same symbol and
+ * OWNED BY docs/archive/0325 Group A; docs/archive/0382 gap 6 names the same symbol and
  * defers to it. Both tickets record the split.
  *
  * There is no tz database here — the host hands us a single UTC offset for a
@@ -40464,7 +40949,7 @@ time_t mktime(struct tm *tp) {
   return secs;
 }
 
-/* timegm (BSD/glibc, todos/0382 gap 5 / todos/0325 Group B) — mktime's UTC
+/* timegm (BSD/glibc, docs/archive/0382 gap 5 / docs/archive/0325 Group B) — mktime's UTC
    twin. Owned here alongside the rest of the time surface. NOT
    mktime-minus-the-offset: mktime consults the zone for the INSTANT it is
    computing, so subtracting an offset afterwards is wrong across a DST
@@ -40502,8 +40987,8 @@ char *ctime(const time_t *timep) {
 }
 
 /* asctime_r/ctime_r (POSIX) — reentrant twins writing into a caller buffer.
-   POSIX requires the buffer to be at least 26 bytes. Named in the todos/0350
-   zip-harness gap list alongside gmtime_r (todos/0382). */
+   POSIX requires the buffer to be at least 26 bytes. Named in the docs/archive/0350
+   zip-harness gap list alongside gmtime_r (docs/archive/0382). */
 char *asctime_r(const struct tm *tp, char *buf) {
   sprintf(buf, "%s %s %2d %02d:%02d:%02d %d\\n",
       __wday_abbr[tp->tm_wday], __mon_abbr[tp->tm_mon],
@@ -40775,7 +41260,7 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp) {
     }
     case 's': { /* seconds since the epoch (POSIX-next; every shell's date +%s)
 
-       DECISION (ticket #116 / todos/0310): %s is the broken-down fields
+       DECISION (ticket #116 / docs/archive/0310): %s is the broken-down fields
        read as UTC MINUS tm_gmtoff (musl's semantics, TZ-independent) — it
        used to be mktime((struct tm *)tp), the BSD-libc-shaped reading that
        re-interprets the fields in the HOST zone. Both are real-world
@@ -40814,7 +41299,7 @@ done:
   return pos;
 }
 
-/* ---- strptime (ticket #113 / todos/0307) ------------------------------
+/* ---- strptime (ticket #113 / docs/archive/0307) ------------------------------
  *
  * The parse twin of strftime, over the SAME conversion vocabulary and name
  * tables (the tickets group them for that reason). POSIX XSI set plus the
@@ -41091,7 +41576,7 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
   return 0;
 }
 
-/* clock_getres (POSIX, todos/0325 Group A — CPython's pytime.c calls it
+/* clock_getres (POSIX, docs/archive/0325 Group A — CPython's pytime.c calls it
    inside an unguarded HAVE_CLOCK_GETTIME block, so there is no way to
    configure around it).
  *
@@ -41104,7 +41589,7 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
  *                     honest floor is the resolution the API expresses, 1us,
  *                     and a caller must not read it as a promise of
  *                     distinguishable consecutive samples. */
-/* clock_nanosleep (POSIX, todos/0325 Group B). RETURNS an error number and
+/* clock_nanosleep (POSIX, docs/archive/0325 Group B). RETURNS an error number and
    does NOT set errno — the same inversion as posix_fallocate. TIMER_ABSTIME
    sleeps until a deadline rather than for a duration, which is the whole
    reason timemodule.c wants it: a relative sleep recomputed in userspace
@@ -41145,68 +41630,5244 @@ int clock_getres(clockid_t clk_id, struct timespec *res) {
   return 0;
 }
   `,
+
+  // ---- musl 1.2.5 POSIX pieces (see the matching banner in _stdlibHeaders
+  // for provenance, licenses and the local modifications) ----
+  "fnmatch.c": `/*
+ * An implementation of what I call the "Sea of Stars" algorithm for
+ * POSIX fnmatch(). The basic idea is that we factor the pattern into
+ * a head component (which we match first and can reject without ever
+ * measuring the length of the string), an optional tail component
+ * (which only exists if the pattern contains at least one star), and
+ * an optional "sea of stars", a set of star-separated components
+ * between the head and tail. After the head and tail matches have
+ * been removed from the input string, the components in the "sea of
+ * stars" are matched sequentially by searching for their first
+ * occurrence past the end of the previous match.
+ *
+ * - Rich Felker, April 2012
+ */
+
+#include <string.h>
+#include <fnmatch.h>
+#include <stdlib.h>
+#include <wchar.h>
+#include <wctype.h>
+#include "locale_impl.h"
+
+#define END 0
+#define UNMATCHABLE -2
+#define BRACKET -3
+#define QUESTION -4
+#define STAR -5
+
+static int str_next(const char *str, size_t n, size_t *step)
+{
+	if (!n) {
+		*step = 0;
+		return 0;
+	}
+	if (str[0] >= 128U) {
+		wchar_t wc;
+		int k = mbtowc(&wc, str, n);
+		if (k<0) {
+			*step = 1;
+			return -1;
+		}
+		*step = k;
+		return wc;
+	}
+	*step = 1;
+	return str[0];
+}
+
+static int pat_next(const char *pat, size_t m, size_t *step, int flags)
+{
+	int esc = 0;
+	if (!m || !*pat) {
+		*step = 0;
+		return END;
+	}
+	*step = 1;
+	if (pat[0]=='\\\\' && pat[1] && !(flags & FNM_NOESCAPE)) {
+		*step = 2;
+		pat++;
+		esc = 1;
+		goto escaped;
+	}
+	if (pat[0]=='[') {
+		size_t k = 1;
+		if (k<m) if (pat[k] == '^' || pat[k] == '!') k++;
+		if (k<m) if (pat[k] == ']') k++;
+		for (; k<m && pat[k] && pat[k]!=']'; k++) {
+			if (k+1<m && pat[k+1] && pat[k]=='[' && (pat[k+1]==':' || pat[k+1]=='.' || pat[k+1]=='=')) {
+				int z = pat[k+1];
+				k+=2;
+				if (k<m && pat[k]) k++;
+				while (k<m && pat[k] && (pat[k-1]!=z || pat[k]!=']')) k++;
+				if (k==m || !pat[k]) break;
+			}
+		}
+		if (k==m || !pat[k]) {
+			*step = 1;
+			return '[';
+		}
+		*step = k+1;
+		return BRACKET;
+	}
+	if (pat[0] == '*')
+		return STAR;
+	if (pat[0] == '?')
+		return QUESTION;
+escaped:
+	if (pat[0] >= 128U) {
+		wchar_t wc;
+		int k = mbtowc(&wc, pat, m);
+		if (k<0) {
+			*step = 0;
+			return UNMATCHABLE;
+		}
+		*step = k + esc;
+		return wc;
+	}
+	return pat[0];
+}
+
+static int casefold(int k)
+{
+	int c = towupper(k);
+	return c == k ? towlower(k) : c;
+}
+
+static int match_bracket(const char *p, int k, int kfold)
+{
+	wchar_t wc;
+	int inv = 0;
+	p++;
+	if (*p=='^' || *p=='!') {
+		inv = 1;
+		p++;
+	}
+	if (*p==']') {
+		if (k==']') return !inv;
+		p++;
+	} else if (*p=='-') {
+		if (k=='-') return !inv;
+		p++;
+	}
+	wc = p[-1];
+	for (; *p != ']'; p++) {
+		if (p[0]=='-' && p[1]!=']') {
+			wchar_t wc2;
+			int l = mbtowc(&wc2, p+1, 4);
+			if (l < 0) return 0;
+			if (wc <= wc2)
+				if ((unsigned)k-wc <= wc2-wc ||
+				    (unsigned)kfold-wc <= wc2-wc)
+					return !inv;
+			p += l-1;
+			continue;
+		}
+		if (p[0]=='[' && (p[1]==':' || p[1]=='.' || p[1]=='=')) {
+			const char *p0 = p+2;
+			int z = p[1];
+			p+=3;
+			while (p[-1]!=z || p[0]!=']') p++;
+			if (z == ':' && p-1-p0 < 16) {
+				char buf[16];
+				memcpy(buf, p0, p-1-p0);
+				buf[p-1-p0] = 0;
+				if (iswctype(k, wctype(buf)) ||
+				    iswctype(kfold, wctype(buf)))
+					return !inv;
+			}
+			continue;
+		}
+		if (*p < 128U) {
+			wc = (unsigned char)*p;
+		} else {
+			int l = mbtowc(&wc, p, 4);
+			if (l < 0) return 0;
+			p += l-1;
+		}
+		if (wc==k || wc==kfold) return !inv;
+	}
+	return inv;
+}
+
+static int fnmatch_internal(const char *pat, size_t m, const char *str, size_t n, int flags)
+{
+	const char *p, *ptail, *endpat;
+	const char *s, *stail, *endstr;
+	size_t pinc, sinc, tailcnt=0;
+	int c, k, kfold;
+
+	if (flags & FNM_PERIOD) {
+		if (*str == '.' && *pat != '.')
+			return FNM_NOMATCH;
+	}
+	for (;;) {
+		switch ((c = pat_next(pat, m, &pinc, flags))) {
+		case UNMATCHABLE:
+			return FNM_NOMATCH;
+		case STAR:
+			pat++;
+			m--;
+			break;
+		default:
+			k = str_next(str, n, &sinc);
+			if (k <= 0)
+				return (c==END) ? 0 : FNM_NOMATCH;
+			str += sinc;
+			n -= sinc;
+			kfold = flags & FNM_CASEFOLD ? casefold(k) : k;
+			if (c == BRACKET) {
+				if (!match_bracket(pat, k, kfold))
+					return FNM_NOMATCH;
+			} else if (c != QUESTION && k != c && kfold != c) {
+				return FNM_NOMATCH;
+			}
+			pat+=pinc;
+			m-=pinc;
+			continue;
+		}
+		break;
+	}
+
+	/* Compute real pat length if it was initially unknown/-1 */
+	m = strnlen(pat, m);
+	endpat = pat + m;
+
+	/* Find the last * in pat and count chars needed after it */
+	for (p=ptail=pat; p<endpat; p+=pinc) {
+		switch (pat_next(p, endpat-p, &pinc, flags)) {
+		case UNMATCHABLE:
+			return FNM_NOMATCH;
+		case STAR:
+			tailcnt=0;
+			ptail = p+1;
+			break;
+		default:
+			tailcnt++;
+			break;
+		}
+	}
+
+	/* Past this point we need not check for UNMATCHABLE in pat,
+	 * because all of pat has already been parsed once. */
+
+	/* Compute real str length if it was initially unknown/-1 */
+	n = strnlen(str, n);
+	endstr = str + n;
+	if (n < tailcnt) return FNM_NOMATCH;
+
+	/* Find the final tailcnt chars of str, accounting for UTF-8.
+	 * On illegal sequences we may get it wrong, but in that case
+	 * we necessarily have a matching failure anyway. */
+	for (s=endstr; s>str && tailcnt; tailcnt--) {
+		if (s[-1] < 128U || MB_CUR_MAX==1) s--;
+		else while ((unsigned char)*--s-0x80U<0x40 && s>str);
+	}
+	if (tailcnt) return FNM_NOMATCH;
+	stail = s;
+
+	/* Check that the pat and str tails match */
+	p = ptail;
+	for (;;) {
+		c = pat_next(p, endpat-p, &pinc, flags);
+		p += pinc;
+		if ((k = str_next(s, endstr-s, &sinc)) <= 0) {
+			if (c != END) return FNM_NOMATCH;
+			break;
+		}
+		s += sinc;
+		kfold = flags & FNM_CASEFOLD ? casefold(k) : k;
+		if (c == BRACKET) {
+			if (!match_bracket(p-pinc, k, kfold))
+				return FNM_NOMATCH;
+		} else if (c != QUESTION && k != c && kfold != c) {
+			return FNM_NOMATCH;
+		}
+	}
+
+	/* We're all done with the tails now, so throw them out */
+	endstr = stail;
+	endpat = ptail;
+
+	/* Match pattern components until there are none left */
+	while (pat<endpat) {
+		p = pat;
+		s = str;
+		for (;;) {
+			c = pat_next(p, endpat-p, &pinc, flags);
+			p += pinc;
+			/* Encountering * completes/commits a component */
+			if (c == STAR) {
+				pat = p;
+				str = s;
+				break;
+			}
+			k = str_next(s, endstr-s, &sinc);
+			if (!k)
+				return FNM_NOMATCH;
+			kfold = flags & FNM_CASEFOLD ? casefold(k) : k;
+			if (c == BRACKET) {
+				if (!match_bracket(p-pinc, k, kfold))
+					break;
+			} else if (c != QUESTION && k != c && kfold != c) {
+				break;
+			}
+			s += sinc;
+		}
+		if (c == STAR) continue;
+		/* If we failed, advance str, by 1 char if it's a valid
+		 * char, or past all invalid bytes otherwise. */
+		k = str_next(str, endstr-str, &sinc);
+		if (k > 0) str += sinc;
+		else for (str++; str_next(str, endstr-str, &sinc)<0; str++);
+	}
+
+	return 0;
+}
+
+int fnmatch(const char *pat, const char *str, int flags)
+{
+	const char *s, *p;
+	size_t inc;
+	int c;
+	if (flags & FNM_PATHNAME) for (;;) {
+		for (s=str; *s && *s!='/'; s++);
+		for (p=pat; (c=pat_next(p, -1, &inc, flags))!=END && c!='/'; p+=inc);
+		if (c!=*s && (!*s || !(flags & FNM_LEADING_DIR)))
+			return FNM_NOMATCH;
+		if (fnmatch_internal(pat, p-pat, str, s-str, flags))
+			return FNM_NOMATCH;
+		if (!c) return 0;
+		str = s+1;
+		pat = p+inc;
+	} else if (flags & FNM_LEADING_DIR) {
+		for (s=str; *s; s++) {
+			if (*s != '/') continue;
+			if (!fnmatch_internal(pat, -1, str, s-str, flags))
+				return 0;
+		}
+	}
+	return fnmatch_internal(pat, -1, str, -1, flags);
+}
+`,
+  "glob.c": `#define _BSD_SOURCE
+#include <glob.h>
+#include <fnmatch.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <limits.h>
+#include <string.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <stddef.h>
+#include <unistd.h>
+#include <pwd.h>
+
+struct match
+{
+	struct match *next;
+	char name[];
+};
+
+static int append(struct match **tail, const char *name, size_t len, int mark)
+{
+	struct match *new = malloc(sizeof(struct match) + len + 2);
+	if (!new) return -1;
+	(*tail)->next = new;
+	new->next = NULL;
+	memcpy(new->name, name, len+1);
+	if (mark && len && name[len-1]!='/') {
+		new->name[len] = '/';
+		new->name[len+1] = 0;
+	}
+	*tail = new;
+	return 0;
+}
+
+static int do_glob(char *buf, size_t pos, int type, char *pat, int flags, int (*errfunc)(const char *path, int err), struct match **tail)
+{
+	/* If GLOB_MARK is unused, we don't care about type. */
+	if (!type && !(flags & GLOB_MARK)) type = DT_REG;
+
+	/* Special-case the remaining pattern being all slashes, in
+	 * which case we can use caller-passed type if it's a dir. */
+	if (*pat && type!=DT_DIR) type = 0;
+	while (pos+1 < PATH_MAX && *pat=='/') buf[pos++] = *pat++;
+
+	/* Consume maximal [escaped-]literal prefix of pattern, copying
+	 * and un-escaping it to the running buffer as we go. */
+	ptrdiff_t i=0, j=0;
+	int in_bracket = 0, overflow = 0;
+	for (; pat[i]!='*' && pat[i]!='?' && (!in_bracket || pat[i]!=']'); i++) {
+		if (!pat[i]) {
+			if (overflow) return 0;
+			pat += i;
+			pos += j;
+			i = j = 0;
+			break;
+		} else if (pat[i] == '[') {
+			in_bracket = 1;
+		} else if (pat[i] == '\\\\' && !(flags & GLOB_NOESCAPE)) {
+			/* Backslashes inside a bracket are (at least by
+			 * our interpretation) non-special, so if next
+			 * char is ']' we have a complete expression. */
+			if (in_bracket && pat[i+1]==']') break;
+			/* Unpaired final backslash never matches. */
+			if (!pat[i+1]) return 0;
+			i++;
+		}
+		if (pat[i] == '/') {
+			if (overflow) return 0;
+			in_bracket = 0;
+			pat += i+1;
+			i = -1;
+			pos += j+1;
+			j = -1;
+		}
+		/* Only store a character if it fits in the buffer, but if
+		 * a potential bracket expression is open, the overflow
+		 * must be remembered and handled later only if the bracket
+		 * is unterminated (and thereby a literal), so as not to
+		 * disallow long bracket expressions with short matches. */
+		if (pos+(j+1) < PATH_MAX) {
+			buf[pos+j++] = pat[i];
+		} else if (in_bracket) {
+			overflow = 1;
+		} else {
+			return 0;
+		}
+		/* If we consume any new components, the caller-passed type
+		 * or dummy type from above is no longer valid. */
+		type = 0;
+	}
+	buf[pos] = 0;
+	if (!*pat) {
+		/* If we consumed any components above, or if GLOB_MARK is
+		 * requested and we don't yet know if the match is a dir,
+		 * we must confirm the file exists and/or determine its type.
+		 *
+		 * If marking dirs, symlink type is inconclusive; we need the
+		 * type for the symlink target, and therefore must try stat
+		 * first unless type is known not to be a symlink. Otherwise,
+		 * or if that fails, use lstat for determining existence to
+		 * avoid false negatives in the case of broken symlinks. */
+		struct stat st;
+		if ((flags & GLOB_MARK) && (!type||type==DT_LNK) && !stat(buf, &st)) {
+			if (S_ISDIR(st.st_mode)) type = DT_DIR;
+			else type = DT_REG;
+		}
+		if (!type && lstat(buf, &st)) {
+			if (errno!=ENOENT && (errfunc(buf, errno) || (flags & GLOB_ERR)))
+				return GLOB_ABORTED;
+			return 0;
+		}
+		if (append(tail, buf, pos, (flags & GLOB_MARK) && type==DT_DIR))
+			return GLOB_NOSPACE;
+		return 0;
+	}
+	char *p2 = strchr(pat, '/'), saved_sep = '/';
+	/* Check if the '/' was escaped and, if so, remove the escape char
+	 * so that it will not be unpaired when passed to fnmatch. */
+	if (p2 && !(flags & GLOB_NOESCAPE)) {
+		char *p;
+		for (p=p2; p>pat && p[-1]=='\\\\'; p--);
+		if ((p2-p)%2) {
+			p2--;
+			saved_sep = '\\\\';
+		}
+	}
+	DIR *dir = opendir(pos ? buf : ".");
+	if (!dir) {
+		if (errfunc(buf, errno) || (flags & GLOB_ERR))
+			return GLOB_ABORTED;
+		return 0;
+	}
+	int old_errno = errno;
+	struct dirent *de;
+	while (errno=0, de=readdir(dir)) {
+		/* Quickly skip non-directories when there's pattern left. */
+		if (p2 && de->d_type && de->d_type!=DT_DIR && de->d_type!=DT_LNK)
+			continue;
+
+		size_t l = strlen(de->d_name);
+		if (l >= PATH_MAX-pos) continue;
+
+		if (p2) *p2 = 0;
+
+		int fnm_flags= ((flags & GLOB_NOESCAPE) ? FNM_NOESCAPE : 0)
+			| ((!(flags & GLOB_PERIOD)) ? FNM_PERIOD : 0);
+
+		if (fnmatch(pat, de->d_name, fnm_flags))
+			continue;
+
+		/* With GLOB_PERIOD, don't allow matching . or .. unless
+		 * fnmatch would match them with FNM_PERIOD rules in effect. */
+		if (p2 && (flags & GLOB_PERIOD) && de->d_name[0]=='.'
+		    && (!de->d_name[1] || de->d_name[1]=='.' && !de->d_name[2])
+		    && fnmatch(pat, de->d_name, fnm_flags | FNM_PERIOD))
+			continue;
+
+		memcpy(buf+pos, de->d_name, l+1);
+		if (p2) *p2 = saved_sep;
+		int r = do_glob(buf, pos+l, de->d_type, p2 ? p2 : "", flags, errfunc, tail);
+		if (r) {
+			closedir(dir);
+			return r;
+		}
+	}
+	int readerr = errno;
+	if (p2) *p2 = saved_sep;
+	closedir(dir);
+	if (readerr && (errfunc(buf, errno) || (flags & GLOB_ERR)))
+		return GLOB_ABORTED;
+	errno = old_errno;
+	return 0;
+}
+
+static int ignore_err(const char *path, int err)
+{
+	return 0;
+}
+
+static void freelist(struct match *head)
+{
+	struct match *match, *next;
+	for (match=head->next; match; match=next) {
+		next = match->next;
+		free(match);
+	}
+}
+
+static int sort(const void *a, const void *b)
+{
+	return strcmp(*(const char **)a, *(const char **)b);
+}
+
+static int expand_tilde(char **pat, char *buf, size_t *pos)
+{
+	char *p = *pat + 1;
+	size_t i = 0;
+
+	char delim, *name_end = __strchrnul(p, '/');
+	if ((delim = *name_end)) *name_end++ = 0;
+	*pat = name_end;
+
+	char *home = *p ? NULL : getenv("HOME");
+	if (!home) {
+		struct passwd pw, *res;
+		switch (*p ? getpwnam_r(p, &pw, buf, PATH_MAX, &res)
+			   : getpwuid_r(getuid(), &pw, buf, PATH_MAX, &res)) {
+		case ENOMEM:
+			return GLOB_NOSPACE;
+		case 0:
+			if (!res)
+		default:
+				return GLOB_NOMATCH;
+		}
+		home = pw.pw_dir;
+	}
+	while (i < PATH_MAX - 2 && *home)
+		buf[i++] = *home++;
+	if (*home)
+		return GLOB_NOMATCH;
+	if ((buf[i] = delim))
+		buf[++i] = 0;
+	*pos = i;
+	return 0;
+}
+
+int glob(const char *restrict pat, int flags, int (*errfunc)(const char *path, int err), glob_t *restrict g)
+{
+	struct match head = { .next = NULL }, *tail = &head;
+	size_t cnt, i;
+	size_t offs = (flags & GLOB_DOOFFS) ? g->gl_offs : 0;
+	int error = 0;
+	char buf[PATH_MAX];
+	
+	if (!errfunc) errfunc = ignore_err;
+
+	if (!(flags & GLOB_APPEND)) {
+		g->gl_offs = offs;
+		g->gl_pathc = 0;
+		g->gl_pathv = NULL;
+	}
+
+	if (*pat) {
+		char *p = strdup(pat);
+		if (!p) return GLOB_NOSPACE;
+		buf[0] = 0;
+		size_t pos = 0;
+		char *s = p;
+		if ((flags & (GLOB_TILDE | GLOB_TILDE_CHECK)) && *p == '~')
+			error = expand_tilde(&s, buf, &pos);
+		if (!error)
+			error = do_glob(buf, pos, 0, s, flags, errfunc, &tail);
+		free(p);
+	}
+
+	if (error == GLOB_NOSPACE) {
+		freelist(&head);
+		return error;
+	}
+	
+	for (cnt=0, tail=head.next; tail; tail=tail->next, cnt++);
+	if (!cnt) {
+		if (flags & GLOB_NOCHECK) {
+			tail = &head;
+			if (append(&tail, pat, strlen(pat), 0))
+				return GLOB_NOSPACE;
+			cnt++;
+		} else if (!error)
+			return GLOB_NOMATCH;
+	}
+
+	if (flags & GLOB_APPEND) {
+		char **pathv = realloc(g->gl_pathv, (offs + g->gl_pathc + cnt + 1) * sizeof(char *));
+		if (!pathv) {
+			freelist(&head);
+			return GLOB_NOSPACE;
+		}
+		g->gl_pathv = pathv;
+		offs += g->gl_pathc;
+	} else {
+		g->gl_pathv = malloc((offs + cnt + 1) * sizeof(char *));
+		if (!g->gl_pathv) {
+			freelist(&head);
+			return GLOB_NOSPACE;
+		}
+		for (i=0; i<offs; i++)
+			g->gl_pathv[i] = NULL;
+	}
+	for (i=0, tail=head.next; i<cnt; tail=tail->next, i++)
+		g->gl_pathv[offs + i] = tail->name;
+	g->gl_pathv[offs + i] = NULL;
+	g->gl_pathc += cnt;
+
+	if (!(flags & GLOB_NOSORT))
+		qsort(g->gl_pathv+offs, cnt, sizeof(char *), sort);
+	
+	return error;
+}
+
+void globfree(glob_t *g)
+{
+	size_t i;
+	for (i=0; i<g->gl_pathc; i++)
+		free(g->gl_pathv[g->gl_offs + i] - offsetof(struct match, name));
+	free(g->gl_pathv);
+	g->gl_pathc = 0;
+	g->gl_pathv = NULL;
+}
+`,
+  "hsearch.c": `#define _GNU_SOURCE
+#include <stdlib.h>
+#include <string.h>
+#include <search.h>
+
+/*
+open addressing hash table with 2^n table size
+quadratic probing is used in case of hash collision
+tab indices and hash are size_t
+after resize fails with ENOMEM the state of tab is still usable
+
+with the posix api items cannot be iterated and length cannot be queried
+*/
+
+#define MINSIZE 8
+#define MAXSIZE ((size_t)-1/2 + 1)
+
+struct __tab {
+	ENTRY *entries;
+	size_t mask;
+	size_t used;
+};
+
+static struct hsearch_data htab;
+
+
+static size_t keyhash(char *k)
+{
+	unsigned char *p = (void *)k;
+	size_t h = 0;
+
+	while (*p)
+		h = 31*h + *p++;
+	return h;
+}
+
+static int resize(size_t nel, struct hsearch_data *htab)
+{
+	size_t newsize;
+	size_t i, j;
+	size_t oldsize = htab->__tab->mask + 1;
+	ENTRY *e, *newe;
+	ENTRY *oldtab = htab->__tab->entries;
+
+	if (nel > MAXSIZE)
+		nel = MAXSIZE;
+	for (newsize = MINSIZE; newsize < nel; newsize *= 2);
+	htab->__tab->entries = calloc(newsize, sizeof *htab->__tab->entries);
+	if (!htab->__tab->entries) {
+		htab->__tab->entries = oldtab;
+		return 0;
+	}
+	htab->__tab->mask = newsize - 1;
+	if (!oldtab)
+		return 1;
+	for (e = oldtab; e < oldtab + oldsize; e++)
+		if (e->key) {
+			for (i=keyhash(e->key),j=1; ; i+=j++) {
+				newe = htab->__tab->entries + (i & htab->__tab->mask);
+				if (!newe->key)
+					break;
+			}
+			*newe = *e;
+		}
+	free(oldtab);
+	return 1;
+}
+
+int hcreate(size_t nel)
+{
+	return hcreate_r(nel, &htab);
+}
+
+void hdestroy(void)
+{
+	hdestroy_r(&htab);
+}
+
+static ENTRY *lookup(char *key, size_t hash, struct hsearch_data *htab)
+{
+	size_t i, j;
+	ENTRY *e;
+
+	for (i=hash,j=1; ; i+=j++) {
+		e = htab->__tab->entries + (i & htab->__tab->mask);
+		if (!e->key || strcmp(e->key, key) == 0)
+			break;
+	}
+	return e;
+}
+
+ENTRY *hsearch(ENTRY item, ACTION action)
+{
+	ENTRY *e;
+
+	hsearch_r(item, action, &e, &htab);
+	return e;
+}
+
+int hcreate_r(size_t nel, struct hsearch_data *htab)
+{
+	int r;
+
+	htab->__tab = calloc(1, sizeof *htab->__tab);
+	if (!htab->__tab)
+		return 0;
+	r = resize(nel, htab);
+	if (r == 0) {
+		free(htab->__tab);
+		htab->__tab = 0;
+	}
+	return r;
+}
+
+void hdestroy_r(struct hsearch_data *htab)
+{
+	if (htab->__tab) free(htab->__tab->entries);
+	free(htab->__tab);
+	htab->__tab = 0;
+}
+
+int hsearch_r(ENTRY item, ACTION action, ENTRY **retval, struct hsearch_data *htab)
+{
+	size_t hash = keyhash(item.key);
+	ENTRY *e = lookup(item.key, hash, htab);
+
+	if (e->key) {
+		*retval = e;
+		return 1;
+	}
+	if (action == FIND) {
+		*retval = 0;
+		return 0;
+	}
+	*e = item;
+	if (++htab->__tab->used > htab->__tab->mask - htab->__tab->mask/4) {
+		if (!resize(2*htab->__tab->used, htab)) {
+			htab->__tab->used--;
+			e->key = 0;
+			*retval = 0;
+			return 0;
+		}
+		e = lookup(item.key, hash, htab);
+	}
+	*retval = e;
+	return 1;
+}
+`,
+  "insque.c": `#include <search.h>
+
+struct node {
+	struct node *next;
+	struct node *prev;
+};
+
+void insque(void *element, void *pred)
+{
+	struct node *e = element;
+	struct node *p = pred;
+
+	if (!p) {
+		e->next = e->prev = 0;
+		return;
+	}
+	e->next = p->next;
+	e->prev = p;
+	p->next = e;
+	if (e->next)
+		e->next->prev = e;
+}
+
+void remque(void *element)
+{
+	struct node *e = element;
+
+	if (e->next)
+		e->next->prev = e->prev;
+	if (e->prev)
+		e->prev->next = e->next;
+}
+`,
+  "lsearch.c": `#include <search.h>
+#include <string.h>
+
+/* Local modification: upstream indexes the table through a pointer to a
+   variable-length array type, \`char (*p)[width]\`, which this compiler
+   rejects (no VLA support). Plain byte arithmetic computes the identical
+   addresses; behaviour is unchanged. */
+
+void *lsearch(const void *key, void *base, size_t *nelp, size_t width,
+	int (*compar)(const void *, const void *))
+{
+	char *p = base;
+	size_t n = *nelp;
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		if (compar(key, p + i*width) == 0)
+			return p + i*width;
+	*nelp = n+1;
+	return memcpy(p + n*width, key, width);
+}
+
+void *lfind(const void *key, const void *base, size_t *nelp,
+	size_t width, int (*compar)(const void *, const void *))
+{
+	char *p = (void *)base;
+	size_t n = *nelp;
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		if (compar(key, p + i*width) == 0)
+			return p + i*width;
+	return 0;
+}
+`,
+  "regcomp.c": `/*
+  regcomp.c - TRE POSIX compatible regex compilation functions.
+
+  Copyright (c) 2001-2009 Ville Laurikari <vl@iki.fi>
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions
+  are met:
+
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER AND CONTRIBUTORS
+  \`\`AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+  A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT
+  HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
+
+#include <string.h>
+#include <stdlib.h>
+#include <regex.h>
+#include <limits.h>
+#include <stdint.h>
+#include <ctype.h>
+
+#include "tre.h"
+
+#include <assert.h>
+
+/***********************************************************************
+ from tre-compile.h
+***********************************************************************/
+
+typedef struct {
+  int position;
+  int code_min;
+  int code_max;
+  int *tags;
+  int assertions;
+  tre_ctype_t class;
+  tre_ctype_t *neg_classes;
+  int backref;
+} tre_pos_and_tags_t;
+
+
+/***********************************************************************
+ from tre-ast.c and tre-ast.h
+***********************************************************************/
+
+/* The different AST node types. */
+typedef enum {
+  LITERAL,
+  CATENATION,
+  ITERATION,
+  UNION
+} tre_ast_type_t;
+
+/* Special subtypes of TRE_LITERAL. */
+#define EMPTY	  -1   /* Empty leaf (denotes empty string). */
+#define ASSERTION -2   /* Assertion leaf. */
+#define TAG	  -3   /* Tag leaf. */
+#define BACKREF	  -4   /* Back reference leaf. */
+
+#define IS_SPECIAL(x)	((x)->code_min < 0)
+#define IS_EMPTY(x)	((x)->code_min == EMPTY)
+#define IS_ASSERTION(x) ((x)->code_min == ASSERTION)
+#define IS_TAG(x)	((x)->code_min == TAG)
+#define IS_BACKREF(x)	((x)->code_min == BACKREF)
+
+
+/* A generic AST node.  All AST nodes consist of this node on the top
+   level with \`obj' pointing to the actual content. */
+typedef struct {
+  tre_ast_type_t type;   /* Type of the node. */
+  void *obj;             /* Pointer to actual node. */
+  int nullable;
+  int submatch_id;
+  int num_submatches;
+  int num_tags;
+  tre_pos_and_tags_t *firstpos;
+  tre_pos_and_tags_t *lastpos;
+} tre_ast_node_t;
+
+
+/* A "literal" node.  These are created for assertions, back references,
+   tags, matching parameter settings, and all expressions that match one
+   character. */
+typedef struct {
+  long code_min;
+  long code_max;
+  int position;
+  tre_ctype_t class;
+  tre_ctype_t *neg_classes;
+} tre_literal_t;
+
+/* A "catenation" node.	 These are created when two regexps are concatenated.
+   If there are more than one subexpressions in sequence, the \`left' part
+   holds all but the last, and \`right' part holds the last subexpression
+   (catenation is left associative). */
+typedef struct {
+  tre_ast_node_t *left;
+  tre_ast_node_t *right;
+} tre_catenation_t;
+
+/* An "iteration" node.	 These are created for the "*", "+", "?", and "{m,n}"
+   operators. */
+typedef struct {
+  /* Subexpression to match. */
+  tre_ast_node_t *arg;
+  /* Minimum number of consecutive matches. */
+  int min;
+  /* Maximum number of consecutive matches. */
+  int max;
+  /* If 0, match as many characters as possible, if 1 match as few as
+     possible.	Note that this does not always mean the same thing as
+     matching as many/few repetitions as possible. */
+  unsigned int minimal:1;
+} tre_iteration_t;
+
+/* An "union" node.  These are created for the "|" operator. */
+typedef struct {
+  tre_ast_node_t *left;
+  tre_ast_node_t *right;
+} tre_union_t;
+
+
+static tre_ast_node_t *
+tre_ast_new_node(tre_mem_t mem, int type, void *obj)
+{
+	tre_ast_node_t *node = tre_mem_calloc(mem, sizeof *node);
+	if (!node || !obj)
+		return 0;
+	node->obj = obj;
+	node->type = type;
+	node->nullable = -1;
+	node->submatch_id = -1;
+	return node;
+}
+
+static tre_ast_node_t *
+tre_ast_new_literal(tre_mem_t mem, int code_min, int code_max, int position)
+{
+	tre_ast_node_t *node;
+	tre_literal_t *lit;
+
+	lit = tre_mem_calloc(mem, sizeof *lit);
+	node = tre_ast_new_node(mem, LITERAL, lit);
+	if (!node)
+		return 0;
+	lit->code_min = code_min;
+	lit->code_max = code_max;
+	lit->position = position;
+	return node;
+}
+
+static tre_ast_node_t *
+tre_ast_new_iter(tre_mem_t mem, tre_ast_node_t *arg, int min, int max, int minimal)
+{
+	tre_ast_node_t *node;
+	tre_iteration_t *iter;
+
+	iter = tre_mem_calloc(mem, sizeof *iter);
+	node = tre_ast_new_node(mem, ITERATION, iter);
+	if (!node)
+		return 0;
+	iter->arg = arg;
+	iter->min = min;
+	iter->max = max;
+	iter->minimal = minimal;
+	node->num_submatches = arg->num_submatches;
+	return node;
+}
+
+static tre_ast_node_t *
+tre_ast_new_union(tre_mem_t mem, tre_ast_node_t *left, tre_ast_node_t *right)
+{
+	tre_ast_node_t *node;
+	tre_union_t *un;
+
+	if (!left)
+		return right;
+	un = tre_mem_calloc(mem, sizeof *un);
+	node = tre_ast_new_node(mem, UNION, un);
+	if (!node || !right)
+		return 0;
+	un->left = left;
+	un->right = right;
+	node->num_submatches = left->num_submatches + right->num_submatches;
+	return node;
+}
+
+static tre_ast_node_t *
+tre_ast_new_catenation(tre_mem_t mem, tre_ast_node_t *left, tre_ast_node_t *right)
+{
+	tre_ast_node_t *node;
+	tre_catenation_t *cat;
+
+	if (!left)
+		return right;
+	cat = tre_mem_calloc(mem, sizeof *cat);
+	node = tre_ast_new_node(mem, CATENATION, cat);
+	if (!node)
+		return 0;
+	cat->left = left;
+	cat->right = right;
+	node->num_submatches = left->num_submatches + right->num_submatches;
+	return node;
+}
+
+
+/***********************************************************************
+ from tre-stack.c and tre-stack.h
+***********************************************************************/
+
+typedef struct tre_stack_rec tre_stack_t;
+
+/* Creates a new stack object.	\`size' is initial size in bytes, \`max_size'
+   is maximum size, and \`increment' specifies how much more space will be
+   allocated with realloc() if all space gets used up.	Returns the stack
+   object or NULL if out of memory. */
+static tre_stack_t *
+tre_stack_new(int size, int max_size, int increment);
+
+/* Frees the stack object. */
+static void
+tre_stack_destroy(tre_stack_t *s);
+
+/* Returns the current number of objects in the stack. */
+static int
+tre_stack_num_objects(tre_stack_t *s);
+
+/* Each tre_stack_push_*(tre_stack_t *s, <type> value) function pushes
+   \`value' on top of stack \`s'.  Returns REG_ESPACE if out of memory.
+   This tries to realloc() more space before failing if maximum size
+   has not yet been reached.  Returns REG_OK if successful. */
+#define declare_pushf(typetag, type)					      \\
+  static reg_errcode_t tre_stack_push_ ## typetag(tre_stack_t *s, type value)
+
+declare_pushf(voidptr, void *);
+declare_pushf(int, int);
+
+/* Each tre_stack_pop_*(tre_stack_t *s) function pops the topmost
+   element off of stack \`s' and returns it.  The stack must not be
+   empty. */
+#define declare_popf(typetag, type)		  \\
+  static type tre_stack_pop_ ## typetag(tre_stack_t *s)
+
+declare_popf(voidptr, void *);
+declare_popf(int, int);
+
+/* Just to save some typing. */
+#define STACK_PUSH(s, typetag, value)					      \\
+  do									      \\
+    {									      \\
+      status = tre_stack_push_ ## typetag(s, value);			      \\
+    }									      \\
+  while (/*CONSTCOND*/0)
+
+#define STACK_PUSHX(s, typetag, value)					      \\
+  {									      \\
+    status = tre_stack_push_ ## typetag(s, value);			      \\
+    if (status != REG_OK)						      \\
+      break;								      \\
+  }
+
+#define STACK_PUSHR(s, typetag, value)					      \\
+  {									      \\
+    reg_errcode_t _status;						      \\
+    _status = tre_stack_push_ ## typetag(s, value);			      \\
+    if (_status != REG_OK)						      \\
+      return _status;							      \\
+  }
+
+union tre_stack_item {
+  void *voidptr_value;
+  int int_value;
+};
+
+struct tre_stack_rec {
+  int size;
+  int max_size;
+  int increment;
+  int ptr;
+  union tre_stack_item *stack;
+};
+
+
+static tre_stack_t *
+tre_stack_new(int size, int max_size, int increment)
+{
+  tre_stack_t *s;
+
+  s = xmalloc(sizeof(*s));
+  if (s != NULL)
+    {
+      s->stack = xmalloc(sizeof(*s->stack) * size);
+      if (s->stack == NULL)
+	{
+	  xfree(s);
+	  return NULL;
+	}
+      s->size = size;
+      s->max_size = max_size;
+      s->increment = increment;
+      s->ptr = 0;
+    }
+  return s;
+}
+
+static void
+tre_stack_destroy(tre_stack_t *s)
+{
+  xfree(s->stack);
+  xfree(s);
+}
+
+static int
+tre_stack_num_objects(tre_stack_t *s)
+{
+  return s->ptr;
+}
+
+static reg_errcode_t
+tre_stack_push(tre_stack_t *s, union tre_stack_item value)
+{
+  if (s->ptr < s->size)
+    {
+      s->stack[s->ptr] = value;
+      s->ptr++;
+    }
+  else
+    {
+      if (s->size >= s->max_size)
+	{
+	  return REG_ESPACE;
+	}
+      else
+	{
+	  union tre_stack_item *new_buffer;
+	  int new_size;
+	  new_size = s->size + s->increment;
+	  if (new_size > s->max_size)
+	    new_size = s->max_size;
+	  new_buffer = xrealloc(s->stack, sizeof(*new_buffer) * new_size);
+	  if (new_buffer == NULL)
+	    {
+	      return REG_ESPACE;
+	    }
+	  assert(new_size > s->size);
+	  s->size = new_size;
+	  s->stack = new_buffer;
+	  tre_stack_push(s, value);
+	}
+    }
+  return REG_OK;
+}
+
+#define define_pushf(typetag, type)  \\
+  declare_pushf(typetag, type) {     \\
+    union tre_stack_item item;	     \\
+    item.typetag ## _value = value;  \\
+    return tre_stack_push(s, item);  \\
+}
+
+define_pushf(int, int)
+define_pushf(voidptr, void *)
+
+#define define_popf(typetag, type)		    \\
+  declare_popf(typetag, type) {			    \\
+    return s->stack[--s->ptr].typetag ## _value;    \\
+  }
+
+define_popf(int, int)
+define_popf(voidptr, void *)
+
+
+/***********************************************************************
+ from tre-parse.c and tre-parse.h
+***********************************************************************/
+
+/* Parse context. */
+typedef struct {
+	/* Memory allocator. The AST is allocated using this. */
+	tre_mem_t mem;
+	/* Stack used for keeping track of regexp syntax. */
+	tre_stack_t *stack;
+	/* The parsed node after a parse function returns. */
+	tre_ast_node_t *n;
+	/* Position in the regexp pattern after a parse function returns. */
+	const char *s;
+	/* The first character of the last subexpression parsed. */
+	const char *start;
+	/* Current submatch ID. */
+	int submatch_id;
+	/* Current position (number of literal). */
+	int position;
+	/* The highest back reference or -1 if none seen so far. */
+	int max_backref;
+	/* Compilation flags. */
+	int cflags;
+} tre_parse_ctx_t;
+
+/* Some macros for expanding \\w, \\s, etc. */
+static const struct {
+	char c;
+	const char *expansion;
+} tre_macros[] = {
+	{'t', "\\t"}, {'n', "\\n"}, {'r', "\\r"},
+	{'f', "\\f"}, {'a', "\\a"}, {'e', "\\033"},
+	{'w', "[[:alnum:]_]"}, {'W', "[^[:alnum:]_]"}, {'s', "[[:space:]]"},
+	{'S', "[^[:space:]]"}, {'d', "[[:digit:]]"}, {'D', "[^[:digit:]]"},
+	{ 0, 0 }
+};
+
+/* Expands a macro delimited by \`regex' and \`regex_end' to \`buf', which
+   must have at least \`len' items.  Sets buf[0] to zero if the there
+   is no match in \`tre_macros'. */
+static const char *tre_expand_macro(const char *s)
+{
+	int i;
+	for (i = 0; tre_macros[i].c && tre_macros[i].c != *s; i++);
+	return tre_macros[i].expansion;
+}
+
+static int
+tre_compare_lit(const void *a, const void *b)
+{
+	const tre_literal_t *const *la = a;
+	const tre_literal_t *const *lb = b;
+	/* assumes the range of valid code_min is < INT_MAX */
+	return la[0]->code_min - lb[0]->code_min;
+}
+
+struct literals {
+	tre_mem_t mem;
+	tre_literal_t **a;
+	int len;
+	int cap;
+};
+
+static tre_literal_t *tre_new_lit(struct literals *p)
+{
+	tre_literal_t **a;
+	if (p->len >= p->cap) {
+		if (p->cap >= 1<<15)
+			return 0;
+		p->cap *= 2;
+		a = xrealloc(p->a, p->cap * sizeof *p->a);
+		if (!a)
+			return 0;
+		p->a = a;
+	}
+	a = p->a + p->len++;
+	*a = tre_mem_calloc(p->mem, sizeof **a);
+	return *a;
+}
+
+static int add_icase_literals(struct literals *ls, int min, int max)
+{
+	tre_literal_t *lit;
+	int b, e, c;
+	for (c=min; c<=max; ) {
+		/* assumes islower(c) and isupper(c) are exclusive
+		   and toupper(c)!=c if islower(c).
+		   multiple opposite case characters are not supported */
+		if (tre_islower(c)) {
+			b = e = tre_toupper(c);
+			for (c++, e++; c<=max; c++, e++)
+				if (tre_toupper(c) != e) break;
+		} else if (tre_isupper(c)) {
+			b = e = tre_tolower(c);
+			for (c++, e++; c<=max; c++, e++)
+				if (tre_tolower(c) != e) break;
+		} else {
+			c++;
+			continue;
+		}
+		lit = tre_new_lit(ls);
+		if (!lit)
+			return -1;
+		lit->code_min = b;
+		lit->code_max = e-1;
+		lit->position = -1;
+	}
+	return 0;
+}
+
+
+/* Maximum number of character classes in a negated bracket expression. */
+#define MAX_NEG_CLASSES 64
+
+struct neg {
+	int negate;
+	int len;
+	tre_ctype_t a[MAX_NEG_CLASSES];
+};
+
+// TODO: parse bracket into a set of non-overlapping [lo,hi] ranges
+
+/*
+bracket grammar:
+Bracket  =  '[' List ']'  |  '[^' List ']'
+List     =  Term  |  List Term
+Term     =  Char  |  Range  |  Chclass  |  Eqclass
+Range    =  Char '-' Char  |  Char '-' '-'
+Char     =  Coll  |  coll_single
+Meta     =  ']'  |  '-'
+Coll     =  '[.' coll_single '.]'  |  '[.' coll_multi '.]'  |  '[.' Meta '.]'
+Eqclass  =  '[=' coll_single '=]'  |  '[=' coll_multi '=]'
+Chclass  =  '[:' class ':]'
+
+coll_single is a single char collating element but it can be
+ '-' only at the beginning or end of a List and
+ ']' only at the beginning of a List and
+ '^' anywhere except after the openning '['
+*/
+
+static reg_errcode_t parse_bracket_terms(tre_parse_ctx_t *ctx, const char *s, struct literals *ls, struct neg *neg)
+{
+	const char *start = s;
+	tre_ctype_t class;
+	int min, max;
+	wchar_t wc;
+	int len;
+
+	for (;;) {
+		class = 0;
+		len = mbtowc(&wc, s, -1);
+		if (len <= 0)
+			return *s ? REG_BADPAT : REG_EBRACK;
+		if (*s == ']' && s != start) {
+			ctx->s = s+1;
+			return REG_OK;
+		}
+		if (*s == '-' && s != start && s[1] != ']' &&
+		    /* extension: [a-z--@] is accepted as [a-z]|[--@] */
+		    (s[1] != '-' || s[2] == ']'))
+			return REG_ERANGE;
+		if (*s == '[' && (s[1] == '.' || s[1] == '='))
+			/* collating symbols and equivalence classes are not supported */
+			return REG_ECOLLATE;
+		if (*s == '[' && s[1] == ':') {
+			char tmp[CHARCLASS_NAME_MAX+1];
+			s += 2;
+			for (len=0; len < CHARCLASS_NAME_MAX && s[len]; len++) {
+				if (s[len] == ':') {
+					memcpy(tmp, s, len);
+					tmp[len] = 0;
+					class = tre_ctype(tmp);
+					break;
+				}
+			}
+			if (!class || s[len+1] != ']')
+				return REG_ECTYPE;
+			min = 0;
+			max = TRE_CHAR_MAX;
+			s += len+2;
+		} else {
+			min = max = wc;
+			s += len;
+			if (*s == '-' && s[1] != ']') {
+				s++;
+				len = mbtowc(&wc, s, -1);
+				max = wc;
+				/* XXX - Should use collation order instead of
+				   encoding values in character ranges. */
+				if (len <= 0 || min > max)
+					return REG_ERANGE;
+				s += len;
+			}
+		}
+
+		if (class && neg->negate) {
+			if (neg->len >= MAX_NEG_CLASSES)
+				return REG_ESPACE;
+			neg->a[neg->len++] = class;
+		} else  {
+			tre_literal_t *lit = tre_new_lit(ls);
+			if (!lit)
+				return REG_ESPACE;
+			lit->code_min = min;
+			lit->code_max = max;
+			lit->class = class;
+			lit->position = -1;
+
+			/* Add opposite-case codepoints if REG_ICASE is present.
+			   It seems that POSIX requires that bracket negation
+			   should happen before case-folding, but most practical
+			   implementations do it the other way around. Changing
+			   the order would need efficient representation of
+			   case-fold ranges and bracket range sets even with
+			   simple patterns so this is ok for now. */
+			if (ctx->cflags & REG_ICASE && !class)
+				if (add_icase_literals(ls, min, max))
+					return REG_ESPACE;
+		}
+	}
+}
+
+static reg_errcode_t parse_bracket(tre_parse_ctx_t *ctx, const char *s)
+{
+	int i, max, min, negmax, negmin;
+	tre_ast_node_t *node = 0, *n;
+	tre_ctype_t *nc = 0;
+	tre_literal_t *lit;
+	struct literals ls;
+	struct neg neg;
+	reg_errcode_t err;
+
+	ls.mem = ctx->mem;
+	ls.len = 0;
+	ls.cap = 32;
+	ls.a = xmalloc(ls.cap * sizeof *ls.a);
+	if (!ls.a)
+		return REG_ESPACE;
+	neg.len = 0;
+	neg.negate = *s == '^';
+	if (neg.negate)
+		s++;
+
+	err = parse_bracket_terms(ctx, s, &ls, &neg);
+	if (err != REG_OK)
+		goto parse_bracket_done;
+
+	if (neg.negate) {
+		/*
+		 * With REG_NEWLINE, POSIX requires that newlines are not matched by
+		 * any form of a non-matching list.
+		 */
+		if (ctx->cflags & REG_NEWLINE) {
+			lit = tre_new_lit(&ls);
+			if (!lit) {
+				err = REG_ESPACE;
+				goto parse_bracket_done;
+			}
+			lit->code_min = '\\n';
+			lit->code_max = '\\n';
+			lit->position = -1;
+		}
+		/* Sort the array if we need to negate it. */
+		qsort(ls.a, ls.len, sizeof *ls.a, tre_compare_lit);
+		/* extra lit for the last negated range */
+		lit = tre_new_lit(&ls);
+		if (!lit) {
+			err = REG_ESPACE;
+			goto parse_bracket_done;
+		}
+		lit->code_min = TRE_CHAR_MAX+1;
+		lit->code_max = TRE_CHAR_MAX+1;
+		lit->position = -1;
+		/* negated classes */
+		if (neg.len) {
+			nc = tre_mem_alloc(ctx->mem, (neg.len+1)*sizeof *neg.a);
+			if (!nc) {
+				err = REG_ESPACE;
+				goto parse_bracket_done;
+			}
+			memcpy(nc, neg.a, neg.len*sizeof *neg.a);
+			nc[neg.len] = 0;
+		}
+	}
+
+	/* Build a union of the items in the array, negated if necessary. */
+	negmax = negmin = 0;
+	for (i = 0; i < ls.len; i++) {
+		lit = ls.a[i];
+		min = lit->code_min;
+		max = lit->code_max;
+		if (neg.negate) {
+			if (min <= negmin) {
+				/* Overlap. */
+				negmin = MAX(max + 1, negmin);
+				continue;
+			}
+			negmax = min - 1;
+			lit->code_min = negmin;
+			lit->code_max = negmax;
+			negmin = max + 1;
+		}
+		lit->position = ctx->position;
+		lit->neg_classes = nc;
+		n = tre_ast_new_node(ctx->mem, LITERAL, lit);
+		node = tre_ast_new_union(ctx->mem, node, n);
+		if (!node) {
+			err = REG_ESPACE;
+			break;
+		}
+	}
+
+parse_bracket_done:
+	xfree(ls.a);
+	ctx->position++;
+	ctx->n = node;
+	return err;
+}
+
+static const char *parse_dup_count(const char *s, int *n)
+{
+	*n = -1;
+	if (!isdigit(*s))
+		return s;
+	*n = 0;
+	for (;;) {
+		*n = 10 * *n + (*s - '0');
+		s++;
+		if (!isdigit(*s) || *n > RE_DUP_MAX)
+			break;
+	}
+	return s;
+}
+
+static const char *parse_dup(const char *s, int ere, int *pmin, int *pmax)
+{
+	int min, max;
+
+	s = parse_dup_count(s, &min);
+	if (*s == ',')
+		s = parse_dup_count(s+1, &max);
+	else
+		max = min;
+
+	if (
+		(max < min && max >= 0) ||
+		max > RE_DUP_MAX ||
+		min > RE_DUP_MAX ||
+		min < 0 ||
+		(!ere && *s++ != '\\\\') ||
+		*s++ != '}'
+	)
+		return 0;
+	*pmin = min;
+	*pmax = max;
+	return s;
+}
+
+static int hexval(unsigned c)
+{
+	if (c-'0'<10) return c-'0';
+	c |= 32;
+	if (c-'a'<6) return c-'a'+10;
+	return -1;
+}
+
+static reg_errcode_t marksub(tre_parse_ctx_t *ctx, tre_ast_node_t *node, int subid)
+{
+	if (node->submatch_id >= 0) {
+		tre_ast_node_t *n = tre_ast_new_literal(ctx->mem, EMPTY, -1, -1);
+		if (!n)
+			return REG_ESPACE;
+		n = tre_ast_new_catenation(ctx->mem, n, node);
+		if (!n)
+			return REG_ESPACE;
+		n->num_submatches = node->num_submatches;
+		node = n;
+	}
+	node->submatch_id = subid;
+	node->num_submatches++;
+	ctx->n = node;
+	return REG_OK;
+}
+
+/*
+BRE grammar:
+Regex  =  Branch  |  '^'  |  '$'  |  '^$'  |  '^' Branch  |  Branch '$'  |  '^' Branch '$'
+Branch =  Atom  |  Branch Atom
+Atom   =  char  |  quoted_char  |  '.'  |  Bracket  |  Atom Dup  |  '\\(' Branch '\\)'  |  back_ref
+Dup    =  '*'  |  '\\{' Count '\\}'  |  '\\{' Count ',\\}'  |  '\\{' Count ',' Count '\\}'
+
+(leading ^ and trailing $ in a sub expr may be an anchor or literal as well)
+
+ERE grammar:
+Regex  =  Branch  |  Regex '|' Branch
+Branch =  Atom  |  Branch Atom
+Atom   =  char  |  quoted_char  |  '.'  |  Bracket  |  Atom Dup  |  '(' Regex ')'  |  '^'  |  '$'
+Dup    =  '*'  |  '+'  |  '?'  |  '{' Count '}'  |  '{' Count ',}'  |  '{' Count ',' Count '}'
+
+(a*+?, ^*, $+, \\X, {, (|a) are unspecified)
+*/
+
+static reg_errcode_t parse_atom(tre_parse_ctx_t *ctx, const char *s)
+{
+	int len, ere = ctx->cflags & REG_EXTENDED;
+	const char *p;
+	tre_ast_node_t *node;
+	wchar_t wc;
+	switch (*s) {
+	case '[':
+		return parse_bracket(ctx, s+1);
+	case '\\\\':
+		p = tre_expand_macro(s+1);
+		if (p) {
+			/* assume \\X expansion is a single atom */
+			reg_errcode_t err = parse_atom(ctx, p);
+			ctx->s = s+2;
+			return err;
+		}
+		/* extensions: \\b, \\B, \\<, \\>, \\xHH \\x{HHHH} */
+		switch (*++s) {
+		case 0:
+			return REG_EESCAPE;
+		case 'b':
+			node = tre_ast_new_literal(ctx->mem, ASSERTION, ASSERT_AT_WB, -1);
+			break;
+		case 'B':
+			node = tre_ast_new_literal(ctx->mem, ASSERTION, ASSERT_AT_WB_NEG, -1);
+			break;
+		case '<':
+			node = tre_ast_new_literal(ctx->mem, ASSERTION, ASSERT_AT_BOW, -1);
+			break;
+		case '>':
+			node = tre_ast_new_literal(ctx->mem, ASSERTION, ASSERT_AT_EOW, -1);
+			break;
+		case 'x':
+			s++;
+			int i, v = 0, c;
+			len = 2;
+			if (*s == '{') {
+				len = 8;
+				s++;
+			}
+			for (i=0; i<len && v<0x110000; i++) {
+				c = hexval(s[i]);
+				if (c < 0) break;
+				v = 16*v + c;
+			}
+			s += i;
+			if (len == 8) {
+				if (*s != '}')
+					return REG_EBRACE;
+				s++;
+			}
+			node = tre_ast_new_literal(ctx->mem, v, v, ctx->position++);
+			s--;
+			break;
+		case '{':
+		case '+':
+		case '?':
+			/* extension: treat \\+, \\? as repetitions in BRE */
+			/* reject repetitions after empty expression in BRE */
+			if (!ere)
+				return REG_BADRPT;
+		case '|':
+			/* extension: treat \\| as alternation in BRE */
+			if (!ere) {
+				node = tre_ast_new_literal(ctx->mem, EMPTY, -1, -1);
+				s--;
+				goto end;
+			}
+			/* fallthrough */
+		default:
+			if (!ere && (unsigned)*s-'1' < 9) {
+				/* back reference */
+				int val = *s - '0';
+				node = tre_ast_new_literal(ctx->mem, BACKREF, val, ctx->position++);
+				ctx->max_backref = MAX(val, ctx->max_backref);
+			} else {
+				/* extension: accept unknown escaped char
+				   as a literal */
+				goto parse_literal;
+			}
+		}
+		s++;
+		break;
+	case '.':
+		if (ctx->cflags & REG_NEWLINE) {
+			tre_ast_node_t *tmp1, *tmp2;
+			tmp1 = tre_ast_new_literal(ctx->mem, 0, '\\n'-1, ctx->position++);
+			tmp2 = tre_ast_new_literal(ctx->mem, '\\n'+1, TRE_CHAR_MAX, ctx->position++);
+			if (tmp1 && tmp2)
+				node = tre_ast_new_union(ctx->mem, tmp1, tmp2);
+			else
+				node = 0;
+		} else {
+			node = tre_ast_new_literal(ctx->mem, 0, TRE_CHAR_MAX, ctx->position++);
+		}
+		s++;
+		break;
+	case '^':
+		/* '^' has a special meaning everywhere in EREs, and at beginning of BRE. */
+		if (!ere && s != ctx->start)
+			goto parse_literal;
+		node = tre_ast_new_literal(ctx->mem, ASSERTION, ASSERT_AT_BOL, -1);
+		s++;
+		break;
+	case '$':
+		/* '$' is special everywhere in EREs, and at the end of a BRE subexpression. */
+		if (!ere && s[1] && (s[1]!='\\\\'|| (s[2]!=')' && s[2]!='|')))
+			goto parse_literal;
+		node = tre_ast_new_literal(ctx->mem, ASSERTION, ASSERT_AT_EOL, -1);
+		s++;
+		break;
+	case '*':
+	case '{':
+	case '+':
+	case '?':
+		/* reject repetitions after empty expression in ERE */
+		if (ere)
+			return REG_BADRPT;
+	case '|':
+		if (!ere)
+			goto parse_literal;
+	case 0:
+		node = tre_ast_new_literal(ctx->mem, EMPTY, -1, -1);
+		break;
+	default:
+parse_literal:
+		len = mbtowc(&wc, s, -1);
+		if (len < 0)
+			return REG_BADPAT;
+		if (ctx->cflags & REG_ICASE && (tre_isupper(wc) || tre_islower(wc))) {
+			tre_ast_node_t *tmp1, *tmp2;
+			/* multiple opposite case characters are not supported */
+			tmp1 = tre_ast_new_literal(ctx->mem, tre_toupper(wc), tre_toupper(wc), ctx->position);
+			tmp2 = tre_ast_new_literal(ctx->mem, tre_tolower(wc), tre_tolower(wc), ctx->position);
+			if (tmp1 && tmp2)
+				node = tre_ast_new_union(ctx->mem, tmp1, tmp2);
+			else
+				node = 0;
+		} else {
+			node = tre_ast_new_literal(ctx->mem, wc, wc, ctx->position);
+		}
+		ctx->position++;
+		s += len;
+		break;
+	}
+end:
+	if (!node)
+		return REG_ESPACE;
+	ctx->n = node;
+	ctx->s = s;
+	return REG_OK;
+}
+
+#define PUSHPTR(err, s, v) do { \\
+	if ((err = tre_stack_push_voidptr(s, v)) != REG_OK) \\
+		return err; \\
+} while(0)
+
+#define PUSHINT(err, s, v) do { \\
+	if ((err = tre_stack_push_int(s, v)) != REG_OK) \\
+		return err; \\
+} while(0)
+
+static reg_errcode_t tre_parse(tre_parse_ctx_t *ctx)
+{
+	tre_ast_node_t *nbranch=0, *nunion=0;
+	int ere = ctx->cflags & REG_EXTENDED;
+	const char *s = ctx->start;
+	int subid = 0;
+	int depth = 0;
+	reg_errcode_t err;
+	tre_stack_t *stack = ctx->stack;
+
+	PUSHINT(err, stack, subid++);
+	for (;;) {
+		if ((!ere && *s == '\\\\' && s[1] == '(') ||
+		    (ere && *s == '(')) {
+			PUSHPTR(err, stack, nunion);
+			PUSHPTR(err, stack, nbranch);
+			PUSHINT(err, stack, subid++);
+			s++;
+			if (!ere)
+				s++;
+			depth++;
+			nbranch = nunion = 0;
+			ctx->start = s;
+			continue;
+		}
+		if ((!ere && *s == '\\\\' && s[1] == ')') ||
+		    (ere && *s == ')' && depth)) {
+			ctx->n = tre_ast_new_literal(ctx->mem, EMPTY, -1, -1);
+			if (!ctx->n)
+				return REG_ESPACE;
+		} else {
+			err = parse_atom(ctx, s);
+			if (err != REG_OK)
+				return err;
+			s = ctx->s;
+		}
+
+	parse_iter:
+		for (;;) {
+			int min, max;
+
+			if (*s!='\\\\' && *s!='*') {
+				if (!ere)
+					break;
+				if (*s!='+' && *s!='?' && *s!='{')
+					break;
+			}
+			if (*s=='\\\\' && ere)
+				break;
+			/* extension: treat \\+, \\? as repetitions in BRE */
+			if (*s=='\\\\' && s[1]!='+' && s[1]!='?' && s[1]!='{')
+				break;
+			if (*s=='\\\\')
+				s++;
+
+			/* handle ^* at the start of a BRE. */
+			if (!ere && s==ctx->start+1 && s[-1]=='^')
+				break;
+
+			/* extension: multiple consecutive *+?{,} is unspecified,
+			   but (a+)+ has to be supported so accepting a++ makes
+			   sense, note however that the RE_DUP_MAX limit can be
+			   circumvented: (a{255}){255} uses a lot of memory.. */
+			if (*s=='{') {
+				s = parse_dup(s+1, ere, &min, &max);
+				if (!s)
+					return REG_BADBR;
+			} else {
+				min=0;
+				max=-1;
+				if (*s == '+')
+					min = 1;
+				if (*s == '?')
+					max = 1;
+				s++;
+			}
+			if (max == 0)
+				ctx->n = tre_ast_new_literal(ctx->mem, EMPTY, -1, -1);
+			else
+				ctx->n = tre_ast_new_iter(ctx->mem, ctx->n, min, max, 0);
+			if (!ctx->n)
+				return REG_ESPACE;
+		}
+
+		nbranch = tre_ast_new_catenation(ctx->mem, nbranch, ctx->n);
+		if ((ere && *s == '|') ||
+		    (ere && *s == ')' && depth) ||
+		    (!ere && *s == '\\\\' && s[1] == ')') ||
+		    /* extension: treat \\| as alternation in BRE */
+		    (!ere && *s == '\\\\' && s[1] == '|') ||
+		    !*s) {
+			/* extension: empty branch is unspecified (), (|a), (a|)
+			   here they are not rejected but match on empty string */
+			int c = *s;
+			nunion = tre_ast_new_union(ctx->mem, nunion, nbranch);
+			nbranch = 0;
+
+			if (c == '\\\\' && s[1] == '|') {
+				s+=2;
+				ctx->start = s;
+			} else if (c == '|') {
+				s++;
+				ctx->start = s;
+			} else {
+				if (c == '\\\\') {
+					if (!depth) return REG_EPAREN;
+					s+=2;
+				} else if (c == ')')
+					s++;
+				depth--;
+				err = marksub(ctx, nunion, tre_stack_pop_int(stack));
+				if (err != REG_OK)
+					return err;
+				if (!c && depth<0) {
+					ctx->submatch_id = subid;
+					return REG_OK;
+				}
+				if (!c || depth<0)
+					return REG_EPAREN;
+				nbranch = tre_stack_pop_voidptr(stack);
+				nunion = tre_stack_pop_voidptr(stack);
+				goto parse_iter;
+			}
+		}
+	}
+}
+
+
+/***********************************************************************
+ from tre-compile.c
+***********************************************************************/
+
+
+/*
+  TODO:
+   - Fix tre_ast_to_tnfa() to recurse using a stack instead of recursive
+     function calls.
+*/
+
+/*
+  Algorithms to setup tags so that submatch addressing can be done.
+*/
+
+
+/* Inserts a catenation node to the root of the tree given in \`node'.
+   As the left child a new tag with number \`tag_id' to \`node' is added,
+   and the right child is the old root. */
+static reg_errcode_t
+tre_add_tag_left(tre_mem_t mem, tre_ast_node_t *node, int tag_id)
+{
+  tre_catenation_t *c;
+
+  c = tre_mem_alloc(mem, sizeof(*c));
+  if (c == NULL)
+    return REG_ESPACE;
+  c->left = tre_ast_new_literal(mem, TAG, tag_id, -1);
+  if (c->left == NULL)
+    return REG_ESPACE;
+  c->right = tre_mem_alloc(mem, sizeof(tre_ast_node_t));
+  if (c->right == NULL)
+    return REG_ESPACE;
+
+  c->right->obj = node->obj;
+  c->right->type = node->type;
+  c->right->nullable = -1;
+  c->right->submatch_id = -1;
+  c->right->firstpos = NULL;
+  c->right->lastpos = NULL;
+  c->right->num_tags = 0;
+  c->right->num_submatches = 0;
+  node->obj = c;
+  node->type = CATENATION;
+  return REG_OK;
+}
+
+/* Inserts a catenation node to the root of the tree given in \`node'.
+   As the right child a new tag with number \`tag_id' to \`node' is added,
+   and the left child is the old root. */
+static reg_errcode_t
+tre_add_tag_right(tre_mem_t mem, tre_ast_node_t *node, int tag_id)
+{
+  tre_catenation_t *c;
+
+  c = tre_mem_alloc(mem, sizeof(*c));
+  if (c == NULL)
+    return REG_ESPACE;
+  c->right = tre_ast_new_literal(mem, TAG, tag_id, -1);
+  if (c->right == NULL)
+    return REG_ESPACE;
+  c->left = tre_mem_alloc(mem, sizeof(tre_ast_node_t));
+  if (c->left == NULL)
+    return REG_ESPACE;
+
+  c->left->obj = node->obj;
+  c->left->type = node->type;
+  c->left->nullable = -1;
+  c->left->submatch_id = -1;
+  c->left->firstpos = NULL;
+  c->left->lastpos = NULL;
+  c->left->num_tags = 0;
+  c->left->num_submatches = 0;
+  node->obj = c;
+  node->type = CATENATION;
+  return REG_OK;
+}
+
+typedef enum {
+  ADDTAGS_RECURSE,
+  ADDTAGS_AFTER_ITERATION,
+  ADDTAGS_AFTER_UNION_LEFT,
+  ADDTAGS_AFTER_UNION_RIGHT,
+  ADDTAGS_AFTER_CAT_LEFT,
+  ADDTAGS_AFTER_CAT_RIGHT,
+  ADDTAGS_SET_SUBMATCH_END
+} tre_addtags_symbol_t;
+
+
+typedef struct {
+  int tag;
+  int next_tag;
+} tre_tag_states_t;
+
+
+/* Go through \`regset' and set submatch data for submatches that are
+   using this tag. */
+static void
+tre_purge_regset(int *regset, tre_tnfa_t *tnfa, int tag)
+{
+  int i;
+
+  for (i = 0; regset[i] >= 0; i++)
+    {
+      int id = regset[i] / 2;
+      int start = !(regset[i] % 2);
+      if (start)
+	tnfa->submatch_data[id].so_tag = tag;
+      else
+	tnfa->submatch_data[id].eo_tag = tag;
+    }
+  regset[0] = -1;
+}
+
+
+/* Adds tags to appropriate locations in the parse tree in \`tree', so that
+   subexpressions marked for submatch addressing can be traced. */
+static reg_errcode_t
+tre_add_tags(tre_mem_t mem, tre_stack_t *stack, tre_ast_node_t *tree,
+	     tre_tnfa_t *tnfa)
+{
+  reg_errcode_t status = REG_OK;
+  tre_addtags_symbol_t symbol;
+  tre_ast_node_t *node = tree; /* Tree node we are currently looking at. */
+  int bottom = tre_stack_num_objects(stack);
+  /* True for first pass (counting number of needed tags) */
+  int first_pass = (mem == NULL || tnfa == NULL);
+  int *regset, *orig_regset;
+  int num_tags = 0; /* Total number of tags. */
+  int num_minimals = 0;	 /* Number of special minimal tags. */
+  int tag = 0;	    /* The tag that is to be added next. */
+  int next_tag = 1; /* Next tag to use after this one. */
+  int *parents;	    /* Stack of submatches the current submatch is
+		       contained in. */
+  int minimal_tag = -1; /* Tag that marks the beginning of a minimal match. */
+  tre_tag_states_t *saved_states;
+
+  tre_tag_direction_t direction = TRE_TAG_MINIMIZE;
+  if (!first_pass)
+    {
+      tnfa->end_tag = 0;
+      tnfa->minimal_tags[0] = -1;
+    }
+
+  regset = xmalloc(sizeof(*regset) * ((tnfa->num_submatches + 1) * 2));
+  if (regset == NULL)
+    return REG_ESPACE;
+  regset[0] = -1;
+  orig_regset = regset;
+
+  parents = xmalloc(sizeof(*parents) * (tnfa->num_submatches + 1));
+  if (parents == NULL)
+    {
+      xfree(regset);
+      return REG_ESPACE;
+    }
+  parents[0] = -1;
+
+  saved_states = xmalloc(sizeof(*saved_states) * (tnfa->num_submatches + 1));
+  if (saved_states == NULL)
+    {
+      xfree(regset);
+      xfree(parents);
+      return REG_ESPACE;
+    }
+  else
+    {
+      unsigned int i;
+      for (i = 0; i <= tnfa->num_submatches; i++)
+	saved_states[i].tag = -1;
+    }
+
+  STACK_PUSH(stack, voidptr, node);
+  STACK_PUSH(stack, int, ADDTAGS_RECURSE);
+
+  while (tre_stack_num_objects(stack) > bottom)
+    {
+      if (status != REG_OK)
+	break;
+
+      symbol = (tre_addtags_symbol_t)tre_stack_pop_int(stack);
+      switch (symbol)
+	{
+
+	case ADDTAGS_SET_SUBMATCH_END:
+	  {
+	    int id = tre_stack_pop_int(stack);
+	    int i;
+
+	    /* Add end of this submatch to regset. */
+	    for (i = 0; regset[i] >= 0; i++);
+	    regset[i] = id * 2 + 1;
+	    regset[i + 1] = -1;
+
+	    /* Pop this submatch from the parents stack. */
+	    for (i = 0; parents[i] >= 0; i++);
+	    parents[i - 1] = -1;
+	    break;
+	  }
+
+	case ADDTAGS_RECURSE:
+	  node = tre_stack_pop_voidptr(stack);
+
+	  if (node->submatch_id >= 0)
+	    {
+	      int id = node->submatch_id;
+	      int i;
+
+
+	      /* Add start of this submatch to regset. */
+	      for (i = 0; regset[i] >= 0; i++);
+	      regset[i] = id * 2;
+	      regset[i + 1] = -1;
+
+	      if (!first_pass)
+		{
+		  for (i = 0; parents[i] >= 0; i++);
+		  tnfa->submatch_data[id].parents = NULL;
+		  if (i > 0)
+		    {
+		      int *p = xmalloc(sizeof(*p) * (i + 1));
+		      if (p == NULL)
+			{
+			  status = REG_ESPACE;
+			  break;
+			}
+		      assert(tnfa->submatch_data[id].parents == NULL);
+		      tnfa->submatch_data[id].parents = p;
+		      for (i = 0; parents[i] >= 0; i++)
+			p[i] = parents[i];
+		      p[i] = -1;
+		    }
+		}
+
+	      /* Add end of this submatch to regset after processing this
+		 node. */
+	      STACK_PUSHX(stack, int, node->submatch_id);
+	      STACK_PUSHX(stack, int, ADDTAGS_SET_SUBMATCH_END);
+	    }
+
+	  switch (node->type)
+	    {
+	    case LITERAL:
+	      {
+		tre_literal_t *lit = node->obj;
+
+		if (!IS_SPECIAL(lit) || IS_BACKREF(lit))
+		  {
+		    int i;
+		    if (regset[0] >= 0)
+		      {
+			/* Regset is not empty, so add a tag before the
+			   literal or backref. */
+			if (!first_pass)
+			  {
+			    status = tre_add_tag_left(mem, node, tag);
+			    tnfa->tag_directions[tag] = direction;
+			    if (minimal_tag >= 0)
+			      {
+				for (i = 0; tnfa->minimal_tags[i] >= 0; i++);
+				tnfa->minimal_tags[i] = tag;
+				tnfa->minimal_tags[i + 1] = minimal_tag;
+				tnfa->minimal_tags[i + 2] = -1;
+				minimal_tag = -1;
+				num_minimals++;
+			      }
+			    tre_purge_regset(regset, tnfa, tag);
+			  }
+			else
+			  {
+			    node->num_tags = 1;
+			  }
+
+			regset[0] = -1;
+			tag = next_tag;
+			num_tags++;
+			next_tag++;
+		      }
+		  }
+		else
+		  {
+		    assert(!IS_TAG(lit));
+		  }
+		break;
+	      }
+	    case CATENATION:
+	      {
+		tre_catenation_t *cat = node->obj;
+		tre_ast_node_t *left = cat->left;
+		tre_ast_node_t *right = cat->right;
+		int reserved_tag = -1;
+
+
+		/* After processing right child. */
+		STACK_PUSHX(stack, voidptr, node);
+		STACK_PUSHX(stack, int, ADDTAGS_AFTER_CAT_RIGHT);
+
+		/* Process right child. */
+		STACK_PUSHX(stack, voidptr, right);
+		STACK_PUSHX(stack, int, ADDTAGS_RECURSE);
+
+		/* After processing left child. */
+		STACK_PUSHX(stack, int, next_tag + left->num_tags);
+		if (left->num_tags > 0 && right->num_tags > 0)
+		  {
+		    /* Reserve the next tag to the right child. */
+		    reserved_tag = next_tag;
+		    next_tag++;
+		  }
+		STACK_PUSHX(stack, int, reserved_tag);
+		STACK_PUSHX(stack, int, ADDTAGS_AFTER_CAT_LEFT);
+
+		/* Process left child. */
+		STACK_PUSHX(stack, voidptr, left);
+		STACK_PUSHX(stack, int, ADDTAGS_RECURSE);
+
+		}
+	      break;
+	    case ITERATION:
+	      {
+		tre_iteration_t *iter = node->obj;
+
+		if (first_pass)
+		  {
+		    STACK_PUSHX(stack, int, regset[0] >= 0 || iter->minimal);
+		  }
+		else
+		  {
+		    STACK_PUSHX(stack, int, tag);
+		    STACK_PUSHX(stack, int, iter->minimal);
+		  }
+		STACK_PUSHX(stack, voidptr, node);
+		STACK_PUSHX(stack, int, ADDTAGS_AFTER_ITERATION);
+
+		STACK_PUSHX(stack, voidptr, iter->arg);
+		STACK_PUSHX(stack, int, ADDTAGS_RECURSE);
+
+		/* Regset is not empty, so add a tag here. */
+		if (regset[0] >= 0 || iter->minimal)
+		  {
+		    if (!first_pass)
+		      {
+			int i;
+			status = tre_add_tag_left(mem, node, tag);
+			if (iter->minimal)
+			  tnfa->tag_directions[tag] = TRE_TAG_MAXIMIZE;
+			else
+			  tnfa->tag_directions[tag] = direction;
+			if (minimal_tag >= 0)
+			  {
+			    for (i = 0; tnfa->minimal_tags[i] >= 0; i++);
+			    tnfa->minimal_tags[i] = tag;
+			    tnfa->minimal_tags[i + 1] = minimal_tag;
+			    tnfa->minimal_tags[i + 2] = -1;
+			    minimal_tag = -1;
+			    num_minimals++;
+			  }
+			tre_purge_regset(regset, tnfa, tag);
+		      }
+
+		    regset[0] = -1;
+		    tag = next_tag;
+		    num_tags++;
+		    next_tag++;
+		  }
+		direction = TRE_TAG_MINIMIZE;
+	      }
+	      break;
+	    case UNION:
+	      {
+		tre_union_t *uni = node->obj;
+		tre_ast_node_t *left = uni->left;
+		tre_ast_node_t *right = uni->right;
+		int left_tag;
+		int right_tag;
+
+		if (regset[0] >= 0)
+		  {
+		    left_tag = next_tag;
+		    right_tag = next_tag + 1;
+		  }
+		else
+		  {
+		    left_tag = tag;
+		    right_tag = next_tag;
+		  }
+
+		/* After processing right child. */
+		STACK_PUSHX(stack, int, right_tag);
+		STACK_PUSHX(stack, int, left_tag);
+		STACK_PUSHX(stack, voidptr, regset);
+		STACK_PUSHX(stack, int, regset[0] >= 0);
+		STACK_PUSHX(stack, voidptr, node);
+		STACK_PUSHX(stack, voidptr, right);
+		STACK_PUSHX(stack, voidptr, left);
+		STACK_PUSHX(stack, int, ADDTAGS_AFTER_UNION_RIGHT);
+
+		/* Process right child. */
+		STACK_PUSHX(stack, voidptr, right);
+		STACK_PUSHX(stack, int, ADDTAGS_RECURSE);
+
+		/* After processing left child. */
+		STACK_PUSHX(stack, int, ADDTAGS_AFTER_UNION_LEFT);
+
+		/* Process left child. */
+		STACK_PUSHX(stack, voidptr, left);
+		STACK_PUSHX(stack, int, ADDTAGS_RECURSE);
+
+		/* Regset is not empty, so add a tag here. */
+		if (regset[0] >= 0)
+		  {
+		    if (!first_pass)
+		      {
+			int i;
+			status = tre_add_tag_left(mem, node, tag);
+			tnfa->tag_directions[tag] = direction;
+			if (minimal_tag >= 0)
+			  {
+			    for (i = 0; tnfa->minimal_tags[i] >= 0; i++);
+			    tnfa->minimal_tags[i] = tag;
+			    tnfa->minimal_tags[i + 1] = minimal_tag;
+			    tnfa->minimal_tags[i + 2] = -1;
+			    minimal_tag = -1;
+			    num_minimals++;
+			  }
+			tre_purge_regset(regset, tnfa, tag);
+		      }
+
+		    regset[0] = -1;
+		    tag = next_tag;
+		    num_tags++;
+		    next_tag++;
+		  }
+
+		if (node->num_submatches > 0)
+		  {
+		    /* The next two tags are reserved for markers. */
+		    next_tag++;
+		    tag = next_tag;
+		    next_tag++;
+		  }
+
+		break;
+	      }
+	    }
+
+	  if (node->submatch_id >= 0)
+	    {
+	      int i;
+	      /* Push this submatch on the parents stack. */
+	      for (i = 0; parents[i] >= 0; i++);
+	      parents[i] = node->submatch_id;
+	      parents[i + 1] = -1;
+	    }
+
+	  break; /* end case: ADDTAGS_RECURSE */
+
+	case ADDTAGS_AFTER_ITERATION:
+	  {
+	    int minimal = 0;
+	    int enter_tag;
+	    node = tre_stack_pop_voidptr(stack);
+	    if (first_pass)
+	      {
+		node->num_tags = ((tre_iteration_t *)node->obj)->arg->num_tags
+		  + tre_stack_pop_int(stack);
+		minimal_tag = -1;
+	      }
+	    else
+	      {
+		minimal = tre_stack_pop_int(stack);
+		enter_tag = tre_stack_pop_int(stack);
+		if (minimal)
+		  minimal_tag = enter_tag;
+	      }
+
+	    if (!first_pass)
+	      {
+		if (minimal)
+		  direction = TRE_TAG_MINIMIZE;
+		else
+		  direction = TRE_TAG_MAXIMIZE;
+	      }
+	    break;
+	  }
+
+	case ADDTAGS_AFTER_CAT_LEFT:
+	  {
+	    int new_tag = tre_stack_pop_int(stack);
+	    next_tag = tre_stack_pop_int(stack);
+	    if (new_tag >= 0)
+	      {
+		tag = new_tag;
+	      }
+	    break;
+	  }
+
+	case ADDTAGS_AFTER_CAT_RIGHT:
+	  node = tre_stack_pop_voidptr(stack);
+	  if (first_pass)
+	    node->num_tags = ((tre_catenation_t *)node->obj)->left->num_tags
+	      + ((tre_catenation_t *)node->obj)->right->num_tags;
+	  break;
+
+	case ADDTAGS_AFTER_UNION_LEFT:
+	  /* Lift the bottom of the \`regset' array so that when processing
+	     the right operand the items currently in the array are
+	     invisible.	 The original bottom was saved at ADDTAGS_UNION and
+	     will be restored at ADDTAGS_AFTER_UNION_RIGHT below. */
+	  while (*regset >= 0)
+	    regset++;
+	  break;
+
+	case ADDTAGS_AFTER_UNION_RIGHT:
+	  {
+	    int added_tags, tag_left, tag_right;
+	    tre_ast_node_t *left = tre_stack_pop_voidptr(stack);
+	    tre_ast_node_t *right = tre_stack_pop_voidptr(stack);
+	    node = tre_stack_pop_voidptr(stack);
+	    added_tags = tre_stack_pop_int(stack);
+	    if (first_pass)
+	      {
+		node->num_tags = ((tre_union_t *)node->obj)->left->num_tags
+		  + ((tre_union_t *)node->obj)->right->num_tags + added_tags
+		  + ((node->num_submatches > 0) ? 2 : 0);
+	      }
+	    regset = tre_stack_pop_voidptr(stack);
+	    tag_left = tre_stack_pop_int(stack);
+	    tag_right = tre_stack_pop_int(stack);
+
+	    /* Add tags after both children, the left child gets a smaller
+	       tag than the right child.  This guarantees that we prefer
+	       the left child over the right child. */
+	    /* XXX - This is not always necessary (if the children have
+	       tags which must be seen for every match of that child). */
+	    /* XXX - Check if this is the only place where tre_add_tag_right
+	       is used.	 If so, use tre_add_tag_left (putting the tag before
+	       the child as opposed after the child) and throw away
+	       tre_add_tag_right. */
+	    if (node->num_submatches > 0)
+	      {
+		if (!first_pass)
+		  {
+		    status = tre_add_tag_right(mem, left, tag_left);
+		    tnfa->tag_directions[tag_left] = TRE_TAG_MAXIMIZE;
+		    if (status == REG_OK)
+		      status = tre_add_tag_right(mem, right, tag_right);
+		    tnfa->tag_directions[tag_right] = TRE_TAG_MAXIMIZE;
+		  }
+		num_tags += 2;
+	      }
+	    direction = TRE_TAG_MAXIMIZE;
+	    break;
+	  }
+
+	default:
+	  assert(0);
+	  break;
+
+	} /* end switch(symbol) */
+    } /* end while(tre_stack_num_objects(stack) > bottom) */
+
+  if (!first_pass)
+    tre_purge_regset(regset, tnfa, tag);
+
+  if (!first_pass && minimal_tag >= 0)
+    {
+      int i;
+      for (i = 0; tnfa->minimal_tags[i] >= 0; i++);
+      tnfa->minimal_tags[i] = tag;
+      tnfa->minimal_tags[i + 1] = minimal_tag;
+      tnfa->minimal_tags[i + 2] = -1;
+      minimal_tag = -1;
+      num_minimals++;
+    }
+
+  assert(tree->num_tags == num_tags);
+  tnfa->end_tag = num_tags;
+  tnfa->num_tags = num_tags;
+  tnfa->num_minimals = num_minimals;
+  xfree(orig_regset);
+  xfree(parents);
+  xfree(saved_states);
+  return status;
+}
+
+
+
+/*
+  AST to TNFA compilation routines.
+*/
+
+typedef enum {
+  COPY_RECURSE,
+  COPY_SET_RESULT_PTR
+} tre_copyast_symbol_t;
+
+/* Flags for tre_copy_ast(). */
+#define COPY_REMOVE_TAGS	 1
+#define COPY_MAXIMIZE_FIRST_TAG	 2
+
+static reg_errcode_t
+tre_copy_ast(tre_mem_t mem, tre_stack_t *stack, tre_ast_node_t *ast,
+	     int flags, int *pos_add, tre_tag_direction_t *tag_directions,
+	     tre_ast_node_t **copy, int *max_pos)
+{
+  reg_errcode_t status = REG_OK;
+  int bottom = tre_stack_num_objects(stack);
+  int num_copied = 0;
+  int first_tag = 1;
+  tre_ast_node_t **result = copy;
+  tre_copyast_symbol_t symbol;
+
+  STACK_PUSH(stack, voidptr, ast);
+  STACK_PUSH(stack, int, COPY_RECURSE);
+
+  while (status == REG_OK && tre_stack_num_objects(stack) > bottom)
+    {
+      tre_ast_node_t *node;
+      if (status != REG_OK)
+	break;
+
+      symbol = (tre_copyast_symbol_t)tre_stack_pop_int(stack);
+      switch (symbol)
+	{
+	case COPY_SET_RESULT_PTR:
+	  result = tre_stack_pop_voidptr(stack);
+	  break;
+	case COPY_RECURSE:
+	  node = tre_stack_pop_voidptr(stack);
+	  switch (node->type)
+	    {
+	    case LITERAL:
+	      {
+		tre_literal_t *lit = node->obj;
+		int pos = lit->position;
+		int min = lit->code_min;
+		int max = lit->code_max;
+		if (!IS_SPECIAL(lit) || IS_BACKREF(lit))
+		  {
+		    /* XXX - e.g. [ab] has only one position but two
+		       nodes, so we are creating holes in the state space
+		       here.  Not fatal, just wastes memory. */
+		    pos += *pos_add;
+		    num_copied++;
+		  }
+		else if (IS_TAG(lit) && (flags & COPY_REMOVE_TAGS))
+		  {
+		    /* Change this tag to empty. */
+		    min = EMPTY;
+		    max = pos = -1;
+		  }
+		else if (IS_TAG(lit) && (flags & COPY_MAXIMIZE_FIRST_TAG)
+			 && first_tag)
+		  {
+		    /* Maximize the first tag. */
+		    tag_directions[max] = TRE_TAG_MAXIMIZE;
+		    first_tag = 0;
+		  }
+		*result = tre_ast_new_literal(mem, min, max, pos);
+		if (*result == NULL)
+		  status = REG_ESPACE;
+		else {
+		  tre_literal_t *p = (*result)->obj;
+		  p->class = lit->class;
+		  p->neg_classes = lit->neg_classes;
+		}
+
+		if (pos > *max_pos)
+		  *max_pos = pos;
+		break;
+	      }
+	    case UNION:
+	      {
+		tre_union_t *uni = node->obj;
+		tre_union_t *tmp;
+		*result = tre_ast_new_union(mem, uni->left, uni->right);
+		if (*result == NULL)
+		  {
+		    status = REG_ESPACE;
+		    break;
+		  }
+		tmp = (*result)->obj;
+		result = &tmp->left;
+		STACK_PUSHX(stack, voidptr, uni->right);
+		STACK_PUSHX(stack, int, COPY_RECURSE);
+		STACK_PUSHX(stack, voidptr, &tmp->right);
+		STACK_PUSHX(stack, int, COPY_SET_RESULT_PTR);
+		STACK_PUSHX(stack, voidptr, uni->left);
+		STACK_PUSHX(stack, int, COPY_RECURSE);
+		break;
+	      }
+	    case CATENATION:
+	      {
+		tre_catenation_t *cat = node->obj;
+		tre_catenation_t *tmp;
+		*result = tre_ast_new_catenation(mem, cat->left, cat->right);
+		if (*result == NULL)
+		  {
+		    status = REG_ESPACE;
+		    break;
+		  }
+		tmp = (*result)->obj;
+		tmp->left = NULL;
+		tmp->right = NULL;
+		result = &tmp->left;
+
+		STACK_PUSHX(stack, voidptr, cat->right);
+		STACK_PUSHX(stack, int, COPY_RECURSE);
+		STACK_PUSHX(stack, voidptr, &tmp->right);
+		STACK_PUSHX(stack, int, COPY_SET_RESULT_PTR);
+		STACK_PUSHX(stack, voidptr, cat->left);
+		STACK_PUSHX(stack, int, COPY_RECURSE);
+		break;
+	      }
+	    case ITERATION:
+	      {
+		tre_iteration_t *iter = node->obj;
+		STACK_PUSHX(stack, voidptr, iter->arg);
+		STACK_PUSHX(stack, int, COPY_RECURSE);
+		*result = tre_ast_new_iter(mem, iter->arg, iter->min,
+					   iter->max, iter->minimal);
+		if (*result == NULL)
+		  {
+		    status = REG_ESPACE;
+		    break;
+		  }
+		iter = (*result)->obj;
+		result = &iter->arg;
+		break;
+	      }
+	    default:
+	      assert(0);
+	      break;
+	    }
+	  break;
+	}
+    }
+  *pos_add += num_copied;
+  return status;
+}
+
+typedef enum {
+  EXPAND_RECURSE,
+  EXPAND_AFTER_ITER
+} tre_expand_ast_symbol_t;
+
+/* Expands each iteration node that has a finite nonzero minimum or maximum
+   iteration count to a catenated sequence of copies of the node. */
+static reg_errcode_t
+tre_expand_ast(tre_mem_t mem, tre_stack_t *stack, tre_ast_node_t *ast,
+	       int *position, tre_tag_direction_t *tag_directions)
+{
+  reg_errcode_t status = REG_OK;
+  int bottom = tre_stack_num_objects(stack);
+  int pos_add = 0;
+  int pos_add_total = 0;
+  int max_pos = 0;
+  int iter_depth = 0;
+
+  STACK_PUSHR(stack, voidptr, ast);
+  STACK_PUSHR(stack, int, EXPAND_RECURSE);
+  while (status == REG_OK && tre_stack_num_objects(stack) > bottom)
+    {
+      tre_ast_node_t *node;
+      tre_expand_ast_symbol_t symbol;
+
+      if (status != REG_OK)
+	break;
+
+      symbol = (tre_expand_ast_symbol_t)tre_stack_pop_int(stack);
+      node = tre_stack_pop_voidptr(stack);
+      switch (symbol)
+	{
+	case EXPAND_RECURSE:
+	  switch (node->type)
+	    {
+	    case LITERAL:
+	      {
+		tre_literal_t *lit= node->obj;
+		if (!IS_SPECIAL(lit) || IS_BACKREF(lit))
+		  {
+		    lit->position += pos_add;
+		    if (lit->position > max_pos)
+		      max_pos = lit->position;
+		  }
+		break;
+	      }
+	    case UNION:
+	      {
+		tre_union_t *uni = node->obj;
+		STACK_PUSHX(stack, voidptr, uni->right);
+		STACK_PUSHX(stack, int, EXPAND_RECURSE);
+		STACK_PUSHX(stack, voidptr, uni->left);
+		STACK_PUSHX(stack, int, EXPAND_RECURSE);
+		break;
+	      }
+	    case CATENATION:
+	      {
+		tre_catenation_t *cat = node->obj;
+		STACK_PUSHX(stack, voidptr, cat->right);
+		STACK_PUSHX(stack, int, EXPAND_RECURSE);
+		STACK_PUSHX(stack, voidptr, cat->left);
+		STACK_PUSHX(stack, int, EXPAND_RECURSE);
+		break;
+	      }
+	    case ITERATION:
+	      {
+		tre_iteration_t *iter = node->obj;
+		STACK_PUSHX(stack, int, pos_add);
+		STACK_PUSHX(stack, voidptr, node);
+		STACK_PUSHX(stack, int, EXPAND_AFTER_ITER);
+		STACK_PUSHX(stack, voidptr, iter->arg);
+		STACK_PUSHX(stack, int, EXPAND_RECURSE);
+		/* If we are going to expand this node at EXPAND_AFTER_ITER
+		   then don't increase the \`pos' fields of the nodes now, it
+		   will get done when expanding. */
+		if (iter->min > 1 || iter->max > 1)
+		  pos_add = 0;
+		iter_depth++;
+		break;
+	      }
+	    default:
+	      assert(0);
+	      break;
+	    }
+	  break;
+	case EXPAND_AFTER_ITER:
+	  {
+	    tre_iteration_t *iter = node->obj;
+	    int pos_add_last;
+	    pos_add = tre_stack_pop_int(stack);
+	    pos_add_last = pos_add;
+	    if (iter->min > 1 || iter->max > 1)
+	      {
+		tre_ast_node_t *seq1 = NULL, *seq2 = NULL;
+		int j;
+		int pos_add_save = pos_add;
+
+		/* Create a catenated sequence of copies of the node. */
+		for (j = 0; j < iter->min; j++)
+		  {
+		    tre_ast_node_t *copy;
+		    /* Remove tags from all but the last copy. */
+		    int flags = ((j + 1 < iter->min)
+				 ? COPY_REMOVE_TAGS
+				 : COPY_MAXIMIZE_FIRST_TAG);
+		    pos_add_save = pos_add;
+		    status = tre_copy_ast(mem, stack, iter->arg, flags,
+					  &pos_add, tag_directions, &copy,
+					  &max_pos);
+		    if (status != REG_OK)
+		      return status;
+		    if (seq1 != NULL)
+		      seq1 = tre_ast_new_catenation(mem, seq1, copy);
+		    else
+		      seq1 = copy;
+		    if (seq1 == NULL)
+		      return REG_ESPACE;
+		  }
+
+		if (iter->max == -1)
+		  {
+		    /* No upper limit. */
+		    pos_add_save = pos_add;
+		    status = tre_copy_ast(mem, stack, iter->arg, 0,
+					  &pos_add, NULL, &seq2, &max_pos);
+		    if (status != REG_OK)
+		      return status;
+		    seq2 = tre_ast_new_iter(mem, seq2, 0, -1, 0);
+		    if (seq2 == NULL)
+		      return REG_ESPACE;
+		  }
+		else
+		  {
+		    for (j = iter->min; j < iter->max; j++)
+		      {
+			tre_ast_node_t *tmp, *copy;
+			pos_add_save = pos_add;
+			status = tre_copy_ast(mem, stack, iter->arg, 0,
+					      &pos_add, NULL, &copy, &max_pos);
+			if (status != REG_OK)
+			  return status;
+			if (seq2 != NULL)
+			  seq2 = tre_ast_new_catenation(mem, copy, seq2);
+			else
+			  seq2 = copy;
+			if (seq2 == NULL)
+			  return REG_ESPACE;
+			tmp = tre_ast_new_literal(mem, EMPTY, -1, -1);
+			if (tmp == NULL)
+			  return REG_ESPACE;
+			seq2 = tre_ast_new_union(mem, tmp, seq2);
+			if (seq2 == NULL)
+			  return REG_ESPACE;
+		      }
+		  }
+
+		pos_add = pos_add_save;
+		if (seq1 == NULL)
+		  seq1 = seq2;
+		else if (seq2 != NULL)
+		  seq1 = tre_ast_new_catenation(mem, seq1, seq2);
+		if (seq1 == NULL)
+		  return REG_ESPACE;
+		node->obj = seq1->obj;
+		node->type = seq1->type;
+	      }
+
+	    iter_depth--;
+	    pos_add_total += pos_add - pos_add_last;
+	    if (iter_depth == 0)
+	      pos_add = pos_add_total;
+
+	    break;
+	  }
+	default:
+	  assert(0);
+	  break;
+	}
+    }
+
+  *position += pos_add_total;
+
+  /* \`max_pos' should never be larger than \`*position' if the above
+     code works, but just an extra safeguard let's make sure
+     \`*position' is set large enough so enough memory will be
+     allocated for the transition table. */
+  if (max_pos > *position)
+    *position = max_pos;
+
+  return status;
+}
+
+static tre_pos_and_tags_t *
+tre_set_empty(tre_mem_t mem)
+{
+  tre_pos_and_tags_t *new_set;
+
+  new_set = tre_mem_calloc(mem, sizeof(*new_set));
+  if (new_set == NULL)
+    return NULL;
+
+  new_set[0].position = -1;
+  new_set[0].code_min = -1;
+  new_set[0].code_max = -1;
+
+  return new_set;
+}
+
+static tre_pos_and_tags_t *
+tre_set_one(tre_mem_t mem, int position, int code_min, int code_max,
+	    tre_ctype_t class, tre_ctype_t *neg_classes, int backref)
+{
+  tre_pos_and_tags_t *new_set;
+
+  new_set = tre_mem_calloc(mem, sizeof(*new_set) * 2);
+  if (new_set == NULL)
+    return NULL;
+
+  new_set[0].position = position;
+  new_set[0].code_min = code_min;
+  new_set[0].code_max = code_max;
+  new_set[0].class = class;
+  new_set[0].neg_classes = neg_classes;
+  new_set[0].backref = backref;
+  new_set[1].position = -1;
+  new_set[1].code_min = -1;
+  new_set[1].code_max = -1;
+
+  return new_set;
+}
+
+static tre_pos_and_tags_t *
+tre_set_union(tre_mem_t mem, tre_pos_and_tags_t *set1, tre_pos_and_tags_t *set2,
+	      int *tags, int assertions)
+{
+  int s1, s2, i, j;
+  tre_pos_and_tags_t *new_set;
+  int *new_tags;
+  int num_tags;
+
+  for (num_tags = 0; tags != NULL && tags[num_tags] >= 0; num_tags++);
+  for (s1 = 0; set1[s1].position >= 0; s1++);
+  for (s2 = 0; set2[s2].position >= 0; s2++);
+  new_set = tre_mem_calloc(mem, sizeof(*new_set) * (s1 + s2 + 1));
+  if (!new_set )
+    return NULL;
+
+  for (s1 = 0; set1[s1].position >= 0; s1++)
+    {
+      new_set[s1].position = set1[s1].position;
+      new_set[s1].code_min = set1[s1].code_min;
+      new_set[s1].code_max = set1[s1].code_max;
+      new_set[s1].assertions = set1[s1].assertions | assertions;
+      new_set[s1].class = set1[s1].class;
+      new_set[s1].neg_classes = set1[s1].neg_classes;
+      new_set[s1].backref = set1[s1].backref;
+      if (set1[s1].tags == NULL && tags == NULL)
+	new_set[s1].tags = NULL;
+      else
+	{
+	  for (i = 0; set1[s1].tags != NULL && set1[s1].tags[i] >= 0; i++);
+	  new_tags = tre_mem_alloc(mem, (sizeof(*new_tags)
+					 * (i + num_tags + 1)));
+	  if (new_tags == NULL)
+	    return NULL;
+	  for (j = 0; j < i; j++)
+	    new_tags[j] = set1[s1].tags[j];
+	  for (i = 0; i < num_tags; i++)
+	    new_tags[j + i] = tags[i];
+	  new_tags[j + i] = -1;
+	  new_set[s1].tags = new_tags;
+	}
+    }
+
+  for (s2 = 0; set2[s2].position >= 0; s2++)
+    {
+      new_set[s1 + s2].position = set2[s2].position;
+      new_set[s1 + s2].code_min = set2[s2].code_min;
+      new_set[s1 + s2].code_max = set2[s2].code_max;
+      /* XXX - why not | assertions here as well? */
+      new_set[s1 + s2].assertions = set2[s2].assertions;
+      new_set[s1 + s2].class = set2[s2].class;
+      new_set[s1 + s2].neg_classes = set2[s2].neg_classes;
+      new_set[s1 + s2].backref = set2[s2].backref;
+      if (set2[s2].tags == NULL)
+	new_set[s1 + s2].tags = NULL;
+      else
+	{
+	  for (i = 0; set2[s2].tags[i] >= 0; i++);
+	  new_tags = tre_mem_alloc(mem, sizeof(*new_tags) * (i + 1));
+	  if (new_tags == NULL)
+	    return NULL;
+	  for (j = 0; j < i; j++)
+	    new_tags[j] = set2[s2].tags[j];
+	  new_tags[j] = -1;
+	  new_set[s1 + s2].tags = new_tags;
+	}
+    }
+  new_set[s1 + s2].position = -1;
+  return new_set;
+}
+
+/* Finds the empty path through \`node' which is the one that should be
+   taken according to POSIX.2 rules, and adds the tags on that path to
+   \`tags'.   \`tags' may be NULL.  If \`num_tags_seen' is not NULL, it is
+   set to the number of tags seen on the path. */
+static reg_errcode_t
+tre_match_empty(tre_stack_t *stack, tre_ast_node_t *node, int *tags,
+		int *assertions, int *num_tags_seen)
+{
+  tre_literal_t *lit;
+  tre_union_t *uni;
+  tre_catenation_t *cat;
+  tre_iteration_t *iter;
+  int i;
+  int bottom = tre_stack_num_objects(stack);
+  reg_errcode_t status = REG_OK;
+  if (num_tags_seen)
+    *num_tags_seen = 0;
+
+  status = tre_stack_push_voidptr(stack, node);
+
+  /* Walk through the tree recursively. */
+  while (status == REG_OK && tre_stack_num_objects(stack) > bottom)
+    {
+      node = tre_stack_pop_voidptr(stack);
+
+      switch (node->type)
+	{
+	case LITERAL:
+	  lit = (tre_literal_t *)node->obj;
+	  switch (lit->code_min)
+	    {
+	    case TAG:
+	      if (lit->code_max >= 0)
+		{
+		  if (tags != NULL)
+		    {
+		      /* Add the tag to \`tags'. */
+		      for (i = 0; tags[i] >= 0; i++)
+			if (tags[i] == lit->code_max)
+			  break;
+		      if (tags[i] < 0)
+			{
+			  tags[i] = lit->code_max;
+			  tags[i + 1] = -1;
+			}
+		    }
+		  if (num_tags_seen)
+		    (*num_tags_seen)++;
+		}
+	      break;
+	    case ASSERTION:
+	      assert(lit->code_max >= 1
+		     || lit->code_max <= ASSERT_LAST);
+	      if (assertions != NULL)
+		*assertions |= lit->code_max;
+	      break;
+	    case EMPTY:
+	      break;
+	    default:
+	      assert(0);
+	      break;
+	    }
+	  break;
+
+	case UNION:
+	  /* Subexpressions starting earlier take priority over ones
+	     starting later, so we prefer the left subexpression over the
+	     right subexpression. */
+	  uni = (tre_union_t *)node->obj;
+	  if (uni->left->nullable)
+	    STACK_PUSHX(stack, voidptr, uni->left)
+	  else if (uni->right->nullable)
+	    STACK_PUSHX(stack, voidptr, uni->right)
+	  else
+	    assert(0);
+	  break;
+
+	case CATENATION:
+	  /* The path must go through both children. */
+	  cat = (tre_catenation_t *)node->obj;
+	  assert(cat->left->nullable);
+	  assert(cat->right->nullable);
+	  STACK_PUSHX(stack, voidptr, cat->left);
+	  STACK_PUSHX(stack, voidptr, cat->right);
+	  break;
+
+	case ITERATION:
+	  /* A match with an empty string is preferred over no match at
+	     all, so we go through the argument if possible. */
+	  iter = (tre_iteration_t *)node->obj;
+	  if (iter->arg->nullable)
+	    STACK_PUSHX(stack, voidptr, iter->arg);
+	  break;
+
+	default:
+	  assert(0);
+	  break;
+	}
+    }
+
+  return status;
+}
+
+
+typedef enum {
+  NFL_RECURSE,
+  NFL_POST_UNION,
+  NFL_POST_CATENATION,
+  NFL_POST_ITERATION
+} tre_nfl_stack_symbol_t;
+
+
+/* Computes and fills in the fields \`nullable', \`firstpos', and \`lastpos' for
+   the nodes of the AST \`tree'. */
+static reg_errcode_t
+tre_compute_nfl(tre_mem_t mem, tre_stack_t *stack, tre_ast_node_t *tree)
+{
+  int bottom = tre_stack_num_objects(stack);
+
+  STACK_PUSHR(stack, voidptr, tree);
+  STACK_PUSHR(stack, int, NFL_RECURSE);
+
+  while (tre_stack_num_objects(stack) > bottom)
+    {
+      tre_nfl_stack_symbol_t symbol;
+      tre_ast_node_t *node;
+
+      symbol = (tre_nfl_stack_symbol_t)tre_stack_pop_int(stack);
+      node = tre_stack_pop_voidptr(stack);
+      switch (symbol)
+	{
+	case NFL_RECURSE:
+	  switch (node->type)
+	    {
+	    case LITERAL:
+	      {
+		tre_literal_t *lit = (tre_literal_t *)node->obj;
+		if (IS_BACKREF(lit))
+		  {
+		    /* Back references: nullable = false, firstpos = {i},
+		       lastpos = {i}. */
+		    node->nullable = 0;
+		    node->firstpos = tre_set_one(mem, lit->position, 0,
+					     TRE_CHAR_MAX, 0, NULL, -1);
+		    if (!node->firstpos)
+		      return REG_ESPACE;
+		    node->lastpos = tre_set_one(mem, lit->position, 0,
+						TRE_CHAR_MAX, 0, NULL,
+						(int)lit->code_max);
+		    if (!node->lastpos)
+		      return REG_ESPACE;
+		  }
+		else if (lit->code_min < 0)
+		  {
+		    /* Tags, empty strings, params, and zero width assertions:
+		       nullable = true, firstpos = {}, and lastpos = {}. */
+		    node->nullable = 1;
+		    node->firstpos = tre_set_empty(mem);
+		    if (!node->firstpos)
+		      return REG_ESPACE;
+		    node->lastpos = tre_set_empty(mem);
+		    if (!node->lastpos)
+		      return REG_ESPACE;
+		  }
+		else
+		  {
+		    /* Literal at position i: nullable = false, firstpos = {i},
+		       lastpos = {i}. */
+		    node->nullable = 0;
+		    node->firstpos =
+		      tre_set_one(mem, lit->position, (int)lit->code_min,
+				  (int)lit->code_max, 0, NULL, -1);
+		    if (!node->firstpos)
+		      return REG_ESPACE;
+		    node->lastpos = tre_set_one(mem, lit->position,
+						(int)lit->code_min,
+						(int)lit->code_max,
+						lit->class, lit->neg_classes,
+						-1);
+		    if (!node->lastpos)
+		      return REG_ESPACE;
+		  }
+		break;
+	      }
+
+	    case UNION:
+	      /* Compute the attributes for the two subtrees, and after that
+		 for this node. */
+	      STACK_PUSHR(stack, voidptr, node);
+	      STACK_PUSHR(stack, int, NFL_POST_UNION);
+	      STACK_PUSHR(stack, voidptr, ((tre_union_t *)node->obj)->right);
+	      STACK_PUSHR(stack, int, NFL_RECURSE);
+	      STACK_PUSHR(stack, voidptr, ((tre_union_t *)node->obj)->left);
+	      STACK_PUSHR(stack, int, NFL_RECURSE);
+	      break;
+
+	    case CATENATION:
+	      /* Compute the attributes for the two subtrees, and after that
+		 for this node. */
+	      STACK_PUSHR(stack, voidptr, node);
+	      STACK_PUSHR(stack, int, NFL_POST_CATENATION);
+	      STACK_PUSHR(stack, voidptr, ((tre_catenation_t *)node->obj)->right);
+	      STACK_PUSHR(stack, int, NFL_RECURSE);
+	      STACK_PUSHR(stack, voidptr, ((tre_catenation_t *)node->obj)->left);
+	      STACK_PUSHR(stack, int, NFL_RECURSE);
+	      break;
+
+	    case ITERATION:
+	      /* Compute the attributes for the subtree, and after that for
+		 this node. */
+	      STACK_PUSHR(stack, voidptr, node);
+	      STACK_PUSHR(stack, int, NFL_POST_ITERATION);
+	      STACK_PUSHR(stack, voidptr, ((tre_iteration_t *)node->obj)->arg);
+	      STACK_PUSHR(stack, int, NFL_RECURSE);
+	      break;
+	    }
+	  break; /* end case: NFL_RECURSE */
+
+	case NFL_POST_UNION:
+	  {
+	    tre_union_t *uni = (tre_union_t *)node->obj;
+	    node->nullable = uni->left->nullable || uni->right->nullable;
+	    node->firstpos = tre_set_union(mem, uni->left->firstpos,
+					   uni->right->firstpos, NULL, 0);
+	    if (!node->firstpos)
+	      return REG_ESPACE;
+	    node->lastpos = tre_set_union(mem, uni->left->lastpos,
+					  uni->right->lastpos, NULL, 0);
+	    if (!node->lastpos)
+	      return REG_ESPACE;
+	    break;
+	  }
+
+	case NFL_POST_ITERATION:
+	  {
+	    tre_iteration_t *iter = (tre_iteration_t *)node->obj;
+
+	    if (iter->min == 0 || iter->arg->nullable)
+	      node->nullable = 1;
+	    else
+	      node->nullable = 0;
+	    node->firstpos = iter->arg->firstpos;
+	    node->lastpos = iter->arg->lastpos;
+	    break;
+	  }
+
+	case NFL_POST_CATENATION:
+	  {
+	    int num_tags, *tags, assertions;
+	    reg_errcode_t status;
+	    tre_catenation_t *cat = node->obj;
+	    node->nullable = cat->left->nullable && cat->right->nullable;
+
+	    /* Compute firstpos. */
+	    if (cat->left->nullable)
+	      {
+		/* The left side matches the empty string.  Make a first pass
+		   with tre_match_empty() to get the number of tags and
+		   parameters. */
+		status = tre_match_empty(stack, cat->left,
+					 NULL, NULL, &num_tags);
+		if (status != REG_OK)
+		  return status;
+		/* Allocate arrays for the tags and parameters. */
+		tags = xmalloc(sizeof(*tags) * (num_tags + 1));
+		if (!tags)
+		  return REG_ESPACE;
+		tags[0] = -1;
+		assertions = 0;
+		/* Second pass with tre_mach_empty() to get the list of
+		   tags and parameters. */
+		status = tre_match_empty(stack, cat->left, tags,
+					 &assertions, NULL);
+		if (status != REG_OK)
+		  {
+		    xfree(tags);
+		    return status;
+		  }
+		node->firstpos =
+		  tre_set_union(mem, cat->right->firstpos, cat->left->firstpos,
+				tags, assertions);
+		xfree(tags);
+		if (!node->firstpos)
+		  return REG_ESPACE;
+	      }
+	    else
+	      {
+		node->firstpos = cat->left->firstpos;
+	      }
+
+	    /* Compute lastpos. */
+	    if (cat->right->nullable)
+	      {
+		/* The right side matches the empty string.  Make a first pass
+		   with tre_match_empty() to get the number of tags and
+		   parameters. */
+		status = tre_match_empty(stack, cat->right,
+					 NULL, NULL, &num_tags);
+		if (status != REG_OK)
+		  return status;
+		/* Allocate arrays for the tags and parameters. */
+		tags = xmalloc(sizeof(int) * (num_tags + 1));
+		if (!tags)
+		  return REG_ESPACE;
+		tags[0] = -1;
+		assertions = 0;
+		/* Second pass with tre_mach_empty() to get the list of
+		   tags and parameters. */
+		status = tre_match_empty(stack, cat->right, tags,
+					 &assertions, NULL);
+		if (status != REG_OK)
+		  {
+		    xfree(tags);
+		    return status;
+		  }
+		node->lastpos =
+		  tre_set_union(mem, cat->left->lastpos, cat->right->lastpos,
+				tags, assertions);
+		xfree(tags);
+		if (!node->lastpos)
+		  return REG_ESPACE;
+	      }
+	    else
+	      {
+		node->lastpos = cat->right->lastpos;
+	      }
+	    break;
+	  }
+
+	default:
+	  assert(0);
+	  break;
+	}
+    }
+
+  return REG_OK;
+}
+
+
+/* Adds a transition from each position in \`p1' to each position in \`p2'. */
+static reg_errcode_t
+tre_make_trans(tre_pos_and_tags_t *p1, tre_pos_and_tags_t *p2,
+	       tre_tnfa_transition_t *transitions,
+	       int *counts, int *offs)
+{
+  tre_pos_and_tags_t *orig_p2 = p2;
+  tre_tnfa_transition_t *trans;
+  int i, j, k, l, dup, prev_p2_pos;
+
+  if (transitions != NULL)
+    while (p1->position >= 0)
+      {
+	p2 = orig_p2;
+	prev_p2_pos = -1;
+	while (p2->position >= 0)
+	  {
+	    /* Optimization: if this position was already handled, skip it. */
+	    if (p2->position == prev_p2_pos)
+	      {
+		p2++;
+		continue;
+	      }
+	    prev_p2_pos = p2->position;
+	    /* Set \`trans' to point to the next unused transition from
+	       position \`p1->position'. */
+	    trans = transitions + offs[p1->position];
+	    while (trans->state != NULL)
+	      {
+#if 0
+		/* If we find a previous transition from \`p1->position' to
+		   \`p2->position', it is overwritten.  This can happen only
+		   if there are nested loops in the regexp, like in "((a)*)*".
+		   In POSIX.2 repetition using the outer loop is always
+		   preferred over using the inner loop.	 Therefore the
+		   transition for the inner loop is useless and can be thrown
+		   away. */
+		/* XXX - The same position is used for all nodes in a bracket
+		   expression, so this optimization cannot be used (it will
+		   break bracket expressions) unless I figure out a way to
+		   detect it here. */
+		if (trans->state_id == p2->position)
+		  {
+		    break;
+		  }
+#endif
+		trans++;
+	      }
+
+	    if (trans->state == NULL)
+	      (trans + 1)->state = NULL;
+	    /* Use the character ranges, assertions, etc. from \`p1' for
+	       the transition from \`p1' to \`p2'. */
+	    trans->code_min = p1->code_min;
+	    trans->code_max = p1->code_max;
+	    trans->state = transitions + offs[p2->position];
+	    trans->state_id = p2->position;
+	    trans->assertions = p1->assertions | p2->assertions
+	      | (p1->class ? ASSERT_CHAR_CLASS : 0)
+	      | (p1->neg_classes != NULL ? ASSERT_CHAR_CLASS_NEG : 0);
+	    if (p1->backref >= 0)
+	      {
+		assert((trans->assertions & ASSERT_CHAR_CLASS) == 0);
+		assert(p2->backref < 0);
+		trans->u.backref = p1->backref;
+		trans->assertions |= ASSERT_BACKREF;
+	      }
+	    else
+	      trans->u.class = p1->class;
+	    if (p1->neg_classes != NULL)
+	      {
+		for (i = 0; p1->neg_classes[i] != (tre_ctype_t)0; i++);
+		trans->neg_classes =
+		  xmalloc(sizeof(*trans->neg_classes) * (i + 1));
+		if (trans->neg_classes == NULL)
+		  return REG_ESPACE;
+		for (i = 0; p1->neg_classes[i] != (tre_ctype_t)0; i++)
+		  trans->neg_classes[i] = p1->neg_classes[i];
+		trans->neg_classes[i] = (tre_ctype_t)0;
+	      }
+	    else
+	      trans->neg_classes = NULL;
+
+	    /* Find out how many tags this transition has. */
+	    i = 0;
+	    if (p1->tags != NULL)
+	      while(p1->tags[i] >= 0)
+		i++;
+	    j = 0;
+	    if (p2->tags != NULL)
+	      while(p2->tags[j] >= 0)
+		j++;
+
+	    /* If we are overwriting a transition, free the old tag array. */
+	    if (trans->tags != NULL)
+	      xfree(trans->tags);
+	    trans->tags = NULL;
+
+	    /* If there were any tags, allocate an array and fill it. */
+	    if (i + j > 0)
+	      {
+		trans->tags = xmalloc(sizeof(*trans->tags) * (i + j + 1));
+		if (!trans->tags)
+		  return REG_ESPACE;
+		i = 0;
+		if (p1->tags != NULL)
+		  while(p1->tags[i] >= 0)
+		    {
+		      trans->tags[i] = p1->tags[i];
+		      i++;
+		    }
+		l = i;
+		j = 0;
+		if (p2->tags != NULL)
+		  while (p2->tags[j] >= 0)
+		    {
+		      /* Don't add duplicates. */
+		      dup = 0;
+		      for (k = 0; k < i; k++)
+			if (trans->tags[k] == p2->tags[j])
+			  {
+			    dup = 1;
+			    break;
+			  }
+		      if (!dup)
+			trans->tags[l++] = p2->tags[j];
+		      j++;
+		    }
+		trans->tags[l] = -1;
+	      }
+
+	    p2++;
+	  }
+	p1++;
+      }
+  else
+    /* Compute a maximum limit for the number of transitions leaving
+       from each state. */
+    while (p1->position >= 0)
+      {
+	p2 = orig_p2;
+	while (p2->position >= 0)
+	  {
+	    counts[p1->position]++;
+	    p2++;
+	  }
+	p1++;
+      }
+  return REG_OK;
+}
+
+/* Converts the syntax tree to a TNFA.	All the transitions in the TNFA are
+   labelled with one character range (there are no transitions on empty
+   strings).  The TNFA takes O(n^2) space in the worst case, \`n' is size of
+   the regexp. */
+static reg_errcode_t
+tre_ast_to_tnfa(tre_ast_node_t *node, tre_tnfa_transition_t *transitions,
+		int *counts, int *offs)
+{
+  tre_union_t *uni;
+  tre_catenation_t *cat;
+  tre_iteration_t *iter;
+  reg_errcode_t errcode = REG_OK;
+
+  /* XXX - recurse using a stack!. */
+  switch (node->type)
+    {
+    case LITERAL:
+      break;
+    case UNION:
+      uni = (tre_union_t *)node->obj;
+      errcode = tre_ast_to_tnfa(uni->left, transitions, counts, offs);
+      if (errcode != REG_OK)
+	return errcode;
+      errcode = tre_ast_to_tnfa(uni->right, transitions, counts, offs);
+      break;
+
+    case CATENATION:
+      cat = (tre_catenation_t *)node->obj;
+      /* Add a transition from each position in cat->left->lastpos
+	 to each position in cat->right->firstpos. */
+      errcode = tre_make_trans(cat->left->lastpos, cat->right->firstpos,
+			       transitions, counts, offs);
+      if (errcode != REG_OK)
+	return errcode;
+      errcode = tre_ast_to_tnfa(cat->left, transitions, counts, offs);
+      if (errcode != REG_OK)
+	return errcode;
+      errcode = tre_ast_to_tnfa(cat->right, transitions, counts, offs);
+      break;
+
+    case ITERATION:
+      iter = (tre_iteration_t *)node->obj;
+      assert(iter->max == -1 || iter->max == 1);
+
+      if (iter->max == -1)
+	{
+	  assert(iter->min == 0 || iter->min == 1);
+	  /* Add a transition from each last position in the iterated
+	     expression to each first position. */
+	  errcode = tre_make_trans(iter->arg->lastpos, iter->arg->firstpos,
+				   transitions, counts, offs);
+	  if (errcode != REG_OK)
+	    return errcode;
+	}
+      errcode = tre_ast_to_tnfa(iter->arg, transitions, counts, offs);
+      break;
+    }
+  return errcode;
+}
+
+
+#define ERROR_EXIT(err)		  \\
+  do				  \\
+    {				  \\
+      errcode = err;		  \\
+      if (/*CONSTCOND*/1)	  \\
+      	goto error_exit;	  \\
+    }				  \\
+ while (/*CONSTCOND*/0)
+
+
+int
+regcomp(regex_t *restrict preg, const char *restrict regex, int cflags)
+{
+  tre_stack_t *stack;
+  tre_ast_node_t *tree, *tmp_ast_l, *tmp_ast_r;
+  tre_pos_and_tags_t *p;
+  int *counts = NULL, *offs = NULL;
+  int i, add = 0;
+  tre_tnfa_transition_t *transitions, *initial;
+  tre_tnfa_t *tnfa = NULL;
+  tre_submatch_data_t *submatch_data;
+  tre_tag_direction_t *tag_directions = NULL;
+  reg_errcode_t errcode;
+  tre_mem_t mem;
+
+  /* Parse context. */
+  tre_parse_ctx_t parse_ctx;
+
+  /* Allocate a stack used throughout the compilation process for various
+     purposes. */
+  stack = tre_stack_new(512, 1024000, 128);
+  if (!stack)
+    return REG_ESPACE;
+  /* Allocate a fast memory allocator. */
+  mem = tre_mem_new();
+  if (!mem)
+    {
+      tre_stack_destroy(stack);
+      return REG_ESPACE;
+    }
+
+  /* Parse the regexp. */
+  memset(&parse_ctx, 0, sizeof(parse_ctx));
+  parse_ctx.mem = mem;
+  parse_ctx.stack = stack;
+  parse_ctx.start = regex;
+  parse_ctx.cflags = cflags;
+  parse_ctx.max_backref = -1;
+  errcode = tre_parse(&parse_ctx);
+  if (errcode != REG_OK)
+    ERROR_EXIT(errcode);
+  preg->re_nsub = parse_ctx.submatch_id - 1;
+  tree = parse_ctx.n;
+
+#ifdef TRE_DEBUG
+  tre_ast_print(tree);
+#endif /* TRE_DEBUG */
+
+  /* Referring to nonexistent subexpressions is illegal. */
+  if (parse_ctx.max_backref > (int)preg->re_nsub)
+    ERROR_EXIT(REG_ESUBREG);
+
+  /* Allocate the TNFA struct. */
+  tnfa = xcalloc(1, sizeof(tre_tnfa_t));
+  if (tnfa == NULL)
+    ERROR_EXIT(REG_ESPACE);
+  tnfa->have_backrefs = parse_ctx.max_backref >= 0;
+  tnfa->have_approx = 0;
+  tnfa->num_submatches = parse_ctx.submatch_id;
+
+  /* Set up tags for submatch addressing.  If REG_NOSUB is set and the
+     regexp does not have back references, this can be skipped. */
+  if (tnfa->have_backrefs || !(cflags & REG_NOSUB))
+    {
+
+      /* Figure out how many tags we will need. */
+      errcode = tre_add_tags(NULL, stack, tree, tnfa);
+      if (errcode != REG_OK)
+	ERROR_EXIT(errcode);
+
+      if (tnfa->num_tags > 0)
+	{
+	  tag_directions = xmalloc(sizeof(*tag_directions)
+				   * (tnfa->num_tags + 1));
+	  if (tag_directions == NULL)
+	    ERROR_EXIT(REG_ESPACE);
+	  tnfa->tag_directions = tag_directions;
+	  memset(tag_directions, -1,
+		 sizeof(*tag_directions) * (tnfa->num_tags + 1));
+	}
+      tnfa->minimal_tags = xcalloc((unsigned)tnfa->num_tags * 2 + 1,
+				   sizeof(*tnfa->minimal_tags));
+      if (tnfa->minimal_tags == NULL)
+	ERROR_EXIT(REG_ESPACE);
+
+      submatch_data = xcalloc((unsigned)parse_ctx.submatch_id,
+			      sizeof(*submatch_data));
+      if (submatch_data == NULL)
+	ERROR_EXIT(REG_ESPACE);
+      tnfa->submatch_data = submatch_data;
+
+      errcode = tre_add_tags(mem, stack, tree, tnfa);
+      if (errcode != REG_OK)
+	ERROR_EXIT(errcode);
+
+    }
+
+  /* Expand iteration nodes. */
+  errcode = tre_expand_ast(mem, stack, tree, &parse_ctx.position,
+			   tag_directions);
+  if (errcode != REG_OK)
+    ERROR_EXIT(errcode);
+
+  /* Add a dummy node for the final state.
+     XXX - For certain patterns this dummy node can be optimized away,
+	   for example "a*" or "ab*".	Figure out a simple way to detect
+	   this possibility. */
+  tmp_ast_l = tree;
+  tmp_ast_r = tre_ast_new_literal(mem, 0, 0, parse_ctx.position++);
+  if (tmp_ast_r == NULL)
+    ERROR_EXIT(REG_ESPACE);
+
+  tree = tre_ast_new_catenation(mem, tmp_ast_l, tmp_ast_r);
+  if (tree == NULL)
+    ERROR_EXIT(REG_ESPACE);
+
+  errcode = tre_compute_nfl(mem, stack, tree);
+  if (errcode != REG_OK)
+    ERROR_EXIT(errcode);
+
+  counts = xmalloc(sizeof(int) * parse_ctx.position);
+  if (counts == NULL)
+    ERROR_EXIT(REG_ESPACE);
+
+  offs = xmalloc(sizeof(int) * parse_ctx.position);
+  if (offs == NULL)
+    ERROR_EXIT(REG_ESPACE);
+
+  for (i = 0; i < parse_ctx.position; i++)
+    counts[i] = 0;
+  tre_ast_to_tnfa(tree, NULL, counts, NULL);
+
+  add = 0;
+  for (i = 0; i < parse_ctx.position; i++)
+    {
+      offs[i] = add;
+      add += counts[i] + 1;
+      counts[i] = 0;
+    }
+  transitions = xcalloc((unsigned)add + 1, sizeof(*transitions));
+  if (transitions == NULL)
+    ERROR_EXIT(REG_ESPACE);
+  tnfa->transitions = transitions;
+  tnfa->num_transitions = add;
+
+  errcode = tre_ast_to_tnfa(tree, transitions, counts, offs);
+  if (errcode != REG_OK)
+    ERROR_EXIT(errcode);
+
+  tnfa->firstpos_chars = NULL;
+
+  p = tree->firstpos;
+  i = 0;
+  while (p->position >= 0)
+    {
+      i++;
+      p++;
+    }
+
+  initial = xcalloc((unsigned)i + 1, sizeof(tre_tnfa_transition_t));
+  if (initial == NULL)
+    ERROR_EXIT(REG_ESPACE);
+  tnfa->initial = initial;
+
+  i = 0;
+  for (p = tree->firstpos; p->position >= 0; p++)
+    {
+      initial[i].state = transitions + offs[p->position];
+      initial[i].state_id = p->position;
+      initial[i].tags = NULL;
+      /* Copy the arrays p->tags, and p->params, they are allocated
+	 from a tre_mem object. */
+      if (p->tags)
+	{
+	  int j;
+	  for (j = 0; p->tags[j] >= 0; j++);
+	  initial[i].tags = xmalloc(sizeof(*p->tags) * (j + 1));
+	  if (!initial[i].tags)
+	    ERROR_EXIT(REG_ESPACE);
+	  memcpy(initial[i].tags, p->tags, sizeof(*p->tags) * (j + 1));
+	}
+      initial[i].assertions = p->assertions;
+      i++;
+    }
+  initial[i].state = NULL;
+
+  tnfa->num_transitions = add;
+  tnfa->final = transitions + offs[tree->lastpos[0].position];
+  tnfa->num_states = parse_ctx.position;
+  tnfa->cflags = cflags;
+
+  tre_mem_destroy(mem);
+  tre_stack_destroy(stack);
+  xfree(counts);
+  xfree(offs);
+
+  preg->TRE_REGEX_T_FIELD = (void *)tnfa;
+  return REG_OK;
+
+ error_exit:
+  /* Free everything that was allocated and return the error code. */
+  tre_mem_destroy(mem);
+  if (stack != NULL)
+    tre_stack_destroy(stack);
+  if (counts != NULL)
+    xfree(counts);
+  if (offs != NULL)
+    xfree(offs);
+  preg->TRE_REGEX_T_FIELD = (void *)tnfa;
+  regfree(preg);
+  return errcode;
+}
+
+
+
+
+void
+regfree(regex_t *preg)
+{
+  tre_tnfa_t *tnfa;
+  unsigned int i;
+  tre_tnfa_transition_t *trans;
+
+  tnfa = (void *)preg->TRE_REGEX_T_FIELD;
+  if (!tnfa)
+    return;
+
+  for (i = 0; i < tnfa->num_transitions; i++)
+    if (tnfa->transitions[i].state)
+      {
+	if (tnfa->transitions[i].tags)
+	  xfree(tnfa->transitions[i].tags);
+	if (tnfa->transitions[i].neg_classes)
+	  xfree(tnfa->transitions[i].neg_classes);
+      }
+  if (tnfa->transitions)
+    xfree(tnfa->transitions);
+
+  if (tnfa->initial)
+    {
+      for (trans = tnfa->initial; trans->state; trans++)
+	{
+	  if (trans->tags)
+	    xfree(trans->tags);
+	}
+      xfree(tnfa->initial);
+    }
+
+  if (tnfa->submatch_data)
+    {
+      for (i = 0; i < tnfa->num_submatches; i++)
+	if (tnfa->submatch_data[i].parents)
+	  xfree(tnfa->submatch_data[i].parents);
+      xfree(tnfa->submatch_data);
+    }
+
+  if (tnfa->tag_directions)
+    xfree(tnfa->tag_directions);
+  if (tnfa->firstpos_chars)
+    xfree(tnfa->firstpos_chars);
+  if (tnfa->minimal_tags)
+    xfree(tnfa->minimal_tags);
+  xfree(tnfa);
+}
+`,
+  "regerror.c": `#include <string.h>
+#include <regex.h>
+#include <stdio.h>
+#include "locale_impl.h"
+
+/* Error message strings for error codes listed in \`regex.h'.  This list
+   needs to be in sync with the codes listed there, naturally. */
+
+/* Converted to single string by Rich Felker to remove the need for
+ * data relocations at runtime, 27 Feb 2006. */
+
+static const char messages[] = {
+  "No error\\0"
+  "No match\\0"
+  "Invalid regexp\\0"
+  "Unknown collating element\\0"
+  "Unknown character class name\\0"
+  "Trailing backslash\\0"
+  "Invalid back reference\\0"
+  "Missing ']'\\0"
+  "Missing ')'\\0"
+  "Missing '}'\\0"
+  "Invalid contents of {}\\0"
+  "Invalid character range\\0"
+  "Out of memory\\0"
+  "Repetition not preceded by valid expression\\0"
+  "\\0Unknown error"
+};
+
+size_t regerror(int e, const regex_t *restrict preg, char *restrict buf, size_t size)
+{
+	const char *s;
+	for (s=messages; e && *s; e--, s+=strlen(s)+1);
+	if (!*s) s++;
+	s = LCTRANS_CUR(s);
+	return 1+snprintf(buf, size, "%s", s);
+}
+`,
+  "regexec.c": `/*
+  regexec.c - TRE POSIX compatible matching functions (and more).
+
+  Copyright (c) 2001-2009 Ville Laurikari <vl@iki.fi>
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions
+  are met:
+
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER AND CONTRIBUTORS
+  \`\`AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+  A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT
+  HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
+
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
+#include <wctype.h>
+#include <limits.h>
+#include <stdint.h>
+
+#include <regex.h>
+
+#include "tre.h"
+
+#include <assert.h>
+
+static void
+tre_fill_pmatch(size_t nmatch, regmatch_t pmatch[], int cflags,
+		const tre_tnfa_t *tnfa, regoff_t *tags, regoff_t match_eo);
+
+/***********************************************************************
+ from tre-match-utils.h
+***********************************************************************/
+
+#define GET_NEXT_WCHAR() do {                                                 \\
+    prev_c = next_c; pos += pos_add_next;                                     \\
+    if ((pos_add_next = mbtowc(&next_c, str_byte, MB_LEN_MAX)) <= 0) {        \\
+        if (pos_add_next < 0) { ret = REG_NOMATCH; goto error_exit; }         \\
+        else pos_add_next++;                                                  \\
+    }                                                                         \\
+    str_byte += pos_add_next;                                                 \\
+  } while (0)
+
+#define IS_WORD_CHAR(c)	 ((c) == L'_' || tre_isalnum(c))
+
+#define CHECK_ASSERTIONS(assertions)					      \\
+  (((assertions & ASSERT_AT_BOL)					      \\
+    && (pos > 0 || reg_notbol)						      \\
+    && (prev_c != L'\\n' || !reg_newline))				      \\
+   || ((assertions & ASSERT_AT_EOL)					      \\
+       && (next_c != L'\\0' || reg_noteol)				      \\
+       && (next_c != L'\\n' || !reg_newline))				      \\
+   || ((assertions & ASSERT_AT_BOW)					      \\
+       && (IS_WORD_CHAR(prev_c) || !IS_WORD_CHAR(next_c)))	              \\
+   || ((assertions & ASSERT_AT_EOW)					      \\
+       && (!IS_WORD_CHAR(prev_c) || IS_WORD_CHAR(next_c)))		      \\
+   || ((assertions & ASSERT_AT_WB)					      \\
+       && (pos != 0 && next_c != L'\\0'					      \\
+	   && IS_WORD_CHAR(prev_c) == IS_WORD_CHAR(next_c)))		      \\
+   || ((assertions & ASSERT_AT_WB_NEG)					      \\
+       && (pos == 0 || next_c == L'\\0'					      \\
+	   || IS_WORD_CHAR(prev_c) != IS_WORD_CHAR(next_c))))
+
+#define CHECK_CHAR_CLASSES(trans_i, tnfa, eflags)                             \\
+  (((trans_i->assertions & ASSERT_CHAR_CLASS)                                 \\
+       && !(tnfa->cflags & REG_ICASE)                                         \\
+       && !tre_isctype((tre_cint_t)prev_c, trans_i->u.class))                 \\
+    || ((trans_i->assertions & ASSERT_CHAR_CLASS)                             \\
+        && (tnfa->cflags & REG_ICASE)                                         \\
+        && !tre_isctype(tre_tolower((tre_cint_t)prev_c),trans_i->u.class)     \\
+	&& !tre_isctype(tre_toupper((tre_cint_t)prev_c),trans_i->u.class))    \\
+    || ((trans_i->assertions & ASSERT_CHAR_CLASS_NEG)                         \\
+        && tre_neg_char_classes_match(trans_i->neg_classes,(tre_cint_t)prev_c,\\
+                                      tnfa->cflags & REG_ICASE)))
+
+
+
+
+/* Returns 1 if \`t1' wins \`t2', 0 otherwise. */
+static int
+tre_tag_order(int num_tags, tre_tag_direction_t *tag_directions,
+	      regoff_t *t1, regoff_t *t2)
+{
+  int i;
+  for (i = 0; i < num_tags; i++)
+    {
+      if (tag_directions[i] == TRE_TAG_MINIMIZE)
+	{
+	  if (t1[i] < t2[i])
+	    return 1;
+	  if (t1[i] > t2[i])
+	    return 0;
+	}
+      else
+	{
+	  if (t1[i] > t2[i])
+	    return 1;
+	  if (t1[i] < t2[i])
+	    return 0;
+	}
+    }
+  /*  assert(0);*/
+  return 0;
+}
+
+static int
+tre_neg_char_classes_match(tre_ctype_t *classes, tre_cint_t wc, int icase)
+{
+  while (*classes != (tre_ctype_t)0)
+    if ((!icase && tre_isctype(wc, *classes))
+	|| (icase && (tre_isctype(tre_toupper(wc), *classes)
+		      || tre_isctype(tre_tolower(wc), *classes))))
+      return 1; /* Match. */
+    else
+      classes++;
+  return 0; /* No match. */
+}
+
+
+/***********************************************************************
+ from tre-match-parallel.c
+***********************************************************************/
+
+/*
+  This algorithm searches for matches basically by reading characters
+  in the searched string one by one, starting at the beginning.	 All
+  matching paths in the TNFA are traversed in parallel.	 When two or
+  more paths reach the same state, exactly one is chosen according to
+  tag ordering rules; if returning submatches is not required it does
+  not matter which path is chosen.
+
+  The worst case time required for finding the leftmost and longest
+  match, or determining that there is no match, is always linearly
+  dependent on the length of the text being searched.
+
+  This algorithm cannot handle TNFAs with back referencing nodes.
+  See \`tre-match-backtrack.c'.
+*/
+
+typedef struct {
+  tre_tnfa_transition_t *state;
+  regoff_t *tags;
+} tre_tnfa_reach_t;
+
+typedef struct {
+  regoff_t pos;
+  regoff_t **tags;
+} tre_reach_pos_t;
+
+
+static reg_errcode_t
+tre_tnfa_run_parallel(const tre_tnfa_t *tnfa, const void *string,
+		      regoff_t *match_tags, int eflags,
+		      regoff_t *match_end_ofs)
+{
+  /* State variables required by GET_NEXT_WCHAR. */
+  tre_char_t prev_c = 0, next_c = 0;
+  const char *str_byte = string;
+  regoff_t pos = -1;
+  regoff_t pos_add_next = 1;
+#ifdef TRE_MBSTATE
+  mbstate_t mbstate;
+#endif /* TRE_MBSTATE */
+  int reg_notbol = eflags & REG_NOTBOL;
+  int reg_noteol = eflags & REG_NOTEOL;
+  int reg_newline = tnfa->cflags & REG_NEWLINE;
+  reg_errcode_t ret;
+
+  char *buf;
+  tre_tnfa_transition_t *trans_i;
+  tre_tnfa_reach_t *reach, *reach_next, *reach_i, *reach_next_i;
+  tre_reach_pos_t *reach_pos;
+  int *tag_i;
+  int num_tags, i;
+
+  regoff_t match_eo = -1;	   /* end offset of match (-1 if no match found yet) */
+  int new_match = 0;
+  regoff_t *tmp_tags = NULL;
+  regoff_t *tmp_iptr;
+
+#ifdef TRE_MBSTATE
+  memset(&mbstate, '\\0', sizeof(mbstate));
+#endif /* TRE_MBSTATE */
+
+  if (!match_tags)
+    num_tags = 0;
+  else
+    num_tags = tnfa->num_tags;
+
+  /* Allocate memory for temporary data required for matching.	This needs to
+     be done for every matching operation to be thread safe.  This allocates
+     everything in a single large block with calloc(). */
+  {
+    size_t tbytes, rbytes, pbytes, xbytes, total_bytes;
+    char *tmp_buf;
+
+    /* Ensure that tbytes and xbytes*num_states cannot overflow, and that
+     * they don't contribute more than 1/8 of SIZE_MAX to total_bytes. */
+    if (num_tags > SIZE_MAX/(8 * sizeof(regoff_t) * tnfa->num_states))
+      return REG_ESPACE;
+
+    /* Likewise check rbytes. */
+    if (tnfa->num_states+1 > SIZE_MAX/(8 * sizeof(*reach_next)))
+      return REG_ESPACE;
+
+    /* Likewise check pbytes. */
+    if (tnfa->num_states > SIZE_MAX/(8 * sizeof(*reach_pos)))
+      return REG_ESPACE;
+
+    /* Compute the length of the block we need. */
+    tbytes = sizeof(*tmp_tags) * num_tags;
+    rbytes = sizeof(*reach_next) * (tnfa->num_states + 1);
+    pbytes = sizeof(*reach_pos) * tnfa->num_states;
+    xbytes = sizeof(regoff_t) * num_tags;
+    total_bytes =
+      (sizeof(long) - 1) * 4 /* for alignment paddings */
+      + (rbytes + xbytes * tnfa->num_states) * 2 + tbytes + pbytes;
+
+    /* Allocate the memory. */
+    buf = calloc(total_bytes, 1);
+    if (buf == NULL)
+      return REG_ESPACE;
+
+    /* Get the various pointers within tmp_buf (properly aligned). */
+    tmp_tags = (void *)buf;
+    tmp_buf = buf + tbytes;
+    tmp_buf += ALIGN(tmp_buf, long);
+    reach_next = (void *)tmp_buf;
+    tmp_buf += rbytes;
+    tmp_buf += ALIGN(tmp_buf, long);
+    reach = (void *)tmp_buf;
+    tmp_buf += rbytes;
+    tmp_buf += ALIGN(tmp_buf, long);
+    reach_pos = (void *)tmp_buf;
+    tmp_buf += pbytes;
+    tmp_buf += ALIGN(tmp_buf, long);
+    for (i = 0; i < tnfa->num_states; i++)
+      {
+	reach[i].tags = (void *)tmp_buf;
+	tmp_buf += xbytes;
+	reach_next[i].tags = (void *)tmp_buf;
+	tmp_buf += xbytes;
+      }
+  }
+
+  for (i = 0; i < tnfa->num_states; i++)
+    reach_pos[i].pos = -1;
+
+  GET_NEXT_WCHAR();
+  pos = 0;
+
+  reach_next_i = reach_next;
+  while (1)
+    {
+      /* If no match found yet, add the initial states to \`reach_next'. */
+      if (match_eo < 0)
+	{
+	  trans_i = tnfa->initial;
+	  while (trans_i->state != NULL)
+	    {
+	      if (reach_pos[trans_i->state_id].pos < pos)
+		{
+		  if (trans_i->assertions
+		      && CHECK_ASSERTIONS(trans_i->assertions))
+		    {
+		      trans_i++;
+		      continue;
+		    }
+
+		  reach_next_i->state = trans_i->state;
+		  for (i = 0; i < num_tags; i++)
+		    reach_next_i->tags[i] = -1;
+		  tag_i = trans_i->tags;
+		  if (tag_i)
+		    while (*tag_i >= 0)
+		      {
+			if (*tag_i < num_tags)
+			  reach_next_i->tags[*tag_i] = pos;
+			tag_i++;
+		      }
+		  if (reach_next_i->state == tnfa->final)
+		    {
+		      match_eo = pos;
+		      new_match = 1;
+		      for (i = 0; i < num_tags; i++)
+			match_tags[i] = reach_next_i->tags[i];
+		    }
+		  reach_pos[trans_i->state_id].pos = pos;
+		  reach_pos[trans_i->state_id].tags = &reach_next_i->tags;
+		  reach_next_i++;
+		}
+	      trans_i++;
+	    }
+	  reach_next_i->state = NULL;
+	}
+      else
+	{
+	  if (num_tags == 0 || reach_next_i == reach_next)
+	    /* We have found a match. */
+	    break;
+	}
+
+      /* Check for end of string. */
+      if (!next_c) break;
+
+      GET_NEXT_WCHAR();
+
+      /* Swap \`reach' and \`reach_next'. */
+      reach_i = reach;
+      reach = reach_next;
+      reach_next = reach_i;
+
+      /* For each state in \`reach', weed out states that don't fulfill the
+	 minimal matching conditions. */
+      if (tnfa->num_minimals && new_match)
+	{
+	  new_match = 0;
+	  reach_next_i = reach_next;
+	  for (reach_i = reach; reach_i->state; reach_i++)
+	    {
+	      int skip = 0;
+	      for (i = 0; tnfa->minimal_tags[i] >= 0; i += 2)
+		{
+		  int end = tnfa->minimal_tags[i];
+		  int start = tnfa->minimal_tags[i + 1];
+		  if (end >= num_tags)
+		    {
+		      skip = 1;
+		      break;
+		    }
+		  else if (reach_i->tags[start] == match_tags[start]
+			   && reach_i->tags[end] < match_tags[end])
+		    {
+		      skip = 1;
+		      break;
+		    }
+		}
+	      if (!skip)
+		{
+		  reach_next_i->state = reach_i->state;
+		  tmp_iptr = reach_next_i->tags;
+		  reach_next_i->tags = reach_i->tags;
+		  reach_i->tags = tmp_iptr;
+		  reach_next_i++;
+		}
+	    }
+	  reach_next_i->state = NULL;
+
+	  /* Swap \`reach' and \`reach_next'. */
+	  reach_i = reach;
+	  reach = reach_next;
+	  reach_next = reach_i;
+	}
+
+      /* For each state in \`reach' see if there is a transition leaving with
+	 the current input symbol to a state not yet in \`reach_next', and
+	 add the destination states to \`reach_next'. */
+      reach_next_i = reach_next;
+      for (reach_i = reach; reach_i->state; reach_i++)
+	{
+	  for (trans_i = reach_i->state; trans_i->state; trans_i++)
+	    {
+	      /* Does this transition match the input symbol? */
+	      if (trans_i->code_min <= (tre_cint_t)prev_c &&
+		  trans_i->code_max >= (tre_cint_t)prev_c)
+		{
+		  if (trans_i->assertions
+		      && (CHECK_ASSERTIONS(trans_i->assertions)
+			  || CHECK_CHAR_CLASSES(trans_i, tnfa, eflags)))
+		    {
+		      continue;
+		    }
+
+		  /* Compute the tags after this transition. */
+		  for (i = 0; i < num_tags; i++)
+		    tmp_tags[i] = reach_i->tags[i];
+		  tag_i = trans_i->tags;
+		  if (tag_i != NULL)
+		    while (*tag_i >= 0)
+		      {
+			if (*tag_i < num_tags)
+			  tmp_tags[*tag_i] = pos;
+			tag_i++;
+		      }
+
+		  if (reach_pos[trans_i->state_id].pos < pos)
+		    {
+		      /* Found an unvisited node. */
+		      reach_next_i->state = trans_i->state;
+		      tmp_iptr = reach_next_i->tags;
+		      reach_next_i->tags = tmp_tags;
+		      tmp_tags = tmp_iptr;
+		      reach_pos[trans_i->state_id].pos = pos;
+		      reach_pos[trans_i->state_id].tags = &reach_next_i->tags;
+
+		      if (reach_next_i->state == tnfa->final
+			  && (match_eo == -1
+			      || (num_tags > 0
+				  && reach_next_i->tags[0] <= match_tags[0])))
+			{
+			  match_eo = pos;
+			  new_match = 1;
+			  for (i = 0; i < num_tags; i++)
+			    match_tags[i] = reach_next_i->tags[i];
+			}
+		      reach_next_i++;
+
+		    }
+		  else
+		    {
+		      assert(reach_pos[trans_i->state_id].pos == pos);
+		      /* Another path has also reached this state.  We choose
+			 the winner by examining the tag values for both
+			 paths. */
+		      if (tre_tag_order(num_tags, tnfa->tag_directions,
+					tmp_tags,
+					*reach_pos[trans_i->state_id].tags))
+			{
+			  /* The new path wins. */
+			  tmp_iptr = *reach_pos[trans_i->state_id].tags;
+			  *reach_pos[trans_i->state_id].tags = tmp_tags;
+			  if (trans_i->state == tnfa->final)
+			    {
+			      match_eo = pos;
+			      new_match = 1;
+			      for (i = 0; i < num_tags; i++)
+				match_tags[i] = tmp_tags[i];
+			    }
+			  tmp_tags = tmp_iptr;
+			}
+		    }
+		}
+	    }
+	}
+      reach_next_i->state = NULL;
+    }
+
+  *match_end_ofs = match_eo;
+  ret = match_eo >= 0 ? REG_OK : REG_NOMATCH;
+error_exit:
+  xfree(buf);
+  return ret;
+}
+
+
+
+/***********************************************************************
+ from tre-match-backtrack.c
+***********************************************************************/
+
+/*
+  This matcher is for regexps that use back referencing.  Regexp matching
+  with back referencing is an NP-complete problem on the number of back
+  references.  The easiest way to match them is to use a backtracking
+  routine which basically goes through all possible paths in the TNFA
+  and chooses the one which results in the best (leftmost and longest)
+  match.  This can be spectacularly expensive and may run out of stack
+  space, but there really is no better known generic algorithm.	 Quoting
+  Henry Spencer from comp.compilers:
+  <URL: http://compilers.iecc.com/comparch/article/93-03-102>
+
+    POSIX.2 REs require longest match, which is really exciting to
+    implement since the obsolete ("basic") variant also includes
+    \\<digit>.  I haven't found a better way of tackling this than doing
+    a preliminary match using a DFA (or simulation) on a modified RE
+    that just replicates subREs for \\<digit>, and then doing a
+    backtracking match to determine whether the subRE matches were
+    right.  This can be rather slow, but I console myself with the
+    thought that people who use \\<digit> deserve very slow execution.
+    (Pun unintentional but very appropriate.)
+
+*/
+
+typedef struct {
+  regoff_t pos;
+  const char *str_byte;
+  tre_tnfa_transition_t *state;
+  int state_id;
+  int next_c;
+  regoff_t *tags;
+#ifdef TRE_MBSTATE
+  mbstate_t mbstate;
+#endif /* TRE_MBSTATE */
+} tre_backtrack_item_t;
+
+typedef struct tre_backtrack_struct {
+  tre_backtrack_item_t item;
+  struct tre_backtrack_struct *prev;
+  struct tre_backtrack_struct *next;
+} *tre_backtrack_t;
+
+#ifdef TRE_MBSTATE
+#define BT_STACK_MBSTATE_IN  stack->item.mbstate = (mbstate)
+#define BT_STACK_MBSTATE_OUT (mbstate) = stack->item.mbstate
+#else /* !TRE_MBSTATE */
+#define BT_STACK_MBSTATE_IN
+#define BT_STACK_MBSTATE_OUT
+#endif /* !TRE_MBSTATE */
+
+#define tre_bt_mem_new		  tre_mem_new
+#define tre_bt_mem_alloc	  tre_mem_alloc
+#define tre_bt_mem_destroy	  tre_mem_destroy
+
+
+#define BT_STACK_PUSH(_pos, _str_byte, _str_wide, _state, _state_id, _next_c, _tags, _mbstate) \\
+  do									      \\
+    {									      \\
+      int i;								      \\
+      if (!stack->next)							      \\
+	{								      \\
+	  tre_backtrack_t s;						      \\
+	  s = tre_bt_mem_alloc(mem, sizeof(*s));			      \\
+	  if (!s)							      \\
+	    {								      \\
+	      tre_bt_mem_destroy(mem);					      \\
+	      if (tags)							      \\
+		xfree(tags);						      \\
+	      if (pmatch)						      \\
+		xfree(pmatch);						      \\
+	      if (states_seen)						      \\
+		xfree(states_seen);					      \\
+	      return REG_ESPACE;					      \\
+	    }								      \\
+	  s->prev = stack;						      \\
+	  s->next = NULL;						      \\
+	  s->item.tags = tre_bt_mem_alloc(mem,				      \\
+					  sizeof(*tags) * tnfa->num_tags);    \\
+	  if (!s->item.tags)						      \\
+	    {								      \\
+	      tre_bt_mem_destroy(mem);					      \\
+	      if (tags)							      \\
+		xfree(tags);						      \\
+	      if (pmatch)						      \\
+		xfree(pmatch);						      \\
+	      if (states_seen)						      \\
+		xfree(states_seen);					      \\
+	      return REG_ESPACE;					      \\
+	    }								      \\
+	  stack->next = s;						      \\
+	  stack = s;							      \\
+	}								      \\
+      else								      \\
+	stack = stack->next;						      \\
+      stack->item.pos = (_pos);						      \\
+      stack->item.str_byte = (_str_byte);				      \\
+      stack->item.state = (_state);					      \\
+      stack->item.state_id = (_state_id);				      \\
+      stack->item.next_c = (_next_c);					      \\
+      for (i = 0; i < tnfa->num_tags; i++)				      \\
+	stack->item.tags[i] = (_tags)[i];				      \\
+      BT_STACK_MBSTATE_IN;						      \\
+    }									      \\
+  while (0)
+
+#define BT_STACK_POP()							      \\
+  do									      \\
+    {									      \\
+      int i;								      \\
+      assert(stack->prev);						      \\
+      pos = stack->item.pos;						      \\
+      str_byte = stack->item.str_byte;					      \\
+      state = stack->item.state;					      \\
+      next_c = stack->item.next_c;					      \\
+      for (i = 0; i < tnfa->num_tags; i++)				      \\
+	tags[i] = stack->item.tags[i];					      \\
+      BT_STACK_MBSTATE_OUT;						      \\
+      stack = stack->prev;						      \\
+    }									      \\
+  while (0)
+
+#undef MIN
+#define MIN(a, b) ((a) <= (b) ? (a) : (b))
+
+static reg_errcode_t
+tre_tnfa_run_backtrack(const tre_tnfa_t *tnfa, const void *string,
+		       regoff_t *match_tags, int eflags, regoff_t *match_end_ofs)
+{
+  /* State variables required by GET_NEXT_WCHAR. */
+  tre_char_t prev_c = 0, next_c = 0;
+  const char *str_byte = string;
+  regoff_t pos = 0;
+  regoff_t pos_add_next = 1;
+#ifdef TRE_MBSTATE
+  mbstate_t mbstate;
+#endif /* TRE_MBSTATE */
+  int reg_notbol = eflags & REG_NOTBOL;
+  int reg_noteol = eflags & REG_NOTEOL;
+  int reg_newline = tnfa->cflags & REG_NEWLINE;
+
+  /* These are used to remember the necessary values of the above
+     variables to return to the position where the current search
+     started from. */
+  int next_c_start;
+  const char *str_byte_start;
+  regoff_t pos_start = -1;
+#ifdef TRE_MBSTATE
+  mbstate_t mbstate_start;
+#endif /* TRE_MBSTATE */
+
+  /* End offset of best match so far, or -1 if no match found yet. */
+  regoff_t match_eo = -1;
+  /* Tag arrays. */
+  int *next_tags;
+  regoff_t *tags = NULL;
+  /* Current TNFA state. */
+  tre_tnfa_transition_t *state;
+  int *states_seen = NULL;
+
+  /* Memory allocator to for allocating the backtracking stack. */
+  tre_mem_t mem = tre_bt_mem_new();
+
+  /* The backtracking stack. */
+  tre_backtrack_t stack;
+
+  tre_tnfa_transition_t *trans_i;
+  regmatch_t *pmatch = NULL;
+  int ret;
+
+#ifdef TRE_MBSTATE
+  memset(&mbstate, '\\0', sizeof(mbstate));
+#endif /* TRE_MBSTATE */
+
+  if (!mem)
+    return REG_ESPACE;
+  stack = tre_bt_mem_alloc(mem, sizeof(*stack));
+  if (!stack)
+    {
+      ret = REG_ESPACE;
+      goto error_exit;
+    }
+  stack->prev = NULL;
+  stack->next = NULL;
+
+  if (tnfa->num_tags)
+    {
+      tags = xmalloc(sizeof(*tags) * tnfa->num_tags);
+      if (!tags)
+	{
+	  ret = REG_ESPACE;
+	  goto error_exit;
+	}
+    }
+  if (tnfa->num_submatches)
+    {
+      pmatch = xmalloc(sizeof(*pmatch) * tnfa->num_submatches);
+      if (!pmatch)
+	{
+	  ret = REG_ESPACE;
+	  goto error_exit;
+	}
+    }
+  if (tnfa->num_states)
+    {
+      states_seen = xmalloc(sizeof(*states_seen) * tnfa->num_states);
+      if (!states_seen)
+	{
+	  ret = REG_ESPACE;
+	  goto error_exit;
+	}
+    }
+
+ retry:
+  {
+    int i;
+    for (i = 0; i < tnfa->num_tags; i++)
+      {
+	tags[i] = -1;
+	if (match_tags)
+	  match_tags[i] = -1;
+      }
+    for (i = 0; i < tnfa->num_states; i++)
+      states_seen[i] = 0;
+  }
+
+  state = NULL;
+  pos = pos_start;
+  GET_NEXT_WCHAR();
+  pos_start = pos;
+  next_c_start = next_c;
+  str_byte_start = str_byte;
+#ifdef TRE_MBSTATE
+  mbstate_start = mbstate;
+#endif /* TRE_MBSTATE */
+
+  /* Handle initial states. */
+  next_tags = NULL;
+  for (trans_i = tnfa->initial; trans_i->state; trans_i++)
+    {
+      if (trans_i->assertions && CHECK_ASSERTIONS(trans_i->assertions))
+	{
+	  continue;
+	}
+      if (state == NULL)
+	{
+	  /* Start from this state. */
+	  state = trans_i->state;
+	  next_tags = trans_i->tags;
+	}
+      else
+	{
+	  /* Backtrack to this state. */
+	  BT_STACK_PUSH(pos, str_byte, 0, trans_i->state,
+			trans_i->state_id, next_c, tags, mbstate);
+	  {
+	    int *tmp = trans_i->tags;
+	    if (tmp)
+	      while (*tmp >= 0)
+		stack->item.tags[*tmp++] = pos;
+	  }
+	}
+    }
+
+  if (next_tags)
+    for (; *next_tags >= 0; next_tags++)
+      tags[*next_tags] = pos;
+
+
+  if (state == NULL)
+    goto backtrack;
+
+  while (1)
+    {
+      tre_tnfa_transition_t *next_state;
+      int empty_br_match;
+
+      if (state == tnfa->final)
+	{
+	  if (match_eo < pos
+	      || (match_eo == pos
+		  && match_tags
+		  && tre_tag_order(tnfa->num_tags, tnfa->tag_directions,
+				   tags, match_tags)))
+	    {
+	      int i;
+	      /* This match wins the previous match. */
+	      match_eo = pos;
+	      if (match_tags)
+		for (i = 0; i < tnfa->num_tags; i++)
+		  match_tags[i] = tags[i];
+	    }
+	  /* Our TNFAs never have transitions leaving from the final state,
+	     so we jump right to backtracking. */
+	  goto backtrack;
+	}
+
+      /* Go to the next character in the input string. */
+      empty_br_match = 0;
+      trans_i = state;
+      if (trans_i->state && trans_i->assertions & ASSERT_BACKREF)
+	{
+	  /* This is a back reference state.  All transitions leaving from
+	     this state have the same back reference "assertion".  Instead
+	     of reading the next character, we match the back reference. */
+	  regoff_t so, eo;
+	  int bt = trans_i->u.backref;
+	  regoff_t bt_len;
+	  int result;
+
+	  /* Get the substring we need to match against.  Remember to
+	     turn off REG_NOSUB temporarily. */
+	  tre_fill_pmatch(bt + 1, pmatch, tnfa->cflags & ~REG_NOSUB,
+			  tnfa, tags, pos);
+	  so = pmatch[bt].rm_so;
+	  eo = pmatch[bt].rm_eo;
+	  bt_len = eo - so;
+
+	  result = strncmp((const char*)string + so, str_byte - 1,
+				 (size_t)bt_len);
+
+	  if (result == 0)
+	    {
+	      /* Back reference matched.  Check for infinite loop. */
+	      if (bt_len == 0)
+		empty_br_match = 1;
+	      if (empty_br_match && states_seen[trans_i->state_id])
+		{
+		  goto backtrack;
+		}
+
+	      states_seen[trans_i->state_id] = empty_br_match;
+
+	      /* Advance in input string and resync \`prev_c', \`next_c'
+		 and pos. */
+	      str_byte += bt_len - 1;
+	      pos += bt_len - 1;
+	      GET_NEXT_WCHAR();
+	    }
+	  else
+	    {
+	      goto backtrack;
+	    }
+	}
+      else
+	{
+	  /* Check for end of string. */
+	  if (next_c == L'\\0')
+		goto backtrack;
+
+	  /* Read the next character. */
+	  GET_NEXT_WCHAR();
+	}
+
+      next_state = NULL;
+      for (trans_i = state; trans_i->state; trans_i++)
+	{
+	  if (trans_i->code_min <= (tre_cint_t)prev_c
+	      && trans_i->code_max >= (tre_cint_t)prev_c)
+	    {
+	      if (trans_i->assertions
+		  && (CHECK_ASSERTIONS(trans_i->assertions)
+		      || CHECK_CHAR_CLASSES(trans_i, tnfa, eflags)))
+		{
+		  continue;
+		}
+
+	      if (next_state == NULL)
+		{
+		  /* First matching transition. */
+		  next_state = trans_i->state;
+		  next_tags = trans_i->tags;
+		}
+	      else
+		{
+		  /* Second matching transition.  We may need to backtrack here
+		     to take this transition instead of the first one, so we
+		     push this transition in the backtracking stack so we can
+		     jump back here if needed. */
+		  BT_STACK_PUSH(pos, str_byte, 0, trans_i->state,
+				trans_i->state_id, next_c, tags, mbstate);
+		  {
+		    int *tmp;
+		    for (tmp = trans_i->tags; tmp && *tmp >= 0; tmp++)
+		      stack->item.tags[*tmp] = pos;
+		  }
+#if 0 /* XXX - it's important not to look at all transitions here to keep
+	 the stack small! */
+		  break;
+#endif
+		}
+	    }
+	}
+
+      if (next_state != NULL)
+	{
+	  /* Matching transitions were found.  Take the first one. */
+	  state = next_state;
+
+	  /* Update the tag values. */
+	  if (next_tags)
+	    while (*next_tags >= 0)
+	      tags[*next_tags++] = pos;
+	}
+      else
+	{
+	backtrack:
+	  /* A matching transition was not found.  Try to backtrack. */
+	  if (stack->prev)
+	    {
+	      if (stack->item.state->assertions & ASSERT_BACKREF)
+		{
+		  states_seen[stack->item.state_id] = 0;
+		}
+
+	      BT_STACK_POP();
+	    }
+	  else if (match_eo < 0)
+	    {
+	      /* Try starting from a later position in the input string. */
+	      /* Check for end of string. */
+	      if (next_c == L'\\0')
+		    {
+		      break;
+		    }
+	      next_c = next_c_start;
+#ifdef TRE_MBSTATE
+	      mbstate = mbstate_start;
+#endif /* TRE_MBSTATE */
+	      str_byte = str_byte_start;
+	      goto retry;
+	    }
+	  else
+	    {
+	      break;
+	    }
+	}
+    }
+
+  ret = match_eo >= 0 ? REG_OK : REG_NOMATCH;
+  *match_end_ofs = match_eo;
+
+ error_exit:
+  tre_bt_mem_destroy(mem);
+#ifndef TRE_USE_ALLOCA
+  if (tags)
+    xfree(tags);
+  if (pmatch)
+    xfree(pmatch);
+  if (states_seen)
+    xfree(states_seen);
+#endif /* !TRE_USE_ALLOCA */
+
+  return ret;
+}
+
+/***********************************************************************
+ from regexec.c
+***********************************************************************/
+
+/* Fills the POSIX.2 regmatch_t array according to the TNFA tag and match
+   endpoint values. */
+static void
+tre_fill_pmatch(size_t nmatch, regmatch_t pmatch[], int cflags,
+		const tre_tnfa_t *tnfa, regoff_t *tags, regoff_t match_eo)
+{
+  tre_submatch_data_t *submatch_data;
+  unsigned int i, j;
+  int *parents;
+
+  i = 0;
+  if (match_eo >= 0 && !(cflags & REG_NOSUB))
+    {
+      /* Construct submatch offsets from the tags. */
+      submatch_data = tnfa->submatch_data;
+      while (i < tnfa->num_submatches && i < nmatch)
+	{
+	  if (submatch_data[i].so_tag == tnfa->end_tag)
+	    pmatch[i].rm_so = match_eo;
+	  else
+	    pmatch[i].rm_so = tags[submatch_data[i].so_tag];
+
+	  if (submatch_data[i].eo_tag == tnfa->end_tag)
+	    pmatch[i].rm_eo = match_eo;
+	  else
+	    pmatch[i].rm_eo = tags[submatch_data[i].eo_tag];
+
+	  /* If either of the endpoints were not used, this submatch
+	     was not part of the match. */
+	  if (pmatch[i].rm_so == -1 || pmatch[i].rm_eo == -1)
+	    pmatch[i].rm_so = pmatch[i].rm_eo = -1;
+
+	  i++;
+	}
+      /* Reset all submatches that are not within all of their parent
+	 submatches. */
+      i = 0;
+      while (i < tnfa->num_submatches && i < nmatch)
+	{
+	  if (pmatch[i].rm_eo == -1)
+	    assert(pmatch[i].rm_so == -1);
+	  assert(pmatch[i].rm_so <= pmatch[i].rm_eo);
+
+	  parents = submatch_data[i].parents;
+	  if (parents != NULL)
+	    for (j = 0; parents[j] >= 0; j++)
+	      {
+		if (pmatch[i].rm_so < pmatch[parents[j]].rm_so
+		    || pmatch[i].rm_eo > pmatch[parents[j]].rm_eo)
+		  pmatch[i].rm_so = pmatch[i].rm_eo = -1;
+	      }
+	  i++;
+	}
+    }
+
+  while (i < nmatch)
+    {
+      pmatch[i].rm_so = -1;
+      pmatch[i].rm_eo = -1;
+      i++;
+    }
+}
+
+
+/*
+  Wrapper functions for POSIX compatible regexp matching.
+*/
+
+int
+regexec(const regex_t *restrict preg, const char *restrict string,
+	  size_t nmatch, regmatch_t pmatch[restrict], int eflags)
+{
+  tre_tnfa_t *tnfa = (void *)preg->TRE_REGEX_T_FIELD;
+  reg_errcode_t status;
+  regoff_t *tags = NULL, eo;
+  if (tnfa->cflags & REG_NOSUB) nmatch = 0;
+  if (tnfa->num_tags > 0 && nmatch > 0)
+    {
+      tags = xmalloc(sizeof(*tags) * tnfa->num_tags);
+      if (tags == NULL)
+	return REG_ESPACE;
+    }
+
+  /* Dispatch to the appropriate matcher. */
+  if (tnfa->have_backrefs)
+    {
+      /* The regex has back references, use the backtracking matcher. */
+      status = tre_tnfa_run_backtrack(tnfa, string, tags, eflags, &eo);
+    }
+  else
+    {
+      /* Exact matching, no back references, use the parallel matcher. */
+      status = tre_tnfa_run_parallel(tnfa, string, tags, eflags, &eo);
+    }
+
+  if (status == REG_OK)
+    /* A match was found, so fill the submatch registers. */
+    tre_fill_pmatch(nmatch, pmatch, tnfa->cflags, tnfa, tags, eo);
+  if (tags)
+    xfree(tags);
+  return status;
+}
+`,
+  "tdelete.c": `#include <stdlib.h>
+#include <search.h>
+#include "tsearch.h"
+
+void *tdelete(const void *restrict key, void **restrict rootp,
+	int(*cmp)(const void *, const void *))
+{
+	if (!rootp)
+		return 0;
+
+	void **a[MAXH+1];
+	struct node *n = *rootp;
+	struct node *parent;
+	struct node *child;
+	int i=0;
+	/* *a[0] is an arbitrary non-null pointer that is returned when
+	   the root node is deleted.  */
+	a[i++] = rootp;
+	a[i++] = rootp;
+	for (;;) {
+		if (!n)
+			return 0;
+		int c = cmp(key, n->key);
+		if (!c)
+			break;
+		a[i++] = &n->a[c>0];
+		n = n->a[c>0];
+	}
+	parent = *a[i-2];
+	if (n->a[0]) {
+		/* free the preceding node instead of the deleted one.  */
+		struct node *deleted = n;
+		a[i++] = &n->a[0];
+		n = n->a[0];
+		while (n->a[1]) {
+			a[i++] = &n->a[1];
+			n = n->a[1];
+		}
+		deleted->key = n->key;
+		child = n->a[0];
+	} else {
+		child = n->a[1];
+	}
+	/* freed node has at most one child, move it up and rebalance.  */
+	free(n);
+	*a[--i] = child;
+	while (--i && __tsearch_balance(a[i]));
+	return parent;
+}
+`,
+  "tdestroy.c": `#define _GNU_SOURCE
+#include <stdlib.h>
+#include <search.h>
+#include "tsearch.h"
+
+void tdestroy(void *root, void (*freekey)(void *))
+{
+	struct node *r = root;
+
+	if (r == 0)
+		return;
+	tdestroy(r->a[0], freekey);
+	tdestroy(r->a[1], freekey);
+	if (freekey) freekey((void *)r->key);
+	free(r);
+}
+`,
+  "tfind.c": `#include <search.h>
+#include "tsearch.h"
+
+void *tfind(const void *key, void *const *rootp,
+	int(*cmp)(const void *, const void *))
+{
+	if (!rootp)
+		return 0;
+
+	struct node *n = *rootp;
+	for (;;) {
+		if (!n)
+			break;
+		int c = cmp(key, n->key);
+		if (!c)
+			break;
+		n = n->a[c>0];
+	}
+	return n;
+}
+`,
+  "tre-mem.c": `/*
+  tre-mem.c - TRE memory allocator
+
+  Copyright (c) 2001-2009 Ville Laurikari <vl@iki.fi>
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions
+  are met:
+
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER AND CONTRIBUTORS
+  \`\`AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+  A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT
+  HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+*/
+
+/*
+  This memory allocator is for allocating small memory blocks efficiently
+  in terms of memory overhead and execution speed.  The allocated blocks
+  cannot be freed individually, only all at once.  There can be multiple
+  allocators, though.
+*/
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "tre.h"
+
+/*
+  This memory allocator is for allocating small memory blocks efficiently
+  in terms of memory overhead and execution speed.  The allocated blocks
+  cannot be freed individually, only all at once.  There can be multiple
+  allocators, though.
+*/
+
+/* Returns a new memory allocator or NULL if out of memory. */
+tre_mem_t
+tre_mem_new_impl(int provided, void *provided_block)
+{
+  tre_mem_t mem;
+  if (provided)
+    {
+      mem = provided_block;
+      memset(mem, 0, sizeof(*mem));
+    }
+  else
+    mem = xcalloc(1, sizeof(*mem));
+  if (mem == NULL)
+    return NULL;
+  return mem;
+}
+
+
+/* Frees the memory allocator and all memory allocated with it. */
+void
+tre_mem_destroy(tre_mem_t mem)
+{
+  tre_list_t *tmp, *l = mem->blocks;
+
+  while (l != NULL)
+    {
+      xfree(l->data);
+      tmp = l->next;
+      xfree(l);
+      l = tmp;
+    }
+  xfree(mem);
+}
+
+
+/* Allocates a block of \`size' bytes from \`mem'.  Returns a pointer to the
+   allocated block or NULL if an underlying malloc() failed. */
+void *
+tre_mem_alloc_impl(tre_mem_t mem, int provided, void *provided_block,
+		   int zero, size_t size)
+{
+  void *ptr;
+
+  if (mem->failed)
+    {
+      return NULL;
+    }
+
+  if (mem->n < size)
+    {
+      /* We need more memory than is available in the current block.
+	 Allocate a new block. */
+      tre_list_t *l;
+      if (provided)
+	{
+	  if (provided_block == NULL)
+	    {
+	      mem->failed = 1;
+	      return NULL;
+	    }
+	  mem->ptr = provided_block;
+	  mem->n = TRE_MEM_BLOCK_SIZE;
+	}
+      else
+	{
+	  int block_size;
+	  if (size * 8 > TRE_MEM_BLOCK_SIZE)
+	    block_size = size * 8;
+	  else
+	    block_size = TRE_MEM_BLOCK_SIZE;
+	  l = xmalloc(sizeof(*l));
+	  if (l == NULL)
+	    {
+	      mem->failed = 1;
+	      return NULL;
+	    }
+	  l->data = xmalloc(block_size);
+	  if (l->data == NULL)
+	    {
+	      xfree(l);
+	      mem->failed = 1;
+	      return NULL;
+	    }
+	  l->next = NULL;
+	  if (mem->current != NULL)
+	    mem->current->next = l;
+	  if (mem->blocks == NULL)
+	    mem->blocks = l;
+	  mem->current = l;
+	  mem->ptr = l->data;
+	  mem->n = block_size;
+	}
+    }
+
+  /* Make sure the next pointer will be aligned. */
+  size += ALIGN(mem->ptr + size, long);
+
+  /* Allocate from current block. */
+  ptr = mem->ptr;
+  mem->ptr += size;
+  mem->n -= size;
+
+  /* Set to zero if needed. */
+  if (zero)
+    memset(ptr, 0, size);
+
+  return ptr;
+}
+`,
+  "tsearch.c": `#include <stdlib.h>
+#include <search.h>
+#include "tsearch.h"
+
+static inline int height(struct node *n) { return n ? n->h : 0; }
+
+static int rot(void **p, struct node *x, int dir /* deeper side */)
+{
+	struct node *y = x->a[dir];
+	struct node *z = y->a[!dir];
+	int hx = x->h;
+	int hz = height(z);
+	if (hz > height(y->a[dir])) {
+		/*
+		 *   x
+		 *  / \\ dir          z
+		 * A   y            / \\
+		 *    / \\   -->    x   y
+		 *   z   D        /|   |\\
+		 *  / \\          A B   C D
+		 * B   C
+		 */
+		x->a[dir] = z->a[!dir];
+		y->a[!dir] = z->a[dir];
+		z->a[!dir] = x;
+		z->a[dir] = y;
+		x->h = hz;
+		y->h = hz;
+		z->h = hz+1;
+	} else {
+		/*
+		 *   x               y
+		 *  / \\             / \\
+		 * A   y    -->    x   D
+		 *    / \\         / \\
+		 *   z   D       A   z
+		 */
+		x->a[dir] = z;
+		y->a[!dir] = x;
+		x->h = hz+1;
+		y->h = hz+2;
+		z = y;
+	}
+	*p = z;
+	return z->h - hx;
+}
+
+/* balance *p, return 0 if height is unchanged.  */
+int __tsearch_balance(void **p)
+{
+	struct node *n = *p;
+	int h0 = height(n->a[0]);
+	int h1 = height(n->a[1]);
+	if (h0 - h1 + 1u < 3u) {
+		int old = n->h;
+		n->h = h0<h1 ? h1+1 : h0+1;
+		return n->h - old;
+	}
+	return rot(p, n, h0<h1);
+}
+
+void *tsearch(const void *key, void **rootp,
+	int (*cmp)(const void *, const void *))
+{
+	if (!rootp)
+		return 0;
+
+	void **a[MAXH];
+	struct node *n = *rootp;
+	struct node *r;
+	int i=0;
+	a[i++] = rootp;
+	for (;;) {
+		if (!n)
+			break;
+		int c = cmp(key, n->key);
+		if (!c)
+			return n;
+		a[i++] = &n->a[c>0];
+		n = n->a[c>0];
+	}
+	r = malloc(sizeof *r);
+	if (!r)
+		return 0;
+	r->key = key;
+	r->a[0] = r->a[1] = 0;
+	r->h = 1;
+	/* insert new node, rebalance ancestors.  */
+	*a[--i] = r;
+	while (i && __tsearch_balance(a[--i]));
+	return r;
+}
+`,
+  "twalk.c": `#include <search.h>
+#include "tsearch.h"
+
+static void walk(const struct node *r, void (*action)(const void *, VISIT, int), int d)
+{
+	if (!r)
+		return;
+	if (r->h == 1)
+		action(r, leaf, d);
+	else {
+		action(r, preorder, d);
+		walk(r->a[0], action, d+1);
+		action(r, postorder, d);
+		walk(r->a[1], action, d+1);
+		action(r, endorder, d);
+	}
+}
+
+void twalk(const void *root, void (*action)(const void *, VISIT, int))
+{
+	walk(root, action, 0);
+}
+`,
 };
 
 function getStdlibHeaders() { return _stdlibHeaders; }
 function getStdlibSources() { return _stdlibSources; }
-
-// --- Optional extension library (libc-ext.js) ---------------------------
-// compiler.js is self-contained for the ISO C (C89/99/11) standard library
-// plus a few handwritten goodies. POSIX / 3rd-party pieces that are too big
-// to inline (the TRE regex engine, fnmatch, glob) live in an OPTIONAL sibling
-// file `libc-ext.js`, a JSON-parseable `const EXT_LIB_MAP = { name: text }`
-// mapping header/source names to their contents. The compiler is FULLY
-// functional without that file; when present, its headers and sources are
-// merged into the stdlib lookup. EXT_PROVIDED_HEADERS lists what it is
-// expected to supply, used only to make "not loaded" diagnostics helpful.
-const EXT_PROVIDED_HEADERS = ["regex.h", "fnmatch.h", "glob.h"];
-let _extLibMap = undefined;
-function getExtLibMap() {
-  if (_extLibMap !== undefined) return _extLibMap;
-  _extLibMap = {};
-  // A host that loaded libc-ext.js as a sibling SCRIPT (browser worker via
-  // importScripts, QuickJS via evalScript) exposes its top-level
-  // `const EXT_LIB_MAP` in the shared global lexical scope — honor it
-  // first; the filesystem lookup below is the Node path.
-  try {
-    /* eslint-disable no-undef */
-    if (typeof EXT_LIB_MAP !== "undefined" && EXT_LIB_MAP) {
-      _extLibMap = EXT_LIB_MAP;
-      return _extLibMap;
-    }
-  } catch (e) { /* TDZ or absent: fall through */ }
-  // Locate libc-ext.js next to compiler.js. __dirname works when compiler.js
-  // is run or required under Node; the browser shim (new Function(...)) has no
-  // __dirname, so fall back to argv[1]'s directory — where the app mounts the
-  // vendored compiler.js and its siblings (host.js, libc-ext.js). The read is
-  // OPTIONAL: absence is fine; only a present-but-broken file is reported.
-  if (typeof require === "undefined") return _extLibMap;
-  let dir = null;
-  if (typeof __dirname !== "undefined") dir = __dirname;
-  else if (typeof process !== "undefined" && process.argv && process.argv[1]) {
-    try { dir = require("path").dirname(process.argv[1]); } catch (e) { dir = null; }
-  }
-  if (dir === null) return _extLibMap;
-  let fs, path;
-  try { fs = require("fs"); path = require("path"); } catch (e) { return _extLibMap; }
-  const file = path.join(dir, "libc-ext.js");
-  let present = false;
-  try { present = fs.existsSync(file); } catch (e) { present = false; }
-  if (!present) return _extLibMap;
-  try {
-    const text = fs.readFileSync(file, "utf-8");
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start < 0 || end < start) throw new Error("EXT_LIB_MAP object literal not found");
-    _extLibMap = JSON.parse(text.slice(start, end + 1));
-  } catch (e) {
-    const msg = "warning: libc-ext.js present but could not be loaded: " + (e && e.message) + "\\n";
-    if (typeof process !== "undefined" && process.stderr) process.stderr.write(msg);
-    else if (typeof console !== "undefined") console.error(msg);
-    _extLibMap = {};
-  }
-  return _extLibMap;
-}
 
 // SOURCE_DATE_EPOCH (reproducible-builds.org): the value must be a string of
 // ASCII decimal digits whose numeric value is at most 253402300799
@@ -41239,14 +46900,6 @@ function createDefaultPPRegistry() {
   for (const [name, content] of Object.entries(headers)) {
     pp.standardHeaders.set(name, content);
   }
-  // Merge optional extension headers (libc-ext.js), if present. Source files
-  // (.c) in the map are resolved separately at __require_source time.
-  for (const [name, content] of Object.entries(getExtLibMap())) {
-    if (name.endsWith(".h")) pp.standardHeaders.set(name, content);
-  }
-  // Manifest of headers the optional libc-ext.js supplies — lets a missing
-  // <regex.h>/<glob.h>/<fnmatch.h> report that the extension isn't present.
-  pp.extProvidedHeaders = EXT_PROVIDED_HEADERS;
 
   // Predefined macros (matching C++ compiler)
   const defs = {
@@ -41311,7 +46964,7 @@ function normalizeSourcePath(p) {
   return (isAbs ? "/" : "") + out.join("/");
 }
 
-// A require name that misses the builtin and libc-ext tiers is validated
+// A require name that misses the builtin tier is validated
 // BEFORE any filesystem probe (the security seam): it must be a relative
 // path of [A-Za-z0-9._-]+ components — no leading '/', no '.' or '..'
 // components, no '\', no empty components. Closes
@@ -41602,11 +47255,10 @@ function parseAllUnits(fs, pp, inputFiles, options) {
   for (;;) {
   while (pendingRequiredSources.length > 0) {
     const name = pendingRequiredSources.shift();
-    // Builtin tier, then the libc-ext tier — a builtin name ALWAYS wins
-    // over the filesystem tiers: the builtin sources are the compiler's ABI
-    // surface, paired with host imports; a planted /usr/src/__SDL.c must
-    // never hijack the real one.
-    const source = stdlibSources[name] || getExtLibMap()[name];
+    // Builtin tier first — a builtin name ALWAYS wins over the filesystem
+    // tiers: the builtin sources are the compiler's ABI surface, paired with
+    // host imports; a planted /usr/src/__SDL.c must never hijack the real one.
+    const source = stdlibSources[name];
     if (source) {
       pp.sourceBuffers.set(name, source);
       processSource(name, source);
@@ -41840,7 +47492,7 @@ async function doRun(msg) {
               }
 
               // O_WRONLY | O_CREAT | O_TRUNC — the access mode matters: the
-              // fd access-mode enforcement (todos/0376) fails a write on an
+              // fd access-mode enforcement (docs/archive/0376) fails a write on an
               // O_RDONLY fd, and an unchecked failure here seeds a 0-byte
               // asset the program then reads as corrupt (ticket #542).
               var fd = fs.open(fpath, 0x241, 0o644);
@@ -42002,7 +47654,7 @@ window.onunhandledrejection = function(e) {
   var audioReceiver = null;
   var hasSDL = false;
   var sdlCanvasW = 0, sdlCanvasH = 0;
-  var sdlRelativeMouse = false;   // SDL_SetWindowRelativeMouseMode requested (todos/0018)
+  var sdlRelativeMouse = false;   // SDL_SetWindowRelativeMouseMode requested (docs/archive/0018)
   var term = null;
   var stdinLine = '';
   var stdinResolve = null;
@@ -42303,7 +47955,7 @@ window.onunhandledrejection = function(e) {
       } else if (msg.type === 'sdl-title') {
         document.title = msg.title || '';            // SDL_SetWindowTitle
       } else if (msg.type === 'sdl-relative-mouse') {
-        // Relative mouse mode (todos/0018): arm click-to-pointer-lock. The
+        // Relative mouse mode (docs/archive/0018): arm click-to-pointer-lock. The
         // lock itself needs a user gesture, so it's requested in onMousedown;
         // ESC drops it (browser-enforced) and the next click re-locks.
         sdlRelativeMouse = !!msg.enabled;
@@ -42509,7 +48161,7 @@ function main() {
   const fs = require("fs");
   const path = require("path");
   function expandProjectJson(jsonPath, isInclude, seen) {
-    // Dedup diamond deps (todos/0079): a project reached twice (A deps zlib
+    // Dedup diamond deps (docs/archive/0079): a project reached twice (A deps zlib
     // AND libpng; libpng deps zlib) must compile once — the first occurrence
     // wins, later ones no-op (the -I flags it contributes are
     // position-independent). Key on the realpath so a symlinked route to the
@@ -42722,7 +48374,7 @@ function main() {
     } else if (args[i] === "--trap-null-dereference") {
       compilerOptions.trapNullDereference = true;
     } else if (args[i] === "--dedup-literals" || args[i] === "-fmerge-constants") {
-      // todos/0228: opt back into content-keyed string-literal merging (off
+      // docs/archive/0228: opt back into content-keyed string-literal merging (off
       // by default, so a UB write through one literal can't corrupt every
       // same-spelling literal). Trades that safety for data-segment size.
       compilerOptions.dedupLiterals = true;
@@ -43052,7 +48704,7 @@ var _exports = {
   AST,
   // Diag pool primitives — used by make-helpers and tested directly.
   withDiag, reportError, reportWarning, fatalError, FatalDiag,
-  // Spread-safe array append — exposed so the todos/0320 guard can assert
+  // Spread-safe array append — exposed so the docs/archive/0320 guard can assert
   // the per-call argument count stays bounded by SPREAD_CHUNK no matter how
   // long the source array is.
   pushAll, SPREAD_CHUNK,

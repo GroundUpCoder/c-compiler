@@ -1,4 +1,4 @@
-// Binary-shape assertions for __gcstr (todos/0041) — the parts a C-level
+// Binary-shape assertions for __gcstr (docs/archive/0041) — the parts a C-level
 // stdout test can't see:
 //
 //  1. Dedup is observable in the binary: one module-"#" global import per
@@ -10,7 +10,7 @@
 //     js-string spec requires of importedStringConstants globals.
 //  4. Loader polyfill: an engine/loader that can't pass compile options can
 //     satisfy the imports with `imports['#'] = new Proxy({}, {get: (_, n) => n})`
-//     (the one-liner documented in todos/0041) — instantiation succeeds and
+//     (the one-liner documented in docs/archive/0041) — instantiation succeeds and
 //     the program behaves identically.
 //
 // Run: node tests/host/test_gcstr_imports.js

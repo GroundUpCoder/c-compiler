@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// On-demand compositor wake protocol, end-to-end (todos/0169, IDLE-POWER
+// On-demand compositor wake protocol, end-to-end (docs/archive/0169, IDLE-POWER
 // piece B): a REAL C SDL program compiled by compiler.js runs as a
 // worker_thread under the kernel while the TEST plays the compositor
 // (compSetParked / compKeepAlive / wmOnDamage). Proves the host.js half of

@@ -1,5 +1,5 @@
-// todos/0152 (#40) — the browser half of the `serve.js --clang` acceptance
-// that todos/0141 landed headlessly: a REAL Chromium boots the served
+// docs/archive/0152 (#40) — the browser half of the `serve.js --clang` acceptance
+// that docs/archive/0141 landed headlessly: a REAL Chromium boots the served
 // clang-apps overlay blob and the clang-built apps are present and RUN.
 // 0141 proved the bake (sidecar blob carries /usr/bin/doom-clang, os-release
 // overlays lists clang-apps) and hermetically regression-tests the serve
@@ -11,7 +11,7 @@
 // artifact, never build the toolchain), so this member SKIPS — loudly, with
 // the resolved path — when ../clang-simplified/out-image/overlay.json is
 // absent. A skip is exit 0 with a SKIP line in the log: the record states
-// its own scope (todos/0339).
+// its own scope (docs/archive/0339).
 //
 // Legs: boot the --clang serve to ready; os-release names the overlay;
 // doom-clang + stl4 + sdldemo + the Games menu entry are in the sealed
@@ -61,7 +61,7 @@ const s = await openOsSession({
 const { page, check, waitOut, setVt, waitScreen } = s;
 
 try {
-  // A healthy ready auto-switches to the desktop (VT2, todos/0070) — shell
+  // A healthy ready auto-switches to the desktop (VT2, docs/archive/0070) — shell
   // typing needs VT1 (typed input goes to the VISIBLE tab).
   await setVt(1);
 

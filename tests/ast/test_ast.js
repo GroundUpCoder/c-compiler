@@ -665,7 +665,7 @@ test('INLINER diamond worklist: A→D, B→D, main→A and main→B (no inlining
 });
 
 // =============================================================================
-// Whole-program (post-link) inlining + expansion budget (todos/0188)
+// Whole-program (post-link) inlining + expansion budget (docs/archive/0188)
 // =============================================================================
 // linkTranslationUnits runs INLINER.optimizeLinked after wiring
 // decl.definition across TUs, so cross-TU single-return callees inline
@@ -741,7 +741,7 @@ test('INLINER expansion budget allows single-use params regardless of argument s
 });
 
 // =============================================================================
-// Volatile access linearity (todos/0187)
+// Volatile access linearity (docs/archive/0187)
 // =============================================================================
 // C11 5.1.2.3: accesses to volatile objects are observable behavior — the
 // count and order of volatile reads must survive optimization. A memory

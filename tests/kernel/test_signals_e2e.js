@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Phase 2 signals end-to-end (todos/0001): real C programs under a live
+// Phase 2 signals end-to-end (docs/archive/0001): real C programs under a live
 // kernel proving asynchronous delivery at safe points, EINTR vs SA_RESTART
 // on waitpid, interruptible sleep(), pause(), blocked-signal survival with
 // death-on-unblock as WIFSIGNALED, SIGCHLD to a catching parent, and the

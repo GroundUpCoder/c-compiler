@@ -18,7 +18,7 @@
 // window is up (the re-exec fired) and the script is executing" (its first
 // post-guard act, mkdir $HOME/minesweeper, runs before any curl). The full
 // curl -> cc -> game window flow needs live GitHub and minutes of compile —
-// that leg is notes/run-minesweeper-sample-demo.mjs, not this gate.
+// that leg is tools/minesweeper-demo/run-minesweeper-sample-demo.mjs, not this gate.
 //
 // Run: node tests/kernel/test_minesweeper_sample_e2e.js
 'use strict';

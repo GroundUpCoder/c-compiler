@@ -1,4 +1,4 @@
-/* model.h — the FROZEN .deck format, v1 (todos/0284, design §1.2).
+/* model.h — the FROZEN .deck format, v1 (docs/archive/0284, design §1.2).
  *
  * A .deck file is JSON (dedicated extension — openwith `json` would be
  * too broad). The WYSIWYG-first contract: every visible thing is an

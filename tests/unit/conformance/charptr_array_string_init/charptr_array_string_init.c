@@ -5,7 +5,7 @@
 // were fine (the special case can't pattern-match), as were bare pointers.
 // Hit auto locals (sized and unsized), static locals, file-scope statics,
 // and compound literals alike. Found by /bin/code's build_tools()
-// (todos/0174): cJSON walked the "required" name list through such an array
+// (docs/archive/0174): cJSON walked the "required" name list through such an array
 // and SEGV'd/hung on the garbage pointer.
 // C11: 6.7.9p14 says a string literal initializes an array of CHARACTER
 // type; p11/p13 make {"x"} for a char*[1] a one-element pointer init (the

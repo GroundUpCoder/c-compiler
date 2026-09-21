@@ -1,6 +1,6 @@
 /* keybind_registry_probe.c — the CHUNK 2 acceptance probe for os/keys.h's
  * named-action registry, override resolution, and chord parse/format
- * (todos/KEYBINDING-OVERRIDE-SYSTEM.md §2/§5). Pure host-C: keys.h is
+ * (docs/KEYBINDING-OVERRIDE-SYSTEM.md §2/§5). Pure host-C: keys.h is
  * SDL-header-free POSIX, so this compiles + runs natively (clang), no boot.
  *
  * Compiled + run by tests/kernel/test_keybind_registry.js. Emits `ok`/`FAIL`
@@ -58,7 +58,7 @@ static void test_registry_defaults(void) {
     CHECK("sysmenu = alt+space both schemes",
         ks_action_default(KSA_SYSMENU, KS_WINDOWS, d) == 1 && chord_is(d[0], KM_ALT, KK_SPACE) &&
         ks_action_default(KSA_SYSMENU, KS_MACOS, d) == 1 && chord_is(d[0], KM_ALT, KK_SPACE));
-    /* overview: Ctrl+Alt+E both schemes (the decided Exposé trigger, todos/
+    /* overview: Ctrl+Alt+E both schemes (the decided Exposé trigger, docs/
      * EXPOSE — scheme-independent; F3 was rejected as a macOS host-collision) */
     CHECK("overview = ctrl+alt+e both schemes",
         ks_action_default(KSA_OVERVIEW, KS_WINDOWS, d) == 1 && chord_is(d[0], KM_CTRL | KM_ALT, 'e') &&

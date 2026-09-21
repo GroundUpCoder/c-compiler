@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Phase 4 pipe semantics (todos/0003) without wasm: fake workers over a
+// Phase 4 pipe semantics (docs/archive/0003) without wasm: fake workers over a
 // BROKERED kernel (opts.fs), the test playing the process side of the
 // kernel-page protocol — pipes are OFDs, so creation/read/write/close all
 // ride the same fd RPCs as files (test_kernel.js pattern; see there for the

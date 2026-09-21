@@ -1,7 +1,7 @@
 'use strict';
 
 // JS-level unit tests for WAST validate()'s control-structure rules —
-// specifically the one-else-per-if rule (todos/0227 W2). No C-level
+// specifically the one-else-per-if rule (docs/archive/0227 W2). No C-level
 // producer can emit a double else today; this is defensive substrate
 // hardening so a future pass bug surfaces as the substrate's named error
 // ("second else in one if") instead of V8's opaque rejection of the

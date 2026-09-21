@@ -1,10 +1,10 @@
 'use strict';
-// Prebaked system-image fixture gate (todos/0082).
+// Prebaked system-image fixture gate (docs/archive/0082).
 //
 // The boot.js e2e family materializes its per-test image pair by COPYING
 // os/os-system.img (os/boot.js's default --fixture) instead of re-baking an
 // identical blob (~40-60s of compiling per file — 97% of the kernel suite's
-// serial cost, measured in todos/done/0081). Suite runners call
+// serial cost, measured in docs/archive/0081). Suite runners call
 // ensurePrebakedImage() once up front so that fixture exists and is
 // INPUT-fresh: a blob baked before the current compiler.js/os//vendor tree
 // re-bakes HERE (one visible mkimage run) rather than being silently copied

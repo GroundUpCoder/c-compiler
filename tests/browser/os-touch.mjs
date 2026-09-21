@@ -218,7 +218,7 @@ try {
 
   // ---- long-press on its taskbar button -> window menu above the bar ----
   // Button 0 sits at x~112 — past the Start strip AND the Task-View/overview
-  // button (todos/EXPOSE shifted the app strip by TASKVIEW_W = 26px); the menu
+  // button (docs/EXPOSE shifted the app strip by TASKVIEW_W = 26px); the menu
   // parks above the 36px bar at the button's left edge. Coordinates mirror the
   // (green) mouse leg in os-ctxmenu.mjs: press at x=150 (inside [112,272)),
   // sample the FACE gutter at BMX+4 with BMX = the menu's left edge (114).

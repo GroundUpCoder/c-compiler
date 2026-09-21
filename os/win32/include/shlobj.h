@@ -1,4 +1,4 @@
-/* shlobj.h — shell32 folder surface for the port corpus (todos/0060).
+/* shlobj.h — shell32 folder surface for the port corpus (docs/archive/0060).
  * Declaration-only. */
 #pragma once
 

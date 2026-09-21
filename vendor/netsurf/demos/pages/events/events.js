@@ -1,7 +1,7 @@
 /* events.js — loaded with <script src="events.js">.
  *
  * Every assertion this page makes is about something that did not work
- * before todos/0289:
+ * before docs/archive/0289:
  *
  *   * a `{capture: true}` listener fired in NO phase, and — because the
  *     per-node registration was keyed by event NAME alone — registering

@@ -90,7 +90,7 @@ function present(fb, rgba) {
   Atomics.add(fb.i32, K.SH_SEQ, 1);
 }
 function drain(ring) {
-  // The owner focus pair (todos/0256, FOCUS_GAINED/LOST) interleaves with
+  // The owner focus pair (docs/archive/0256, FOCUS_GAINED/LOST) interleaves with
   // input at every focus transition by design; this file asserts INPUT
   // routing sequences, so the pair is filtered here — its own coverage
   // lives in test_wm_anchored.js.

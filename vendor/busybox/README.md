@@ -1,4 +1,4 @@
-# busybox — the shell port (todos/0005) + coreutils (todos/0010, 0034, 0035, 0043)
+# busybox — the shell port (docs/archive/0005) + coreutils (docs/archive/0010, 0034, 0035, 0043)
 
 Two binaries come out of this vendor tree:
 
@@ -6,16 +6,16 @@ Two binaries come out of this vendor tree:
 - **`coreutils.json`** → `/bin/coreutils`: a **multicall** binary carrying
   cat ls cp mv rm mkdir rmdir head tail wc sort pwd true false ln touch
   basename dirname grep egrep fgrep sed **vi** echo printf test `[` kill
-  (0010), plus — batch 2, todos/0034 — cut tr uniq tee nl od paste fold
+  (0010), plus — batch 2, docs/archive/0034 — cut tr uniq tee nl od paste fold
   tac comm cmp du dd split truncate unlink readlink realpath mktemp stat
   sync yes seq env expr date uname usleep which cksum base64 md5sum
   sha1sum sha256sum; sleep, whoami, id and hostname are hand-rolled in
   `port/multicall_main.c` (sleep: upstream `sleep.c` wasn't vendored,
-  added for todos/0014's harnesses; whoami/id/hostname: single-user stubs
+  added for docs/archive/0014's harnesses; whoami/id/hostname: single-user stubs
   printing root/0/localhost rather than dragging in libpwdgrp — the
-  `FEATURE_LS_USERNAME`-off philosophy); plus — batch 3, todos/0035, the
+  `FEATURE_LS_USERNAME`-off philosophy); plus — batch 3, docs/archive/0035, the
   SPAWN-CAPABLE set — **find xargs awk tar gzip gunzip zcat less diff**;
-  plus — batch 4, todos/0043, the PROCESS TOOLS over the kernel's synthetic
+  plus — batch 4, docs/archive/0043, the PROCESS TOOLS over the kernel's synthetic
   /proc — **ps top pgrep pkill uptime free** (upstream applets + libbb
   `procps.c`/`duration.c`/`getopt_allopts.c`; uptime/free go through the
   port's `sysinfo()` in libbb_stubs.c, which itself reads /proc); plus —
@@ -34,7 +34,7 @@ Two binaries come out of this vendor tree:
   from source at first boot (os/image.json), and 27 separate builds cost
   ~26s of seeding vs ~2s for this one binary — measured.
 
-  Since todos/0035 the multicall LINKS THE SHIM (`vfork_spawn.c` +
+  Since docs/archive/0035 the multicall LINKS THE SHIM (`vfork_spawn.c` +
   `port/spawn_helpers.c` — libbb's spawn()/xspawn()/spawn_and_wait()
   hand-rolled over pv_*, replacing vfork_daemon_rexec.c which drags in
   the kbuild applet tables): find -exec and xargs journal their "vfork
@@ -89,17 +89,17 @@ busybox 1.37.0's **hush** built as a standalone `/bin/sh` for gucOS
 via **vfork + re-exec-self with serialized state** (`re_execute_shell`).
 This port builds hush in its NOMMU configuration (`CONFIG_NOMMU=y` →
 `BB_MMU 0`) and maps that machinery onto the OS's native
-CreateProcess-class primitive, `__spawn` (decision: `todos/OS.md`).
+CreateProcess-class primitive, `__spawn` (decision: `docs/OS.md`).
 
 ### umask (removed 2026-07-28)
 
 `port/include/wasm_port.h` used to carry a `static ALWAYS_INLINE umask()` that
 stored a value and did nothing — "the fs layer has no notion of a process
-umask". **todos/0382 gap 1** made `umask(2)` real in the libc, applied by
+umask". **docs/archive/0382 gap 1** made `umask(2)` real in the libc, applied by
 `open(O_CREAT)`/`creat`/`mkdir`/`mkdirat`, so the shim was both a duplicate
 definition and a false statement. It is gone, and hush's `umask` builtin now
 actually affects the modes of files created in that process. (It does not yet
-cross a spawn boundary — that is `todos/0399`.)
+cross a spawn boundary — that is `docs/archive/0399`.)
 
 ## The vfork-on-__spawn shim (`port/vfork_spawn.c`, `port/include/wasm_port.h`)
 
@@ -127,9 +127,9 @@ journaling mode:
 
 | File | Patch |
 |---|---|
-| `src/shell/hush.c` | `run_list` exempts while/until condition commands from `set -e`, while keeping body failures fatal (#769, native-sh differential regressions); 3 vfork sites → setjmp shim form (run_pipe, command substitution, heredoc); heredoc rewritten to bash-style unlinked temp file (a spawned pipe-feeder would deadlock: the consumer execs only after setup returns); `<fnmatch.h>` include made unconditional (its `ENABLE_HUSH_CASE` guard evaluates before autoconf.h is seen); backgrounded-stdin `/dev/null` journal-safe; NOMMU builtin dispatch uses the full builtin table (no multicall applet binary to re-exec, so builtins-in-pipes re-exec `/bin/sh` itself); `G.argv0_for_re_execing` strips a leading login-shell dash (todos/0177 — shells spawn as `-sh` per todos/0174, and without this every `$()`/pipe/builtin NOMMU re-exec inherits the dash, re-triggers login profile sourcing in the subshell, and a `$()` in a profile recurses forever / leaks profile stdout into substitutions) |
-| `src/include/platform.h` | includes `autoconf.h` (kbuild passes it via `-include`; this compiler has no such flag and platform.h is every TU's first header); `__wasm__` HAVE_* block (what this libc lacks — libbb/platform.c supplies fallbacks). `HAVE_MEMRCHR` was REMOVED from that block by todos/0325 Group B: the libc grew a real `memrchr`, and libbb's fallback is a real definition, so keeping the undef became a duplicate-symbol link error. `HAVE_STRSIGNAL` stays undef'd on purpose even though the libc grew `strsignal` too — libbb's is a MACRO to `get_signame()` printing the short names ("STOP", not "Stopped") that applet output is written against, and a macro cannot collide at link. (A former "ALIGN* emptied under `__wasm__`" patch was reverted 2026-07-07: the `aligned(N)` parser crash is fixed — `tests/unit/conformance/parse_attr_aligned_arg` — so upstream ALIGN* compiles as-is) |
-| `src/include/libbb.h` | includes `wasm_port.h` at the end; `barrier()` empty under `__wasm__` (no inline asm; single thread); the three statement-expression ctype macros (isspace/isblank/iscntrl) → ALWAYS_INLINE helpers (no GNU statement exprs in this compiler); `__wasm__` branch in the !LFS `uoff_t` block — this libc's `off_t` is 64-bit even without LFS, so `uoff_t`/`XATOOFF`/`OFF_FMT` use the long-long family (upstream's `sizeof(off_t)==sizeof(long)` assumption misdetects; its `BUG_off_t_size_is_misdetected` compile-assert fired once the compiler diagnosed negative array sizes — todos/0231) |
+| `src/shell/hush.c` | `run_list` exempts while/until condition commands from `set -e`, while keeping body failures fatal (#769, native-sh differential regressions); 3 vfork sites → setjmp shim form (run_pipe, command substitution, heredoc); heredoc rewritten to bash-style unlinked temp file (a spawned pipe-feeder would deadlock: the consumer execs only after setup returns); `<fnmatch.h>` include made unconditional (its `ENABLE_HUSH_CASE` guard evaluates before autoconf.h is seen); backgrounded-stdin `/dev/null` journal-safe; NOMMU builtin dispatch uses the full builtin table (no multicall applet binary to re-exec, so builtins-in-pipes re-exec `/bin/sh` itself); `G.argv0_for_re_execing` strips a leading login-shell dash (docs/archive/0177 — shells spawn as `-sh` per docs/archive/0174, and without this every `$()`/pipe/builtin NOMMU re-exec inherits the dash, re-triggers login profile sourcing in the subshell, and a `$()` in a profile recurses forever / leaks profile stdout into substitutions) |
+| `src/include/platform.h` | includes `autoconf.h` (kbuild passes it via `-include`; this compiler has no such flag and platform.h is every TU's first header); `__wasm__` HAVE_* block (what this libc lacks — libbb/platform.c supplies fallbacks). `HAVE_MEMRCHR` was REMOVED from that block by docs/archive/0325 Group B: the libc grew a real `memrchr`, and libbb's fallback is a real definition, so keeping the undef became a duplicate-symbol link error. `HAVE_STRSIGNAL` stays undef'd on purpose even though the libc grew `strsignal` too — libbb's is a MACRO to `get_signame()` printing the short names ("STOP", not "Stopped") that applet output is written against, and a macro cannot collide at link. (A former "ALIGN* emptied under `__wasm__`" patch was reverted 2026-07-07: the `aligned(N)` parser crash is fixed — `tests/unit/conformance/parse_attr_aligned_arg` — so upstream ALIGN* compiles as-is) |
+| `src/include/libbb.h` | includes `wasm_port.h` at the end; `barrier()` empty under `__wasm__` (no inline asm; single thread); the three statement-expression ctype macros (isspace/isblank/iscntrl) → ALWAYS_INLINE helpers (no GNU statement exprs in this compiler); `__wasm__` branch in the !LFS `uoff_t` block — this libc's `off_t` is 64-bit even without LFS, so `uoff_t`/`XATOOFF`/`OFF_FMT` use the long-long family (upstream's `sizeof(off_t)==sizeof(long)` assumption misdetects; its `BUG_off_t_size_is_misdetected` compile-assert fired once the compiler diagnosed negative array sizes — docs/archive/0231) |
 | `src/include/autoconf.h` | generated from `busybox.config` (allnoconfig + hush/editing/NOMMU); `CONFIG_BUSYBOX_EXEC_PATH` → `/bin/sh` (the re-exec-self image) |
 | `src/libbb/xfuncs_printf.c` | unused syscall wrappers (xsocket/xbind/…/xmkstemp/xchroot/xsettimeofday, the NOEXEC vfork helper) guarded out under `__wasm__` |
 | `src/coreutils/test.c` | `res = setjmp(leaving)` → supported if-form (every longjmp passes 2) |
@@ -151,7 +151,7 @@ journaling mode:
 | `port/libbb_stubs.c` | appletlib globals (`applet_name` — overridable via `PORT_APPLET_NAME`, `xfunc_error_retval`, `bb_show_usage`, `string_array_len`), `bb_clk_tck`, single-user `bb_getgroups`; (0043) `sysinfo()` reading /proc/{uptime,loadavg,meminfo} with graceful zeros outside the OS, and the `clear_username_cache` no-op |
 
 (`xfuncs_printf.c`'s former "xmkstemp guarded out" entry is gone: the libc
-grew `mkstemp()` for `sed -i`, todos/0010.)
+grew `mkstemp()` for `sed -i`, docs/archive/0010.)
 
 (RETIRED, #685 — upstream text restored: the 7 GNU `?:` elvis rewrites,
 `vi.c` ×6 + `time.c` ×1. The elvis operator landed in `8999f38d` (#681),

@@ -5,7 +5,7 @@
 // C11: 6.5.2.1p2 (the subscript operator is defined via *(E1+(E2)), symmetric).
 // EXPECT: with int arr[3]={1,2,3}, `1[arr]` yields 2 (== arr[1]).
 //      compiler.js: parse error (rejects-valid).
-// KNOWN-BUG: todos/0193 (pinned xfail; deliberate rejection ~compiler.js:4937).
+// KNOWN-BUG: docs/archive/0193 (pinned xfail; deliberate rejection ~compiler.js:4937).
 #include <stdio.h>
 int main(void) {
   int arr[3] = {1, 2, 3};

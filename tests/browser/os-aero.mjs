@@ -66,7 +66,7 @@ try {
   const WX = 12, WY = 36, WW = 240, WH = 160;    // first-window wm placement
   // The client must be the EXACT src-over blend of 50%-alpha blue over
   // what's behind it — an opaque-blue or gray sample means the alpha path
-  // regressed. probe x sits past the two-column icon band (x>184, todos/0184).
+  // regressed. probe x sits past the two-column icon band (x>184, docs/archive/0184).
   await waitPixel(WX + 200, WY + 80, ABLEND, 60000);
   check('50%-alpha blue client composites src-over (exact blend)', true);
   check('opaque white app border stays opaque',
@@ -74,7 +74,7 @@ try {
   check('focused title bar flat navy (glass off)',
     near(await sample(WX + 150, WY - 12), NAVY), await sample(WX + 150, WY - 12));
 
-  // ---- drop shadow + rounded corners (todos/0063 SDF chrome) ----
+  // ---- drop shadow + rounded corners (docs/archive/0063 SDF chrome) ----
   // Just below the frame (4px border + 3px drop, 1px in) the shadow is
   // near its darkest: teal scaled well down. 30px below it has decayed to
   // clean desktop (SHADOW_EXT 14).
@@ -96,7 +96,7 @@ try {
 
   // ---- Aero Peek: taskbar hover raises the live thumbnail ----
   // One window: button 0 spans x in [112, 272) — the app strip sits past the
-  // Start strip AND the Task-View/overview button (todos/EXPOSE shifted it by
+  // Start strip AND the Task-View/overview button (docs/EXPOSE shifted it by
   // TASKVIEW_W). The popup (160x120) parks above the bar centered on the
   // button (peek_x = 112), its client center showing the box-filtered alphabox
   // front buffer — pure blue (the thumbnail drops alpha).

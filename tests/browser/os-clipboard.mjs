@@ -162,7 +162,7 @@ try {
   check('OSK Ctrl+V tap pasted the fresh host text through the seam',
     got2.includes('OSK-PASTE-FRESH-79'), got2.slice(0, 300));
 
-  // ---- Host FILE paste (todos/0398 D6): the chord carve-out + staging ----
+  // ---- Host FILE paste (docs/archive/0398 D6): the chord carve-out + staging ----
   // Playwright cannot place a real FILE on the host clipboard, so the leg
   // synthesizes what the browser would deliver: a keydown on #screen (the
   // carve-out arms and — synthetic, so no native paste command — waits) and

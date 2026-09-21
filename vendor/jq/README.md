@@ -78,8 +78,8 @@ build, reproduced here so no flex/bison/autoconf step is needed):
   and left off.
 - `src/jq_gucos_shims.h` — historical gap-filler header, now just
   `#include <time.h>`. The `.c` TU is GONE: everything jq's date builtins
-  need is libc-provided — `timegm()`/`gmtime_r()` by **todos/0325 Group B /
-  todos/0382 gap 5**, and `strptime()` by **ticket #113**, which retired the
+  need is libc-provided — `timegm()`/`gmtime_r()` by **docs/archive/0325 Group B /
+  docs/archive/0382 gap 5**, and `strptime()` by **ticket #113**, which retired the
   last local copy exactly as the shim's own note anticipated ("if a future
   compiler.js grows them, drop the define(s) and this TU can shrink"): a
   kept copy is a duplicate-symbol link error against the libc.

@@ -1,4 +1,4 @@
-%% bullets.mgp - gucOS MagicPoint showcase (todos/0185): tab-depth lists
+%% bullets.mgp - gucOS MagicPoint showcase (docs/archive/0185): tab-depth lists
 %% and %icon shapes. Body lines below start with REAL tab characters.
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"
 %default 1 area 90 90, size 2, fore "white", back "MidnightBlue", font "standard"

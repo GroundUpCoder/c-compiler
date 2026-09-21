@@ -28,7 +28,7 @@
 #include <string.h>
 
 #include "py/runtime.h"
-// gucOS patch (todos/0117 R2): MICROPY_PY_RANDOM_SEED_INIT_FUNC is
+// gucOS patch (docs/archive/0117 R2): MICROPY_PY_RANDOM_SEED_INIT_FUNC is
 // mp_hal_time_ns(), which is declared here. Upstream ports that use a
 // seed func supply it from a header they already include.
 #include "py/mphal.h"

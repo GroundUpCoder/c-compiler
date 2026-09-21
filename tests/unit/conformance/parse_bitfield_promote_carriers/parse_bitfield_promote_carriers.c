@@ -1,5 +1,5 @@
 // BUG: two defects around bit-field-ness carried through value-forwarding
-// expressions (todos/0367 residual of 0356). (1) promoteExprType promoted the
+// expressions (docs/archive/0367 residual of 0356). (1) promoteExprType promoted the
 // LEFT operand of an assignment when computing the assignment's own result
 // type, so `(t.ull20 = 5)` was typed (promoted) int while codegen reloaded
 // the stored field at its declared 64-bit width — consuming it in arithmetic

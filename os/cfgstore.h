@@ -30,15 +30,15 @@
  * under. cfg_unset is the same stream with the substitution dropped: it
  * removes the user override so the lower layers serve the key again (there
  * is deliberately NO tombstone — hiding a baked key is a store-wide
- * semantic change, todos/0338 §9).
+ * semantic change, docs/archive/0338 §9).
  *
- * Iteration (todos/0338): cfg_find answers "the effective value"; a store
+ * Iteration (docs/archive/0338): cfg_find answers "the effective value"; a store
  * whose key may carry SEVERAL lines (cmdalt's candidate implementations)
  * also needs "every line for this key, in layer order" (cfg_each) and
  * "every distinct key" (cfg_keys). Both are read-only walks over the same
  * cfg_load3 concat, so first-match-wins still IS the precedence rule.
  *
- * Argv (todos/0338): cfg_split_argv + cfg_resolve_prog are the command
+ * Argv (docs/archive/0338): cfg_split_argv + cfg_resolve_prog are the command
  * splitter openwith.h's ow_build used to own privately — a store VALUE is
  * an argv prefix whose bare first word resolves through the canonical
  * PATH. cmdalt appends N arguments where openwith appends one path, so the
@@ -144,7 +144,7 @@ static int cfg_find(const char *text, const char *key, char *val, size_t sz) {
     return 0;
 }
 
-/* ------------------------- iteration (todos/0338) ------------------------
+/* ------------------------- iteration (docs/archive/0338) ------------------------
  *
  * cfg_find deliberately keeps its own in-place key compare (no key buffer
  * on the hot resolve path, and it is the one function every shipped store
@@ -252,10 +252,10 @@ static int cfg_keys(const char *text, cfg_line_cb cb, void *user) {
     return n;
 }
 
-/* ---------------------- argv from a store VALUE (todos/0338) -------------
+/* ---------------------- argv from a store VALUE (docs/archive/0338) -------------
  *
  * The canonical PATH, in ONE place: user-installed binaries win over baked
- * ones (todos/0040 — os/launch.h ships the same string as $PATH). */
+ * ones (docs/archive/0040 — os/launch.h ships the same string as $PATH). */
 
 /* First existing /usr/local/bin|/bin entry for a bare command name; 1 and
  * the absolute path, or 0 with out[0] == 0. */
@@ -375,7 +375,7 @@ static int cfg_set(const char *name, const char *key, const char *value) {
     return cfg_write(name, key, value);
 }
 
-/* Drop `key`'s USER override (todos/0338): the admin/baked layers serve it
+/* Drop `key`'s USER override (docs/archive/0338): the admin/baked layers serve it
  * again. Returns 0 (including "there was nothing to drop"), or -1. */
 static int cfg_unset(const char *name, const char *key) {
     return cfg_write(name, key, NULL);

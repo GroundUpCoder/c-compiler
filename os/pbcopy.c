@@ -1,8 +1,8 @@
-/* pbcopy.c — stdin -> the system clipboard, the macOS name (todos/0397).
+/* pbcopy.c — stdin -> the system clipboard, the macOS name (docs/archive/0397).
  *
  *   cmd | pbcopy
  *
- * The same one kernel clipboard slot /bin/clip writes (todos/0090), so
+ * The same one kernel clipboard slot /bin/clip writes (docs/archive/0090), so
  * `echo hi | pbcopy` really pastes into notepad and `clip -o` really
  * prints it back. The operation itself is os/clipio.h, shared verbatim
  * with clip and pbpaste; see that header for the slot's text-only limit

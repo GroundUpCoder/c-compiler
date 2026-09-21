@@ -1,4 +1,4 @@
-// gucOS MicroPython port — the HAL clock (todos/0117 R2).
+// gucOS MicroPython port — the HAL clock (docs/archive/0117 R2).
 //
 // Upstream's ports/unix keeps these in unix_mphal.c; ports/minimal, which this
 // port started from, had only a `return 0` ticks_ms stub in mphalport.h because

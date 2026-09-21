@@ -1,5 +1,5 @@
 /* keys.h — the system keyboard scheme, ONE keymap in ONE place
- * (todos/0149 + 0150, design todos/KEYMAP.md).
+ * (docs/archive/0149 + 0150, design docs/KEYMAP.md).
  *
  * Header-only by design (the openwith.h/saver.h/sounds.h precedent):
  * static functions shared by textual inclusion — os/win32/user32.c (EDIT/
@@ -30,7 +30,7 @@
  * saver_poll cadence) — a Control Panel Apply reaches every running app
  * within ~1s with no notification mechanism.
  *
- * User-overridable bindings (todos/KEYBINDING-OVERRIDE-SYSTEM.md, CHUNK 2):
+ * User-overridable bindings (docs/KEYBINDING-OVERRIDE-SYSTEM.md, CHUNK 2):
  * every rebindable behavior is a named action in the KS_ACTIONS registry
  * below; a `bind.<action> <chord>` key in the SAME cfgstore overlay layers
  * on top of the scheme default (none = unbind, a rebind MOVES the binding).
@@ -40,7 +40,7 @@
  * in chunk iv). ks_parse_chord/ks_chord_str/ks_chord_scancode are the ONE
  * text<->(mods,key)<->scancode surface.
  *
- * Notes (todos/KEYMAP.md, superseded/updated by the override system):
+ * Notes (docs/KEYMAP.md, superseded/updated by the override system):
  *   - ⌘+arrow rows EXIST in the macos table (⌘←/→ line nav, ⌘↑/↓ doc nav)
  *     and are LIVE: wm.c relocated tiling off GUI+arrow to Ctrl+Alt+arrow
  *     (the grab-table push, META-ARROW-KEYBIND.md), so ⌘+arrow now passes
@@ -122,13 +122,13 @@ typedef struct {
     int action;                /* KA_* */
 } KeyBinding;
 
-/* The two keymaps (todos/KEYMAP.md "The two keymaps"). Shift is significant
+/* The two keymaps (docs/KEYMAP.md "The two keymaps"). Shift is significant
  * only where a row names it: selection-extension belongs to the CONTEXT
  * (the EDIT caret machinery), not to the chord, so Ctrl+Shift+C still
  * copies while the windows-term row genuinely requires the Shift. */
 static const KeyBinding KS_TABLE[] = {
     /* ---- windows: Ctrl is the verb modifier (the native Win95 idiom) ---- */
-    /* copy/cut/paste carry KCTX_LIST too (todos/0398): the desktop grid
+    /* copy/cut/paste carry KCTX_LIST too (docs/archive/0398): the desktop grid
      * dispatches them in desk_key like the existing select-all case. */
     { KS_WINDOWS, KCTX_EDIT | KCTX_LIST, KM_CTRL, 0, 'a',      KA_SELECT_ALL },
     { KS_WINDOWS, KCTX_EDIT | KCTX_LIST, KM_CTRL, 0, 'c',      KA_COPY },
@@ -152,7 +152,7 @@ static const KeyBinding KS_TABLE[] = {
     { KS_MACOS, KCTX_EDIT,             KM_GUI, 0, 'z',     KA_UNDO },
     { KS_MACOS, KCTX_EDIT,             KM_ALT, 0, KK_LEFT,  KA_WORD_LEFT },
     { KS_MACOS, KCTX_EDIT,             KM_ALT, 0, KK_RIGHT, KA_WORD_RIGHT },
-    /* ⌘←/→ line nav, ⌘↑/↓ doc nav (todos/KEYBINDING-OVERRIDE-SYSTEM.md +
+    /* ⌘←/→ line nav, ⌘↑/↓ doc nav (docs/KEYBINDING-OVERRIDE-SYSTEM.md +
      * META-ARROW-KEYBIND.md, jku-decided). rl=0: these are the native macOS
      * idiom, not the readline bundle — always on in macos scheme. LIVE: wm.c
      * relocated tiling to Ctrl+Alt+arrow, so GUI+arrow passes through to the
@@ -161,7 +161,7 @@ static const KeyBinding KS_TABLE[] = {
     { KS_MACOS, KCTX_EDIT,             KM_GUI, 0, KK_RIGHT, KA_LINE_END },
     { KS_MACOS, KCTX_EDIT,             KM_GUI, 0, KK_UP,    KA_DOC_START },
     { KS_MACOS, KCTX_EDIT,             KM_GUI, 0, KK_DOWN,  KA_DOC_END },
-    /* the readline rows (todos/0150; ^A ^E ^F ^B ^D ^W ^K ^U ^N ^P) */
+    /* the readline rows (docs/archive/0150; ^A ^E ^F ^B ^D ^W ^K ^U ^N ^P) */
     { KS_MACOS, KCTX_EDIT, KM_CTRL, 1, 'a', KA_LINE_START },
     { KS_MACOS, KCTX_EDIT, KM_CTRL, 1, 'e', KA_LINE_END },
     { KS_MACOS, KCTX_EDIT, KM_CTRL, 1, 'f', KA_CHAR_RIGHT },
@@ -176,7 +176,7 @@ static const KeyBinding KS_TABLE[] = {
 
 /* ======================================================================
  * The named-action registry + user overrides
- * (todos/KEYBINDING-OVERRIDE-SYSTEM.md §2/§5). ONE fixed table of every
+ * (docs/KEYBINDING-OVERRIDE-SYSTEM.md §2/§5). ONE fixed table of every
  * rebindable behavior; a `bind.<name> <chord>` key in the SAME cfgstore
  * overlay layers on top (none = unbind, absent/`default` = scheme default,
  * a rebind MOVES the binding). Names are stable public API, like config
@@ -263,7 +263,7 @@ static const KsAction KS_ACTIONS[] = {
     { {{KM_ALT,KK_SPACE}}, {{KM_ALT,KK_SPACE}} } },
   { "wm.overview",   KAK_SYS, 0, KTOK_OVERVIEW,
     { {{KM_CTRL|KM_ALT,'e'}}, {{KM_CTRL|KM_ALT,'e'}} } },  /* Ctrl+Alt+E both
-      schemes (todos/EXPOSE-MISSION-CONTROL.md open-Q1): F3 is a macOS Mission-
+      schemes (docs/EXPOSE-MISSION-CONTROL.md open-Q1): F3 is a macOS Mission-
       Control media key the host eats — the wm-chord namespace, host-collision-
       free, and scheme-independent (unlike snap's win/mac split) */
   { "wm.close",      KAK_SYS, 0, KTOK_CLOSE,
@@ -493,7 +493,7 @@ static void ks_get(ks_cfg *c) {
 }
 
 /* The cached configuration: re-read at most once a second (time(2) is
- * second-coarse — the saver_poll cadence, decided in todos/0149), so a
+ * second-coarse — the saver_poll cadence, decided in docs/archive/0149), so a
  * Control Panel write reaches this process within ~1s and the per-keypress
  * cost is a clock read. */
 static const ks_cfg *ks_cached(void) {
@@ -515,7 +515,7 @@ static int ks_scheme(void) {
 }
 
 /* Is the HOST a Mac? Reads the per-boot verdict both boot paths persist at
- * /run/host-platform (ticket #96 / todos/0432; os-common.js
+ * /run/host-platform (ticket #96 / docs/archive/0432; os-common.js
  * writeHostPlatform). Cached per process — the file is per-boot state and
  * never changes under a running process. Absent file (old kernel,
  * standalone in-process fs) = not a Mac, so every pre-existing environment
@@ -587,11 +587,11 @@ static int key_action(int ctx, int mods, int key) {
         if (!ks_chord_match(b->mods, b->key, mods, key)) continue;
         return b->action;
     }
-    /* 3. the implicit host-native paste row (ticket #96 / todos/0432): on a
+    /* 3. the implicit host-native paste row (ticket #96 / docs/archive/0432): on a
      * Mac HOST the native paste chord is ⌘V, so it resolves as EDIT|LIST
      * KA_PASTE regardless of the in-OS scheme — this is what makes ⌘V paste
      * on a stale windows-scheme root volume (pre-v138: never seeded macos).
-     * POLICY-ALIGNED with todos/KEYMAP.md's CLOSED DECISION: the row is
+     * POLICY-ALIGNED with docs/KEYMAP.md's CLOSED DECISION: the row is
      * GUI-modifier only and exists only when the host verdict is 'mac' — it
      * never adds a Ctrl binding anywhere (on a non-Mac host the host-native
      * chord is Ctrl+V, which the windows scheme already binds and the macos

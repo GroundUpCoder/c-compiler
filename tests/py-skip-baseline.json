@@ -15,9 +15,8 @@
   "categories": {
     "ast": {},
     "extra": {},
-    "ext": {},
     "projects": {
-      "projects/cpython-clang": "compiler.js cannot build CPython yet: todos/0327 (the GNU __extension__ keyword, which Modules/_hacl's krml headers use and which blocks the whole hashlib family) and todos/0336 (startup cost) both gate it. This bin.json is NOT dead — the sibling clang-simplified manifest reads its `sources` to build the shipped cpython-clang payload (the sibling's own project/app name is still `python-clang` until its manifest renames — todos/0374 merge-time step). Drop these two keys when 0327/0336 land; todos/CPYTHON.md §4.3 is the two-consumers contract."
+      "projects/cpython-clang": "compiler.js cannot build CPython yet: docs/archive/0327 (the GNU __extension__ keyword, which Modules/_hacl's krml headers use and which blocks the whole hashlib family) and docs/archive/0336 (startup cost) both gate it. This bin.json is NOT dead — the sibling clang-simplified manifest reads its `sources` to build the shipped cpython-clang payload (the sibling's own project/app name is still `python-clang` until its manifest renames — docs/archive/0374 merge-time step). Drop these two keys when 0327/0336 land; docs/CPYTHON.md §4.3 is the two-consumers contract."
     },
     "zlib": {},
     "lua": {

@@ -1,4 +1,4 @@
-/* sameboy_core_bench.c — headless SameBoy CORE benchmark, for todos/0332.
+/* sameboy_core_bench.c — headless SameBoy CORE benchmark, for docs/archive/0332.
  *
  * Why this exists: /bin/sameboy is the ONE binary in the SHIPPED (minimal)
  * gucOS image whose lowering changed at the 0332 br_table cap bump, and the

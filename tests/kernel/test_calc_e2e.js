@@ -10,7 +10,7 @@
 //   - keyboard: WM_KEYDOWN -> calc's vk2ascii -> GetKeyboardState /
 //     MapVirtualKeyEx / ToAsciiEx
 //   - the clipboard: Copy fills the kernel slot (CF_UNICODETEXT -> UTF-8;
-//     todos/0090 — read back via /bin/clip), Paste reads it (CF_TEXT),
+//     docs/archive/0090 — read back via /bin/clip), Paste reads it (CF_TEXT),
 //     WM_ENTERMENULOOP re-grays the Paste item from
 //     IsClipboardFormatAvailable
 //   - TrackPopupMenu: right-click -> WM_CONTEXTMENU -> a standalone
@@ -58,7 +58,7 @@ const waitClip = (v) =>
  * STATIC:0 (first STATIC in tree order on the standard template). */
 const out = boot([
   'calc &',
-  // Boot barrier (todos/0154): the "7" keypad button resolving in the agent tree
+  // Boot barrier (docs/archive/0154): the "7" keypad button resolving in the agent tree
   // means the dialog + owner-draw keypad are up and calc is pumping messages.
   'wmctl wait label 7 10000',
   'SID=$(wmctl list | grep Calculator$ | sed "s/[^0-9].*//")',

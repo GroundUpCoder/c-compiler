@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// WM end-to-end (todos/WM.md): a REAL C SDL program compiled by compiler.js
+// WM end-to-end (docs/WM.md): a REAL C SDL program compiled by compiler.js
 // runs as a worker_thread under the kernel; its SDL window becomes a kernel
 // surface (host.js createSurfaceSDL, shm transport). Proves the full loop:
 //   SDL_CreateWindow -> SURFACE_CREATE handshake (SABs over the FIFO channel)
@@ -7,7 +7,7 @@
 //   kernel.wmInjectKey/Pointer -> input ring -> frame-loop drain ->
 //     SDL_PollEvent in C (scancode + LOCAL button coords)
 //   kernel.wmResize -> SDL_EVENT_WINDOW_RESIZED in C -> surface re-derive ->
-//     SURFACE_CONFIGURE ack with the first new-size frame (todos/0019)
+//     SURFACE_CONFIGURE ack with the first new-size frame (docs/archive/0019)
 //   kernel-chrome close box -> SDL_EVENT_QUIT -> app exit(5) -> halt
 //
 // Run: node tests/kernel/test_wm_e2e.js
@@ -65,10 +65,10 @@ static void frame_cb(void) {
 }
 int main(void) {
     SDL_Init(SDL_INIT_VIDEO);
-    win = SDL_CreateWindow("e2e win", W, H, SDL_WINDOW_RESIZABLE);  /* resize leg needs it (todos/0021) */
+    win = SDL_CreateWindow("e2e win", W, H, SDL_WINDOW_RESIZABLE);  /* resize leg needs it (docs/archive/0021) */
     if (!win) { printf("NOWIN\\n"); return 3; }
     surf = SDL_GetWindowSurface(win);
-    /* Relative mouse (todos/0018): request it, read the tracked state back. */
+    /* Relative mouse (docs/archive/0018): request it, read the tracked state back. */
     SDL_SetWindowRelativeMouseMode(win, 1);
     printf("RELMODE %d\\n", SDL_GetWindowRelativeMouseMode(win) ? 1 : 0);
     __setAnimationFrameFunc(frame_cb);
@@ -145,7 +145,7 @@ const watchdog = setTimeout(() => {
   await waitOut('CLICK 5 6 b1');
   check('screen-coordinate click routed through hit test', true);
 
-  // Relative mouse (todos/0018): the C app requested it at startup
+  // Relative mouse (docs/archive/0018): the C app requested it at startup
   // (SDL_SetWindowRelativeMouseMode before the frame loop).
   await waitOut('RELMODE 1');
   check('relativeMouse flag round-tripped to the kernel',
@@ -173,7 +173,7 @@ const watchdog = setTimeout(() => {
   check('title drag moved the window', moved.x === w.x + 50 && moved.y === w.y + 25,
     JSON.stringify([w.x, w.y, moved.x, moved.y]));
 
-  // Client resize (todos/0019): configure event -> C re-derives its surface
+  // Client resize (docs/archive/0019): configure event -> C re-derives its surface
   // -> host acks with the first new-size frame -> kernel geometry + pixels.
   kernel.wmResize(sid, 140, 90);
   await waitOut('RESIZED 140 90');

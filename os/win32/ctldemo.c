@@ -1,4 +1,4 @@
-/* ctldemo.c — the 0058 user32 acceptance app (todos/WIN32.md): a
+/* ctldemo.c — the 0058 user32 acceptance app (docs/WIN32.md): a
  * Petzold-style controls + dialog sample, built the CLASSIC way —
  * RegisterClass, CreateWindowEx, and a blocking GetMessage loop in main.
  *

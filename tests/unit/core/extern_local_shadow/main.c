@@ -13,7 +13,7 @@ void print_static_x() {
 // C11 6.2.2p4: the file-scope static x is VISIBLE here, so this
 // block-scope extern inherits its internal linkage and denotes that same
 // static object — it does NOT reach helper.c's external-linkage x
-// (clang-verified; the pre-todos/0219 golden encoded the opposite).
+// (clang-verified; the pre-docs/archive/0219 golden encoded the opposite).
 void print_extern_x() {
   extern int x;
   printf("%d\n", x);

@@ -5,7 +5,7 @@
 //      implementation-defined; clang/gcc pick unsigned int when every
 //      enumerator is >= 0). compiler.js otherwise tracks the clang wasm32 ABI.
 // EXPECT: A3 == 3 stored in a 2-bit enum field reads back 3, not -1.
-// KNOWN-BUG: todos/0189 (pinned xfail via config.json "knownBug"; the bitfield
+// KNOWN-BUG: docs/archive/0189 (pinned xfail via config.json "knownBug"; the bitfield
 //      read path sign-extends every non-`unsigned` declared field type).
 #include <stdio.h>
 enum NN { A0, A1, A2, A3 };          // all enumerators >= 0

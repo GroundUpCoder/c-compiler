@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // THE POINTER PATH OF /bin/netsurf: A CANCELLED CLICK, AND THE DYNAMIC
-// PSEUDO-CLASSES (todos/0419 P0 + todos/0420).
+// PSEUDO-CLASSES (docs/archive/0419 P0 + docs/archive/0420).
 //
 // Two defects the netsurf-bughunt lane found with in-OS probe pages, both
 // in the tail of html_mouse_action, both asserted here off wmctl shots:
@@ -295,7 +295,7 @@ for (const n of NAMES) {
 const LIT = 12000;
 const DARK = 400;
 
-/* ---- todos/0419 ----------------------------------------------------- */
+/* ---- docs/archive/0419 ----------------------------------------------------- */
 check('pre-click: nothing is lit', h.k0.ranA < DARK && h.k0.pageB < DARK,
       `ranA ${h.k0.ranA}, pageB ${h.k0.pageB}`);
 check('0419 cancelled: the click reached the listener and its restyle PAINTED',
@@ -310,7 +310,7 @@ check('0419 control: an UNCANCELLED click still navigates',
       clickOut.includes('navigated') && h.g1.pageB > LIT,
       `${h.g1.pageB} px of page B`);
 
-/* ---- todos/0420 ----------------------------------------------------- */
+/* ---- docs/archive/0420 ----------------------------------------------------- */
 check('pre-hover: the link shows its base colour, no :hover anywhere',
       h.h0.base > LIT && h.h0.hover < DARK,
       `base ${h.h0.base}, hover ${h.h0.hover}`);

@@ -275,11 +275,11 @@ for (auto cur = head; cur; cur = cur->next) printf("%d\n", cur->v);
 - `__array(T) *` is rejected — arrays don't take the `*` sugar
 - `__new` takes `__struct Foo` (no `*`): `__new(__struct Foo, ...)`. Typedefs of GC structs work too. `__struct_new` is an alias.
 
-For the full GC design doc see [todos/WASM_GC.md](todos/WASM_GC.md).
+For the full GC design doc see [docs/WASM_GC.md](docs/WASM_GC.md).
 
 ## The OS (os/) — gucOS
 
-The repo's north star ([todos/OS.md](todos/OS.md)) is **gucOS** (groundupcoder OS): a wasm-native, almost-POSIX OS in a browser tab — every binary a real wasm module from this compiler. It boots:
+The repo's north star ([docs/OS.md](docs/OS.md)) is **gucOS** (groundupcoder OS): a wasm-native, almost-POSIX OS in a browser tab — every binary a real wasm module from this compiler. It boots:
 
 ```bash
 node serve.js .            # then open http://localhost:8080/os/os.html
@@ -291,13 +291,13 @@ node serve.js .            # then open http://localhost:8080/os/os.html
 echo 'ls / | cat' | node os/boot.js   # the same OS headless, tty on stdio
 ```
 
-Under it sits **kernel.js**, the owner-side process control plane ([todos/KERNEL.md](todos/KERNEL.md)): process table, posix_spawn (deliberately **not** fork — see OS.md for the decision), async signal delivery with EINTR, a kernel-side tty line discipline (Ctrl-C means SIGINT), kernel-owned fd tables over one shared BlockFS, pipes with real cross-process blocking + SIGPIPE, and job control (stop/continue, WUNTRACED/WCONTINUED, SIGTTIN). First boot compiles the OS's own userland — including the shell itself — from sources listed in `os/image.json`; there is no build step. `/bin/sh` is **busybox hush**, ported to the no-fork world through a vfork-on-`__spawn` journaling shim ([vendor/busybox/README.md](vendor/busybox/README.md)) — `popen()`/`system()` work, and the port is the kernel design's acceptance test ([todos/KERNEL.md](todos/KERNEL.md)).
+Under it sits **kernel.js**, the owner-side process control plane ([docs/KERNEL.md](docs/KERNEL.md)): process table, posix_spawn (deliberately **not** fork — see OS.md for the decision), async signal delivery with EINTR, a kernel-side tty line discipline (Ctrl-C means SIGINT), kernel-owned fd tables over one shared BlockFS, pipes with real cross-process blocking + SIGPIPE, and job control (stop/continue, WUNTRACED/WCONTINUED, SIGTTIN). First boot compiles the OS's own userland — including the shell itself — from sources listed in `os/image.json`; there is no build step. `/bin/sh` is **busybox hush**, ported to the no-fork world through a vfork-on-`__spawn` journaling shim ([vendor/busybox/README.md](vendor/busybox/README.md)) — `popen()`/`system()` work, and the port is the kernel design's acceptance test ([docs/KERNEL.md](docs/KERNEL.md)).
 
 ## Vendored projects
 
 The compiler is tested against real-world C projects:
 
-- **QuickJS 2025-09-13** — Fabrice Bellard's small JavaScript engine. The full engine + libc + REPL entry point (`qjs.c`) compiles to a 737 KB wasm and runs JavaScript end-to-end. Including the self-host loop: **`compiler.js` runs inside that QuickJS wasm and produces bit-identical wasm output compared to a native build.** See `vendor/quickjs/README.md`, the [Self-hosting](#self-hosting-bootstrap) section below, and [`demos/self-host/`](demos/self-host/).
+- **QuickJS 2025-09-13** — Fabrice Bellard's small JavaScript engine. The full engine + libc + REPL entry point (`qjs.c`) compiles to a 737 KB wasm and runs JavaScript end-to-end. Including the self-host loop: **`compiler.js` runs inside that QuickJS wasm and produces bit-identical wasm output compared to a native build.** See `vendor/quickjs/README.md`, the [Self-hosting](#self-hosting-bootstrap) section below, and [`old/self-host/`](old/self-host/).
 - **Lua 5.5.0** — Full interpreter, compiles and passes the official test suite
 - **DOOM** — doomgeneric port with Nuked-OPL3 music synthesis, runs in the browser
 - **Snake** — Terminal-based snake game using termios raw mode, ANSI escape codes, and `select()` for input handling
@@ -341,14 +341,14 @@ QuickJS is the path to running `compiler.js` on its own output. The pipeline tod
 1. **Stage 1 — C to wasm.** Our compiler builds QuickJS (~64 KLOC of C) into a 737 KB wasm.
 2. **Stage 2 — JS engine alive.** That wasm runs JavaScript: `qjs -e '1+1'` → `2`. Recursion, classes, regex, JSON, all working.
 3. **Stage 3 — Load self.** `compiler.js` itself (~870 KB of JS) loads and executes inside QuickJS-on-our-wasm, exposing `globalThis.CompilerJS`.
-4. **Stage 4 — Compile from inside.** `compiler.js` running inside QuickJS-on-wasm reads C source via `std.loadFile`, drives the full lex → parse → link → codegen pipeline, and writes a wasm file via `std.open(..., "wb").write(...)`. **The output is bit-identical to a native build of the same C source** (verified with `cmp`). See [`demos/self-host/`](demos/self-host/).
+4. **Stage 4 — Compile from inside.** `compiler.js` running inside QuickJS-on-wasm reads C source via `std.loadFile`, drives the full lex → parse → link → codegen pipeline, and writes a wasm file via `std.open(..., "wb").write(...)`. **The output is bit-identical to a native build of the same C source** (verified with `cmp`). See [`old/self-host/`](old/self-host/).
 
 ```bash
 scripts/quickjs-bootstrap.sh
 # → builds qjs.wasm, runs smoke test, loads compiler.js inside qjs.wasm
 
-node host.js /tmp/qjs.wasm --std demos/self-host/selfhost.js
-# → compiles demos/self-host/hello.c inside qjs.wasm
+node host.js /tmp/qjs.wasm --std old/self-host/selfhost.js
+# → compiles old/self-host/hello.c inside qjs.wasm
 node host.js /tmp/selfhost-demo/hello-rebuilt.wasm
 # → "Hello from a wasm built INSIDE wasm!" (exit 42)
 ```

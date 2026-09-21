@@ -1,5 +1,5 @@
-/* mmsystem.h — winmm surface for the port corpus (todos/0060).
- * PlaySound is real since todos/0094: WAVs through the 0017 kernel mixer
+/* mmsystem.h — winmm surface for the port corpus (docs/archive/0060).
+ * PlaySound is real since docs/archive/0094: WAVs through the 0017 kernel mixer
  * over the os/sounds.h event-scheme core (winmm.c documents the exact
  * contract — SND_RESOURCE stays silent success, SND_LOOP plays once). */
 #pragma once

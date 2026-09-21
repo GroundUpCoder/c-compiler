@@ -1,5 +1,5 @@
 /* fileops.h — file operations + the clipboard file list, ONE implementation
- * in ONE place (todos/0092).
+ * in ONE place (docs/archive/0092).
  *
  * Header-only by design (the openwith.h precedent): wm.c (desktop icon
  * Cut/Copy + desktop Paste) and os/win32/shell32.c (the SHFile* veneer
@@ -17,7 +17,7 @@
  * additive "plant what's missing, never overwrite" engine shared by
  * desktop-defaults and gucman's `seed` resource kind (see its block below).
  *
- * The clipboard file list rides the ONE kernel slot (todos/0090) as format
+ * The clipboard file list rides the ONE kernel slot (docs/archive/0090) as format
  * FO_CLIP_FMT (fmt 1 is UTF-8 text — last write wins across formats, the
  * Windows-ish rule). Payload: a "cut\n" or "copy\n" header line, then one
  * absolute path per '\n'-terminated line — the CF_HDROP idea kept textual.
@@ -25,7 +25,7 @@
  * copy-paste duplicates, uniquifying a name clash Win95-style ("Copy of X",
  * "Copy (2) of X", ...).
  *
- * The trash store (todos/0093) is /root/.recycle — files/ holds the moved
+ * The trash store (docs/archive/0093) is /root/.recycle — files/ holds the moved
  * entries (name clashes uniquified "x", "x 2", ...), info/ holds one
  * sidecar per entry under the SAME stored name (line 1: the original
  * absolute path; line 2: the delete time as decimal Unix seconds — the
@@ -53,7 +53,7 @@
 #define FO_CLIP_MAX  8192            /* whole-list byte cap (v1) */
 #define FO_PATH_MAX  768
 
-/* The host clipboard primitives (todos/0090, host.js createClipboard) —
+/* The host clipboard primitives (docs/archive/0090, host.js createClipboard) —
  * redeclaring the __SDL.c imports is fine, imports dedup by name. */
 __import int __clip_set(int fmt, const void *bytes, int len);
 __import int __clip_get(int fmt, void *out, int cap);
@@ -417,7 +417,7 @@ static int fo_new_dest(const char *dir, const char *base, const char *ext,
     return -1;
 }
 
-/* ---- the trash store (todos/0093) ---- */
+/* ---- the trash store (docs/archive/0093) ---- */
 
 #define FO_TRASH       "/root/.recycle"
 #define FO_TRASH_FILES FO_TRASH "/files"

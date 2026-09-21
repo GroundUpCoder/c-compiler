@@ -1,5 +1,5 @@
 // SameBoy browser acceptance — the LIVE-RENDER half of the M3 menu gate
-// (menu arch §4.b, todos/0260): /bin/sameboy is a win32 app whose GB client
+// (menu arch §4.b, docs/archive/0260): /bin/sameboy is a win32 app whose GB client
 // presents through the normal GDI bitmap transport (SetDIBits/StretchBlt ->
 // shm), with its menu on the SAME menucore path gpubox (GPU transport, M2)
 // exercises. The headless kernel e2e (test_sameboy_e2e.js) proves the menu
@@ -55,7 +55,7 @@ try {
                   [0x84, 0xA5, 0x63], [0xC6, 0xDE, 0x8C]];
   const inSet = (got, set) => got && set.some(w => near(got, w, 8));
 
-  // VTs (todos/0022): shell typing on VT1, canvas pixels on VT2.
+  // VTs (docs/archive/0022): shell typing on VT1, canvas pixels on VT2.
   const { setVt } = osHelpers(page);
 
   // Launch from the real shell; the WM places the first window at (12,36).

@@ -1,6 +1,6 @@
-// Guardrails for `mkpkg --rust` (todos/0416 — the native-sibling packaging
+// Guardrails for `mkpkg --rust` (docs/archive/0416 — the native-sibling packaging
 // seam, second producer). Mirrors test_mkpkg_clang.js over a synthetic
-// gucos-rust sibling, and carries the todos/0416 acceptance arms:
+// gucos-rust sibling, and carries the docs/archive/0416 acceptance arms:
 //
 //   1. PURITY + POSITIVE CONTROL, in the same run: a plain `mkpkg` yields no
 //      name matching -rust$ AND prints nothing about Rust — and `mkpkg

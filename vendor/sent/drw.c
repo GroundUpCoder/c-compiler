@@ -1,6 +1,6 @@
 /* See LICENSE file for copyright and license details.
  *
- * gucOS port (todos/0119): SDL + freetype implementation of the drw API.
+ * gucOS port (docs/archive/0119): SDL + freetype implementation of the drw API.
  * One freetype face is shared by every Fnt; a Fnt is just a pixel size.
  * Glyphs render straight into the SDL window surface (RGBA bytes, the
  * term.c convention) with alpha blending against the destination pixel.
@@ -120,7 +120,7 @@ drw_fontset_getwidth(Drw *drw, const char *text)
 	while (*text) {
 		cp = utf8decode(&text);
 		/* NO_AUTOHINT: keep pre-autofit rendering now the gucOS
-		 * freetype build registers a hinter (todos/0279). */
+		 * freetype build registers a hinter (docs/archive/0279). */
 		if (FT_Load_Char(ftface, cp, FT_LOAD_DEFAULT | FT_LOAD_NO_AUTOHINT))
 			continue;
 		w += (unsigned int)(ftface->glyph->advance.x >> 6);

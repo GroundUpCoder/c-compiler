@@ -1,6 +1,6 @@
 'use strict';
 
-// JS-level unit tests for the WAST pass layer (todos/0200) — the
+// JS-level unit tests for the WAST pass layer (docs/archive/0200) — the
 // offset-fold peephole's match/skip rules, which the .c-test suite can
 // only exercise behaviorally:
 //   - load fold: [const k, i32.add, load off=0] -> [load off=k]
@@ -25,7 +25,7 @@ let failures = 0;
 function mk(build) { const b = new WastBuilder(); build(b); return b.nodes; }
 
 function runOn(nodes) {
-  // Export the lone function: since todos/0214 runPasses tree-shakes,
+  // Export the lone function: since docs/archive/0214 runPasses tree-shakes,
   // and an unrooted function would simply be deleted.
   const wmod = {
     funcDefs: [{ wast: nodes }],

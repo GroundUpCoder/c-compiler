@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Process-side read-only /usr (todos/0180) — RemoteFS fast-path mechanics
+// Process-side read-only /usr (docs/archive/0180) — RemoteFS fast-path mechanics
 // against a FAKE client that records every RPC (no kernel, no wasm):
 //   - reads under the prefix (open/read/lseek/fstat/close, stat/lstat/
 //     access/readlink, opendir/readdir) are served locally — ZERO RPCs —
@@ -123,7 +123,7 @@ const BASE = K.RO_FD_BASE;
 }
 
 /* ---- write intent on a local fd: the same refusal the kernel would give
-   (todos/0376: EBADF/EINVAL — the O_RDONLY fd's access mode, checked before
+   (docs/archive/0376: EBADF/EINVAL — the O_RDONLY fd's access mode, checked before
    the readonly volume flag; brokered fds answer identically) ---- */
 {
   const fd = rfs.open('/usr/share/f.txt', 0, 0);

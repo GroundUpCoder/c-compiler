@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Aero effects, kernel side (todos/0063) without wasm: fake workers over a
+// Aero effects, kernel side (docs/archive/0063) without wasm: fake workers over a
 // brokered kernel (test_wm.js plumbing). Covers: the has-alpha surface flag
 // (create bit3 + SET_FLAGS), the DETERMINISTIC src-over blend in the
 // headless screen composite (exact integer goldens, unscaled + scaled +
@@ -196,7 +196,7 @@ const over = (s, d, a) => (s * a + d * (255 - a) + 127) / 255 | 0;
   kernel.wmGlass(true);
   check('glass toggles on in the scene', kernel.wmScene().glass === true);
   const after = kernel.wmScreenshotScreen();
-  check('glass NEVER changes the headless composite (todos/0063 constraint)',
+  check('glass NEVER changes the headless composite (docs/archive/0063 constraint)',
     Buffer.compare(Buffer.from(before.rgba), Buffer.from(after.rgba)) === 0 &&
     before.w === after.w && before.h === after.h);
   kernel.wmGlass(false);

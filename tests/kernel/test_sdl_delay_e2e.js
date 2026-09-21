@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SDL_Delay as a cooperative worker sleep, end-to-end (todos/0224): a REAL C
+// SDL_Delay as a cooperative worker sleep, end-to-end (docs/archive/0224): a REAL C
 // SDL program built around the classic corpus loop —
 //   while (running) { poll events; draw; SDL_Delay(16); }
 // — compiled by compiler.js and run as a worker_thread under the kernel.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Phase 3 tty semantics (todos/0002), no wasm: a real kernel + Tty with fake
+// Phase 3 tty semantics (docs/archive/0002), no wasm: a real kernel + Tty with fake
 // workers; the test is both the UI bridge (tty.input / captured echo) and
 // the consumer (reads the shared ring directly). Covers the line
 // discipline: canonical editing (erase/kill/EOF), echo, ICRNL, raw mode,

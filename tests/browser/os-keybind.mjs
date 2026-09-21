@@ -22,7 +22,7 @@
 //      Ctrl+Alt+J makes that chord tile left and Ctrl+Alt+Left inert, within
 //      the config poll, no restart.
 // Plus the Ctrl+Alt+E overview grab is installed in both schemes (swallowed,
-// not seen by the app) and toggles the Exposé window overview (todos/EXPOSE).
+// not seen by the app) and toggles the Exposé window overview (docs/EXPOSE).
 //
 // Config propagation to wm.c's grab table is a two-timer (~1 Hz) settle with NO
 // completion marker, so instead of a fixed sleep the positive checks POLL the
@@ -172,7 +172,7 @@ try {
   g = await winGeom('winbox');
   check('macos: GUI+Left did NOT snap (released, not grabbed)', g.w === 240, g);
 
-  // === Ctrl+Alt+E: the window overview / Exposé chord (todos/EXPOSE),
+  // === Ctrl+Alt+E: the window overview / Exposé chord (docs/EXPOSE),
   //     installed in BOTH schemes and scheme-independent. Pressing it is
   //     GRABBED (winbox never sees 'e') and toggles the overview — the
   //     compositor takes over the screen, so winbox's normal client pixel

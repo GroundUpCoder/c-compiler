@@ -3,7 +3,7 @@
 // environment: host.js's lazy GPU probe is `require('webgpu')` inside a
 // try/catch (stock Node -> MODULE_NOT_FOUND -> clean adapter-unavailable).
 // On machines where the optional `webgpu` devDependency IS installed, the
-// no-Dawn acceptance path (menu arch A14, todos/0258) would silently run
+// no-Dawn acceptance path (menu arch A14, docs/archive/0258) would silently run
 // under Dawn instead — so this preload makes require('webgpu') fail exactly
 // like an uninstalled package. Loaded via `node --require` (driveBoot
 // nodeArgs); worker_threads inherit execArgv, so every process worker's

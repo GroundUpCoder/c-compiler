@@ -4,7 +4,7 @@
 // A "chain" here is a run of  local.get L ; i32.const K ; i32.eq ; br_if/if
 // against the SAME local L. That is the shape a switch (or a state-machine
 // dispatch) takes when it is lowered as a linear scan instead of a br_table,
-// and its cost is O(chain length) per taken edge. Written for todos/0332.
+// and its cost is O(chain length) per taken edge. Written for docs/archive/0332.
 'use strict';
 const path = require('path');
 const S = require(path.join(__dirname, 'wasmscan.js'));

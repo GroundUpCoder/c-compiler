@@ -1,4 +1,4 @@
-// cairo browser acceptance (todos/0061): boot the reference OS page in
+// cairo browser acceptance (docs/archive/0061): boot the reference OS page in
 // headless Chromium, launch the seeded /bin/cairodemo from the shell, and
 // assert the vector scene (radial gradient disc, translucent star, bezier
 // ribbon, cairo-ft label) composits correctly on the desktop canvas at the

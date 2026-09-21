@@ -4,7 +4,7 @@
 // pixels, rendered text (bright-pixel counts over the client), typing into
 // the FOCUSED terminal window through the real key path (canvas -> kernel
 // ring -> SDL -> pty -> hush echo -> re-render), wmctl sees it, SE drag-
-// resize reflows (todos/0019 renegotiation + TIOCSWINSZ), close box ends
+// resize reflows (docs/archive/0019 renegotiation + TIOCSWINSZ), close box ends
 // the session, shell survives.
 //
 // Usage: node os-term.mjs
@@ -72,10 +72,10 @@ try {
 
   const TEAL = [0, 128, 128], NAVY = [0, 0, 128], BLACK = [0, 0, 0];
   // The WM places the first window at (12,36); term is 640x486 (80x24 below
-  // the 30px menu bar strip, todos/0273c — the grid band starts at TY+30).
+  // the 30px menu bar strip, docs/archive/0273c — the grid band starts at TY+30).
   const TX = 12, TY = 36, TW = 640, TH = 486;
 
-  // VTs (todos/0022): shell typing on VT1, canvas pixels/input on VT2 (the
+  // VTs (docs/archive/0022): shell typing on VT1, canvas pixels/input on VT2 (the
   // compositor may idle while its placeholder canvas is hidden). Deep VT
   // coverage lives in os-vt.mjs.
   const { setVt } = osHelpers(page);
@@ -108,7 +108,7 @@ try {
   // command has run. Every marker below is therefore SPLIT (`echo FOO-O""K`,
   // which the shell prints as FOO-OK but the echo shows with the quotes), and
   // a marker that never arrives throws a NAMED error instead of silently
-  // burning its timeout — os-fileman.mjs's shLine is the model (todos/0171).
+  // burning its timeout — os-fileman.mjs's shLine is the model (docs/archive/0171).
   const shLine = async (cmd, mark, ms) => {
     await page.keyboard.type(`${cmd} && echo ${mark[0]}""${mark.slice(1)}\r`, { delay: 40 });
     try {
@@ -189,7 +189,7 @@ try {
   await page.waitForFunction(() => /\tterm/.test(window.__osOut), { timeout: 20000, polling: 'raf' });
   check('wmctl list sees the term window', true);
 
-  // Menu bar (todos/0273c): the "menubar" strip child composites over the
+  // Menu bar (docs/archive/0273c): the "menubar" strip child composites over the
   // top 30px; a bar click opens an engine dropdown — a REAL anchored child
   // titled "#32768" — and Esc (dispatched at the canvas: page.keyboard
   // focus is unreliable on VT2) dismisses it.
@@ -245,7 +245,7 @@ try {
   }
   check('Esc un-composited the dropdown (client pixels back at its spot)', true);
 
-  // SE drag-resize: 640x486 -> 500x260 (todos/0019 renegotiation; term
+  // SE drag-resize: 640x486 -> 500x260 (docs/archive/0019 renegotiation; term
   // reflows the grid + TIOCSWINSZ). Outline preview, one configure at drop.
   await setVt(2);
   await page.mouse.move(rect.x + TX + TW + 2, rect.y + TY + TH + 2);

@@ -42,7 +42,7 @@ function section(out, name) {
 // keysyms are modifier-applied chars, scancode 0 is fine).
 const keys = (s) => [...s].map((ch) => 'wmctl key $TSID 0 ' + ch.charCodeAt(0)).join('\n');
 
-// Bounded condition polls (todos/0154 — not fixed sync sleeps): wait for a
+// Bounded condition polls (docs/archive/0154 — not fixed sync sleeps): wait for a
 // substring to land in the kernel clip slot, or for a file to be written by a
 // process the OS spawned asynchronously (~6–10s cap).
 const waitClipHas = (s) =>
@@ -171,7 +171,7 @@ function sessionTerm() {
     keys('echo TERMCOPY-MARKER\r'),
     'sleep 2',                                    // hush echoes + runs + renders the marker (pixel-only, no signal)
     // whole-screen drag-selection (640x486: 80x24 at the 8x19 cell below
-    // the 30px menu bar band, todos/0273c), then Ctrl+Shift+C: keysym 67
+    // the 30px menu bar band, docs/archive/0273c), then Ctrl+Shift+C: keysym 67
     // ('C'), mod 65 = LSHIFT|LCTRL
     'wmctl drag $TSID 4 34 636 480',
     'sleep 1',                                    // in-term selection registers (pixel-only, no signal)

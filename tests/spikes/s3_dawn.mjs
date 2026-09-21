@@ -1,4 +1,4 @@
-// Spike S3 (todos/0012, WM.md appendix): Dawn via the `webgpu` npm package
+// Spike S3 (docs/archive/0012, WM.md appendix): Dawn via the `webgpu` npm package
 // (dawn-gpu/node-webgpu) under Node — device creation, render-to-texture,
 // copyTextureToBuffer readback (the canvas-less present tail), and the same
 // inside worker_threads (one device per process worker, like the OS).

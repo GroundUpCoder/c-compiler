@@ -4,10 +4,10 @@ Game Boy / Game Boy Color emulator using the [SameBoy](https://github.com/LIJI32
 core (MIT license, **v1.0.3**, commit 208ba4a) — the cycle-accurate
 accuracy/GBC sibling of `vendor/gameboy` (Peanut-GB). Installed as
 `/bin/sameboy` and, since it boots and runs better, the **default
-`.gb`/`.gbc` handler** (todos/0075; 0072 store points here). Peanut-GB
+`.gb`/`.gbc` handler** (docs/archive/0075; 0072 store points here). Peanut-GB
 (`/bin/gameboy`) remains installed as the lighter alternate core.
 
-Since todos/0260 (menu-arch **M3**) the frontend (`src/main.c`, port glue
+Since docs/archive/0260 (menu-arch **M3**) the frontend (`src/main.c`, port glue
 only — the core is untouched) is a **win32 app** on the uniform menu
 facility: `RegisterClass`/`CreateWindowEx`/WndProc, GB buttons via
 `WM_KEYDOWN/UP`, the framebuffer presented through GDI
@@ -78,7 +78,7 @@ In-OS: `sameboy /root/roms/SuperMarioDeluxe.gbc &` (kernel e2e:
 | `core/apu.c` `core/random.c` | `__attribute__((constructor))` → lazy init | constructors unsupported; random.c seeds on first `GB_random` (explicit `GB_random_seed` still wins) |
 
 Multi-character char constants (`'GBS\x01'`, `'TPP1'`, …) needed no patch:
-the compiler learned the GCC packing in todos/0085 (found by this port).
+the compiler learned the GCC packing in docs/archive/0085 (found by this port).
 
 ### Retired patches (#684 — upstream text restored)
 

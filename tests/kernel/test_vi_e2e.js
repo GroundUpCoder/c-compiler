@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// vi e2e (todos/0011): busybox vi — a full-screen editor driven through the
+// vi e2e (docs/archive/0011): busybox vi — a full-screen editor driven through the
 // REAL stack: boot.js --tty-out (fd 0/1/2 are the kernel tty, isatty true),
 // keystrokes fed through the tty's line discipline into vi's raw mode,
 // screen output (cursor addressing, alternate screen) observed on stdout.

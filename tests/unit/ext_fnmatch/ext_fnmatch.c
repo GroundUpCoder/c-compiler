@@ -1,4 +1,4 @@
-/* fnmatch via the optional libc-ext.js (vendored musl fnmatch). */
+/* fnmatch via the vendored musl fnmatch built into compiler.js. */
 #include <stdio.h>
 #include <fnmatch.h>
 

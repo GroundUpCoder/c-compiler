@@ -1,4 +1,4 @@
-/* wm_proto.h — C client side of the WM protocol (todos/0014).
+/* wm_proto.h — C client side of the WM protocol (docs/archive/0014).
  *
  * The kernel serves a framed protocol on the AF_UNIX socket /run/wm.sock
  * (a KERNEL-owned endpoint — no listener process). Framing, all little-
@@ -29,27 +29,27 @@ enum {
     WMP_RESTORE = 0x13, WMP_RESTACK = 0x14, WMP_CLOSE_REQ = 0x15,
     WMP_RESIZE = 0x16,                 /* { sid, w, h }: asks the client;
                                           geometry changes at its ack ->
-                                          EV_CONFIGURED (todos/0019); every
+                                          EV_CONFIGURED (docs/archive/0019); every
                                           ask carries a configure serial the
                                           ack must name (#790) */
     WMP_SET_DST = 0x17,                /* { sid, w, h }: viewport scaling
-                                          (todos/0024) — set the on-screen
+                                          (docs/archive/0024) — set the on-screen
                                           dst rect of a FIXED-SIZE surface;
                                           buffer untouched, app oblivious.
                                           R_ERR on a resizable surface */
     WMP_ACTIVATE = 0x18,               /* { sid }: fire the title-activate
-                                          (maximize) gesture (todos/0025) —
+                                          (maximize) gesture (docs/archive/0025) —
                                           the wmctl-max path into the same
                                           policy code the title double-click
                                           hits. R_ERR with no subscribed WM
                                           (maximize IS policy) */
     WMP_CYCLE = 0x19,                  /* { direction }: fire the window-
-                                          cycling gesture (todos/0032) — the
+                                          cycling gesture (docs/archive/0032) — the
                                           wmctl-cycle path into the same
                                           EV_CYCLE the Alt+Tab chord emits.
                                           R_ERR with no subscribed WM */
     WMP_SET_LAYER = 0x1A,              /* { sid, layer }: pin the surface to
-                                          a z layer (todos/0038) — -1 below
+                                          a z layer (docs/archive/0038) — -1 below
                                           normal windows (the desktop layer),
                                           0 normal, +1 above (the taskbar);
                                           every z-order op stays within its
@@ -57,28 +57,28 @@ enum {
                                           cover the bar nor a lower sink
                                           under the desktop */
     WMP_GLASS = 0x1B,                  /* { on }: toggle the Aero glass tier
-                                          (todos/0063) — browser-compositor-
+                                          (docs/archive/0063) — browser-compositor-
                                           only backdrop blur behind window
                                           chrome. The headless composite
                                           never reads it; default off */
     WMP_MENU = 0x1C,                   /* { }: fire the Start-menu gesture
-                                          (todos/0078) — the wmctl-menu path
+                                          (docs/archive/0078) — the wmctl-menu path
                                           into the same EV_MENU the Ctrl+Esc
                                           chord emits. R_ERR with no
                                           subscribed WM (the menu IS policy) */
     WMP_SNAP = 0x1D,                   /* { direction }: fire the Aero Snap
-                                          gesture (todos/0095) — the wmctl-
+                                          gesture (docs/archive/0095) — the wmctl-
                                           snap path into the same EV_SNAP_KEY
                                           the Win+arrow chord emits; 0 left,
                                           1 right, 2 up, 3 down. R_ERR with
                                           no subscribed WM (snap IS policy) */
     WMP_GET_IDLE = 0x1E,               /* { }: ms since the last real input
-                                          (todos/0096) -> R_IDLE { ms }. The
+                                          (docs/archive/0096) -> R_IDLE { ms }. The
                                           kernel sees ALL input; /bin/wm's
                                           screensaver policy polls this and
                                           applies its own timeout */
     WMP_SAVER = 0x1F,                  /* { }: fire the screensaver gesture
-                                          (todos/0096) — wmctl saver / the
+                                          (docs/archive/0096) — wmctl saver / the
                                           Control Panel Preview path into
                                           EV_SAVER. R_ERR with no subscribed
                                           WM (the saver IS policy) */
@@ -86,7 +86,7 @@ enum {
     WMP_INJECT_SCREEN = 0x22,          /* { kind, xf32, yf32, a }: SCREEN-
                                           coordinate pointer injection through
                                           the kernel's full hit-test/chrome
-                                          path (todos/0095) — headless title
+                                          path (docs/archive/0095) — headless title
                                           drags, edge snap, border resizes;
                                           kind 0 move (a=buttons) / 1 down /
                                           2 up (a=button) */
@@ -111,26 +111,26 @@ enum {
     WMP_PAD_AXIS = 0x27,               /* { slot, axis, value } */
     WMP_SHOT = 0x30, WMP_SHOT_SCREEN = 0x31,
     WMP_THUMB = 0x32,                  /* { sid, maxW, maxH }: downscaled
-                                          front-buffer thumbnail (todos/0063,
+                                          front-buffer thumbnail (docs/archive/0063,
                                           Aero Peek) -> R_SHOT { sid, w, h,
                                           rgba }, aspect-fit inside
                                           maxW x maxH, never upscaled;
                                           deterministic box filter */
     WMP_SYSMENU = 0x33,                /* { }: fire the window system-menu
-                                          gesture (todos/0102) — wmctl sysmenu
+                                          gesture (docs/archive/0102) — wmctl sysmenu
                                           into the same EV_SYSMENU the
                                           Alt+Space chord emits (carries the
                                           FOCUSED sid). R_ERR with no
                                           subscribed WM (the menu IS policy) */
     WMP_CURSOR_AT = 0x34,              /* { xf32, yf32 }: the effective cursor
-                                          shape at a SCREEN point (todos/0105)
+                                          shape at a SCREEN point (docs/archive/0105)
                                           -> R_CURSOR { shape } (SDL_SystemCursor;
                                           -1 hidden). Pure query — chrome
                                           overlay + per-surface client cursor,
                                           side-effect-free */
     WMP_GRAB_SET = 0x35,               /* { n, n x (scancode, km, token) }:
                                           REPLACE the whole kernel key-grab
-                                          table (todos/KEYBINDING-OVERRIDE-
+                                          table (docs/KEYBINDING-OVERRIDE-
                                           SYSTEM.md §3). Idempotent; n = 0 =
                                           empty table (no interception); n
                                           capped at WMP_GRAB_MAX. Subscriber-
@@ -141,7 +141,7 @@ enum {
                                           default table reproducing the legacy
                                           cycle/menu/snap/sysmenu chords; last-
                                           subscriber-gone resets to it */
-    /* Window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md). NOTE the
+    /* Window overview / Exposé (docs/EXPOSE-MISSION-CONTROL.md). NOTE the
      * numbering: the design doc drafted these at 0x35/0x92 as "the next free
      * slots", but the keybind grab-table chunk landed 0x35 (GRAB_SET) and 0x92
      * (EV_HOTKEY) first — so they take the ACTUAL next-free slots (0x36-0x38
@@ -163,12 +163,12 @@ enum {
                                           EV_HOTKEY instead — see keys.h) */
     /* replies */
     WMP_R_OK = 0x40, WMP_R_ERR = 0x41, WMP_R_LIST = 0x42, WMP_R_SHOT = 0x43,
-    WMP_R_IDLE = 0x44,                 /* { ms }: the GET_IDLE reply (todos/
+    WMP_R_IDLE = 0x44,                 /* { ms }: the GET_IDLE reply (docs/
                                           0096) — its own type so /bin/wm's
                                           fire-and-forget drain can route it
                                           (the R_SHOT precedent) */
     WMP_R_CURSOR = 0x45,               /* { shape }: the CURSOR_AT reply
-                                          (todos/0105; the R_IDLE precedent) */
+                                          (docs/archive/0105; the R_IDLE precedent) */
     /* events */
     WMP_EV_VISIBILITY = 0x95,       /* full window record, requested visibility */
     WMP_EV_ACTIVATION_REQUEST = 0x96, /* { sid, visibility serial }, echo both in WMP_FOCUS */
@@ -183,40 +183,40 @@ enum {
                                           landed; serial = the acked configure
                                           (#790; older readers stop at w, h) */
     WMP_EV_SCREEN = 0x87,              /* { w, h }: screen resolution changed
-                                          (todos/0023); the kernel has already
+                                          (docs/archive/0023); the kernel has already
                                           clamped window positions */
     WMP_EV_SCALED = 0x88,              /* { sid, dstW, dstH }: a SET_DST landed
-                                          (todos/0024) */
+                                          (docs/archive/0024) */
     WMP_EV_SCALE_REQ = 0x89,           /* { sid, w, h }: frame drag released on
                                           a fixed-size surface at that box —
                                           policy answers with an aspect-
-                                          preserving SET_DST (todos/0024) */
+                                          preserving SET_DST (docs/archive/0024) */
     WMP_EV_TITLE_ACTIVATE = 0x8A,      /* { sid }: title-bar double-click or an
-                                          ACTIVATE command (todos/0025) — the
+                                          ACTIVATE command (docs/archive/0025) — the
                                           maximize gesture; policy toggles
                                           configure-vs-scale on the RESIZABLE
                                           bit and keeps the saved geometry */
     WMP_EV_CYCLE = 0x8B,               /* { direction }: the cycling chord
                                           (Tab with Alt held; Shift reverses)
-                                          or a CYCLE command (todos/0032) —
+                                          or a CYCLE command (docs/archive/0032) —
                                           policy walks focus; only emitted
                                           with a subscriber */
     WMP_EV_MENU = 0x8C,                /* { }: the Start chord (Esc with Ctrl
-                                          held) or a MENU command (todos/0078)
+                                          held) or a MENU command (docs/archive/0078)
                                           — policy toggles the Start menu;
                                           only emitted with a subscriber, else
                                           the chord passes through */
     WMP_EV_SNAP_EDGE = 0x8D,           /* { sid, edge }: mid-title-drag the
                                           pointer entered (edge > 0) or left
                                           (edge 0) a screen-edge snap zone
-                                          (todos/0095) — policy shows/hides
+                                          (docs/archive/0095) — policy shows/hides
                                           the translucent preview. Edges:
                                           1 L, 2 R, 3 top, 4 TL, 5 TR, 6 BL,
                                           7 BR; only with a subscriber */
     WMP_EV_SNAP_DROP = 0x8E,           /* { sid, edge, x0, y0 }: a title drag
                                           that MOVED (past the kernel's 4px
                                           slop — a click emits nothing) was
-                                          released (todos/0095), after its
+                                          released (docs/archive/0095), after its
                                           EV_MOVED — edge > 0 commits the snap
                                           (x0/y0 = the PRE-drag position, the
                                           floating rect policy saves); edge 0
@@ -224,24 +224,24 @@ enum {
                                           drag-off restore */
     WMP_EV_SNAP_KEY = 0x8F,            /* { direction }: the Win+arrow chord
                                           (arrows with GUI held) or a SNAP
-                                          command (todos/0095) — 0 L / 1 R /
+                                          command (docs/archive/0095) — 0 L / 1 R /
                                           2 U / 3 D; policy snaps the focused
                                           window (halves, maximize, restore/
                                           minimize); only with a subscriber */
-    WMP_EV_SAVER = 0x90,               /* { }: a SAVER command (todos/0096) —
+    WMP_EV_SAVER = 0x90,               /* { }: a SAVER command (docs/archive/0096) —
                                           wmctl saver / the Control Panel
                                           Preview; policy raises the
                                           configured screensaver at once;
                                           only with a subscriber */
     WMP_EV_SYSMENU = 0x91,             /* { sid }: the Alt+Space chord or a
-                                          SYSMENU command (todos/0102) —
+                                          SYSMENU command (docs/archive/0102) —
                                           policy raises the window system menu
                                           (Restore/Move/Size/Minimize/Maximize/
                                           Close) on that (the focused) window;
                                           only with a subscriber, else the
                                           chord passes through */
     WMP_EV_HOTKEY = 0x92,              /* { token, flags, sid }: a NON-reserved
-                                          key-grab table entry matched (todos/
+                                          key-grab table entry matched (docs/
                                           KEYBINDING-OVERRIDE-SYSTEM.md §3) —
                                           the ONE event for every user-installed
                                           chord. flags bit0 = Shift, bit1 =
@@ -250,7 +250,7 @@ enum {
                                           emit the legacy events instead; only
                                           with a subscriber */
     WMP_EV_OVERVIEW = 0x93,           /* { }: toggle the window overview
-                                          (todos/EXPOSE-MISSION-CONTROL.md) — an
+                                          (docs/EXPOSE-MISSION-CONTROL.md) — an
                                           OVERVIEW command (wmctl overview). The
                                           Ctrl+Alt+E chord reaches wm.c via
                                           EV_HOTKEY { KTOK_OVERVIEW } instead
@@ -270,8 +270,8 @@ enum {
 
 /* The fixed 80-byte window record (EV_CREATED payload; R_LIST carries
  * u32 count then count of these). No padding: 12 i32 + 32 bytes.
- * dst_w/dst_h: the on-screen viewport (todos/0024) — equals w/h unless
- * the surface is scaled. layer: the z layer (todos/0038; was reserved) —
+ * dst_w/dst_h: the on-screen viewport (docs/archive/0024) — equals w/h unless
+ * the surface is scaled. layer: the z layer (docs/archive/0038; was reserved) —
  * -1 bottom / 0 normal / +1 top. */
 typedef struct {
     int32_t sid, pid, x, y, w, h, z, flags, frame_seq, dst_w, dst_h, layer;
@@ -280,11 +280,11 @@ typedef struct {
 #define WMP_F_FOCUSED    1
 #define WMP_F_MINIMIZED  2
 #define WMP_F_BORDERLESS 4
-#define WMP_F_RELMOUSE   8   /* surface requested relative mouse (todos/0018) */
+#define WMP_F_RELMOUSE   8   /* surface requested relative mouse (docs/archive/0018) */
 #define WMP_F_RESIZABLE 16   /* SDL_WINDOW_RESIZABLE: RESIZE allowed (0021) */
 #define WMP_F_ALPHA     32   /* SDL_WINDOW_TRANSPARENT: per-pixel alpha,
-                                composited src-over (todos/0063) */
-#define WMP_F_ANCHORED  64   /* anchored child surface (todos/0256): pinned
+                                composited src-over (docs/archive/0063) */
+#define WMP_F_ANCHORED  64   /* anchored child surface (docs/archive/0256): pinned
                                 to a same-process parent, moved/hidden/
                                 raised/destroyed/scaled with it, never
                                 focused; always borderless. WM geometry/
@@ -300,7 +300,7 @@ typedef struct {
                               and is destroyed with it. Distinct from ANCHORED
                               (a popup pinned to a parent) and from TRANSIENT
                               (the taskbar-membership hint). */
-#define WMP_F_TRANSIENT 128  /* transient/owned window (todos/0281): a framed,
+#define WMP_F_TRANSIENT 128  /* transient/owned window (docs/archive/0281): a framed,
                                 focusable secondary window that Win95 never lists
                                 in the taskbar. Unlike ANCHORED it keeps chrome +
                                 focus; /bin/wm just gives it no taskbar button and
@@ -339,7 +339,7 @@ static int wmp_read_all(int fd, void *buf, int len) {
             if (n == 0) errno = ECONNRESET;   /* EOF leaves errno stale —
                                                  name the real condition so
                                                  callers' strerror() reports
-                                                 are truthful (todos/0234) */
+                                                 are truthful (docs/archive/0234) */
             return -1;
         }
         p += n; len -= n;
@@ -416,7 +416,7 @@ static int wmp_next_reply(int fd, wmp_hdr *h) {
     }
 }
 
-/* Consume a reply frame's payload, surfacing the kernel's cause (todos/
+/* Consume a reply frame's payload, surfacing the kernel's cause (docs/
  * 0242). An R_ERR reply carries one i32 errno naming the REAL failure —
  * EINVAL bad/unknown sid or args, EPERM the surface's mode forbids the op
  * (resize a non-resizable / scale a resizable / maximize a borderless),
@@ -439,7 +439,7 @@ static int wmp_consume_err(int fd, const wmp_hdr *h) {
 }
 
 /* One-shot command -> R_OK/R_ERR. Returns 0 on R_OK, -1 otherwise — the
- * legacy contract, unchanged. Additionally (todos/0242) a failure sets
+ * legacy contract, unchanged. Additionally (docs/archive/0242) a failure sets
  * errno to the cause: the R_ERR payload errno (see wmp_consume_err above),
  * EIO on a non-OK/non-ERR reply, or the transport errno from read/write
  * (ECONNRESET on EOF, the 0234 shape). */

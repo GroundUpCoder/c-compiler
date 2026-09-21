@@ -1,4 +1,4 @@
-%% images.mgp - gucOS MagicPoint showcase (todos/0185): %newimage options
+%% images.mgp - gucOS MagicPoint showcase (docs/archive/0185): %newimage options
 %% over the one seeded image (/usr/share/mgp/demo.gif; giflib first-frame).
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"
 %default 1 area 90 90, size 2, fore "white", back "gray20", font "standard"

@@ -3,7 +3,7 @@
 // C11: 6.7.5 (_Alignas), 6.2.8 (alignment). Static storage over-aligns in the
 //      data section (link-time property); automatic storage over-aligns on the
 //      frame — the same path the already-uncapped __attribute__((aligned(N)))
-//      uses, so `_Alignas` no longer caps at 8 either (todos/0194).
+//      uses, so `_Alignas` no longer caps at 8 either (docs/archive/0194).
 // EXPECT: `_Alignas(32) char g[4];` (static) and `_Alignas(64) int l;`
 //      (automatic) both compile and are correctly over-aligned -> all 1.
 //      compiler.js used to reject both at compile time (rejects-valid).

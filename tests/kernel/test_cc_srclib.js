@@ -10,7 +10,7 @@
 //   - The one security-relevant precedence: builtins ALWAYS beat ambient
 //     system dirs; only an EXPLICIT -I may shadow a builtin (existing
 //     semantics, kept). Quote includes keep same-dir-first.
-//   - __require_source FS tiers: builtin -> libc-ext -> sourceRoots exact map
+//   - __require_source FS tiers: builtin -> sourceRoots exact map
 //     (prefix on the FIRST path component) -> sourcePaths search dirs.
 //   - Name validation before any FS probe: relative [A-Za-z0-9._-]+
 //     components only — '..'/'/'-leading/'\\'/empty components are LOUD

@@ -8,7 +8,7 @@ var path = require('path');
 var { ensurePrebakedImage } = require('../lib/image-fixture.js');
 var { assertMemberRegistry } = require('../lib/suite-runner.js');
 
-// Cross-tree preflight (todos/0341) — BEFORE ensurePrebakedImage(), which bakes
+// Cross-tree preflight (docs/archive/0341) — BEFORE ensurePrebakedImage(), which bakes
 // a 111 MB blob into the SCRIPT's os/ directory. A cross-tree launch would
 // rewrite another tree's image fixture, which is a write, not just a read.
 require('../lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/host/run.js' });
@@ -151,7 +151,7 @@ partitions.forEach(function (entries, dir) {
   });
 });
 
-// serve.js re-bakes a stale os-system.img BEFORE listening (todos/0082), so
+// serve.js re-bakes a stale os-system.img BEFORE listening (docs/archive/0082), so
 // test_first_run's 5s URL deadline needs the fixture fresh up front — the
 // same prebake the kernel/browser runners do. Without this, the first host
 // run after touching any bake input (host.js, compiler.js, os/) fails on

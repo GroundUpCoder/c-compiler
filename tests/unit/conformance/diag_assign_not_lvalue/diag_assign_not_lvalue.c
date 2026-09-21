@@ -1,7 +1,7 @@
 // BUG: assigning to a non-lvalue (constant, function call result, cast,
 // enum constant, whole array) crashed the compiler with a raw
 // "emitLValue: unsupported expression" throw instead of diagnosing
-// (G10, todos/0217).
+// (G10, docs/archive/0217).
 // C11: 6.5.16p2 (constraint) — assignment requires a modifiable lvalue.
 // EXPECT: compile error (exit 1).
 int f(void) { return 1; }

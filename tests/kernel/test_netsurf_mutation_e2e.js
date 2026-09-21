@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // NetSurf's mutation -> re-box -> reflow -> repaint bridge, IN THE OS
-// (todos/NETSURF-JS.md Lane B).  The monkey gate
+// (docs/NETSURF-JS.md Lane B).  The monkey gate
 // (vendor/netsurf/smoke-js.mjs legs 6-8) proves the bridge against the plot
 // stream, including an A/B baseline with the bridge compiled out; this
 // proves the three things only the real gucOS frontend can speak for:
@@ -17,13 +17,13 @@
 //     and explicitly deferred the live check to this lane.  Here the scroll
 //     offset is DECODED FROM THE PIXELS either side of a reconvert and the
 //     two must be equal — and non-zero, or the check would be vacuous.
-//   - TYPING AND FOCUS SURVIVE RE-CONVERSION (todos/0386, todos/0402).
+//   - TYPING AND FOCUS SURVIVE RE-CONVERSION (docs/archive/0386, docs/archive/0402).
 //     The static/ticky A/B asserts EXACT settled-ink equality, and the
 //     forced-window arms (a 3000-element page whose re-conversion window
 //     spans the whole tick period) prove no keystroke and no click is
 //     lost even when the page is mid-re-box essentially always.  The
 //     value gates are SETTLED shots (the pages' ticks are finite).
-//   - A MID-WINDOW RENDER EQUALS THE SETTLED RENDER (todos/0407).  The T
+//   - A MID-WINDOW RENDER EQUALS THE SETTLED RENDER (docs/archive/0407).  The T
 //     arm's immediate shot lands inside a re-conversion window, where the
 //     still-live OLD box tree draws the RECREATED widget.  That widget is
 //     born with the box's computed text style and the outgoing widget's
@@ -33,7 +33,7 @@
 //     The other arms' immediate shots stay diagnostics: their timing does
 //     not guarantee a mid-window sample.
 //   - A GADGET'S REPAINT MID-WINDOW GOES TO THE BOX ON SCREEN
-//     (todos/0412).  The GC/GR pair clicks the same radio on a still page
+//     (docs/archive/0412).  The GC/GR pair clicks the same radio on a still page
 //     and on a page that is mid-re-conversion essentially always.  Both
 //     must end in the same render, and the mid-window one must get there
 //     at the click rather than at the next swap: pre-fix the damage
@@ -161,7 +161,7 @@ var box = document.getElementById('d');
 var tick = setInterval(function () {
 	n = n + 1;
 	box.textContent = 'tick ' + n;
-	/* FINITE (todos/0386): typing overlaps ticks 1..~15, then the page
+	/* FINITE (docs/archive/0386): typing overlaps ticks 1..~15, then the page
 	 * really settles, so the leg can assert its exact final state — an
 	 * everlasting tick would leave every shot un-barrierable (a shot
 	 * can land inside a re-conversion window, where the field renders
@@ -226,7 +226,7 @@ console.log('big page ready');
 </body></html>
 `;
 
-/* todos/0412: a select gadget and a radio group on the D2 forced-window
+/* docs/archive/0412: a select gadget and a radio group on the D2 forced-window
  * page shape.  Two things differ from typingPageBig.  The fillers are
  * ZERO height, so they widen the re-conversion window without pushing the
  * gadgets off screen — the gadgets stay at pinned geometry AND a click
@@ -332,7 +332,7 @@ driveBoot('true', { image });
   put('/root/big-t.html', Buffer.from(typingPageBig('NsBigT', 3000, 300), 'utf-8'));
   put('/root/big-c1.html', Buffer.from(typingPageBig('NsBigC1', 3000, 0), 'utf-8'));
   put('/root/big-c2.html', Buffer.from(typingPageBig('NsBigC2', 3000, 5000), 'utf-8'));
-  /* todos/0412: 6000 zero-height fillers roughly double the D2 window, so
+  /* docs/archive/0412: 6000 zero-height fillers roughly double the D2 window, so
    * a click plus a shot both fit inside one of them with margin. */
   put('/root/gad-t.html', Buffer.from(gadgetPage('NsGadT', 6000, 300), 'utf-8'));
   put('/root/gad-c.html', Buffer.from(gadgetPage('NsGadC', 6000, 0), 'utf-8'));
@@ -566,7 +566,7 @@ const out = driveBoot([
   'wmctl shot $BT /root/bt2.png && echo shot-bt2-ok',
   'wmctl close $BT && wmctl wait nowin NsBigT 8000 && echo bigt-closed',
 
-  /* --- D2 arm T2 (the todos/0402 shape): the CLICK itself lands mid
+  /* --- D2 arm T2 (the docs/archive/0402 shape): the CLICK itself lands mid
    * re-conversion, with nothing previously focused, then typing. --- */
   'netsurf /root/big-t.html &',
   'wmctl wait win NsBigT 30000',
@@ -611,7 +611,7 @@ const out = driveBoot([
   'wmctl shot $BD /root/bc22.png && echo shot-bc22-ok',
   'wmctl close $BD && wmctl wait nowin NsBigC2 8000 && echo bigc2-closed',
 
-  /* --- todos/0412 arm GC (control): the same gadget page with NO timer,
+  /* --- docs/archive/0412 arm GC (control): the same gadget page with NO timer,
    * so the radio click lands on a page that is never mid-window.  This
    * arm DEFINES the correct post-click render; the ticking arm is asked
    * to match it. --- */
@@ -636,7 +636,7 @@ const out = driveBoot([
   'echo shot-gc1-ok',
   'wmctl close $GC && wmctl wait nowin NsGadC 8000 && echo gadc-closed',
 
-  /* --- todos/0412 arm GR: the same click, but on the forced-window page
+  /* --- docs/archive/0412 arm GR: the same click, but on the forced-window page
    * with ticking underway, so it lands mid-re-conversion.  Pre-fix
    * form_radio_set damaged the NEW tree's box — no coordinates, no size —
    * so the click repainted NOTHING and the screen kept the old dot until
@@ -798,7 +798,7 @@ const shots = parsePngs(back.stdout, NAMES);
           `diff=${diff}`);
   }
 
-  /* ---- regression readout (todos/0386): every number printed unconditionally ---- */
+  /* ---- regression readout (docs/archive/0386): every number printed unconditionally ---- */
   const inks = (tags) => tags.map((t) => fieldInk(shots[t]));
   const sSteps = inks(['s1', 's2', 's3', 's4', 's5', 's6']);
   const kSteps = inks(['k1', 'k2', 'k3', 'k4', 'k5', 'k6']);
@@ -819,7 +819,7 @@ const shots = parsePngs(back.stdout, NAMES);
   const vprobe = (tag) => `mirE=${mirEInk(tag)} mirP=${mirPInk(tag)}`;
   console.log('D3-BIGT per-key ink: ' + inks(['tk1', 'tk2', 'tk3', 'tk4', 'tk5', 'tk6']).join(' '));
   /* band= differing pixels between the immediate and the settled shot
-   * inside the field band (todos/0407: a mid-window render that moved
+   * inside the field band (docs/archive/0407: a mid-window render that moved
    * shows up here even when the ink count matches) */
   const band = (a, b) => fieldBandDiff(shots[a], shots[b]);
   /* WHERE the band differs, and what the two shots put there: an ink
@@ -846,12 +846,12 @@ const shots = parsePngs(back.stdout, NAMES);
   };
   console.log(`D5-T   band-where ${bandWhere('bt1', 'bt2')}`);
   console.log(`D2-T   immediate=${fieldInk(shots.bt1)} settled=${fieldInk(shots.bt2)} band=${band('bt1', 'bt2')} value[${vprobe('bt2')}]`);
-  console.log(`D2-T2  immediate=${fieldInk(shots.bu1)} settled=${fieldInk(shots.bu2)} band=${band('bu1', 'bu2')} value[${vprobe('bu2')}] (click landed mid-ticking, todos/0402 shape)`);
+  console.log(`D2-T2  immediate=${fieldInk(shots.bu1)} settled=${fieldInk(shots.bu2)} band=${band('bu1', 'bu2')} value[${vprobe('bu2')}] (click landed mid-ticking, docs/archive/0402 shape)`);
   console.log(`D2-C1  immediate=${fieldInk(shots.bc11)} settled=${fieldInk(shots.bc12)} band=${band('bc11', 'bc12')} value[${vprobe('bc12')}] (size control, no timer)`);
   console.log(`D2-C2  immediate=${fieldInk(shots.bc21)} settled=${fieldInk(shots.bc22)} band=${band('bc21', 'bc22')} value[${vprobe('bc22')}] (period control, 5 s)`);
 
   /* The A/B: a mutating page must type EXACTLY as well as a still one —
-   * asserted on the SETTLED shot at EXACT equality (todos/0386).  The old
+   * asserted on the SETTLED shot at EXACT equality (docs/archive/0386).  The old
    * `>= staticInk * 0.9` slack silently accepted a dropped x-height
    * keystroke; the deterministic answer is byte-identical fields, so the
    * tolerance is gone, not widened.  Before focus survived the swap this
@@ -863,17 +863,17 @@ const shots = parsePngs(back.stdout, NAMES);
         fieldInk(shots.x5) === staticInk,
         `static ${staticInk} vs fast-typed settled ${fieldInk(shots.x5)} ink pixels`);
 
-  /* The forced-window arms (todos/0386 D2): a 3000-element page whose
+  /* The forced-window arms (docs/archive/0386 D2): a 3000-element page whose
    * re-conversion window spans ~the whole tick period.  Typing DURING
    * continuous re-boxing (T), and clicking INTO the storm with nothing
-   * previously focused first (T2 — the todos/0402 regression: pre-fix
+   * previously focused first (T2 — the docs/archive/0402 regression: pre-fix
    * both read 52 = every key swallowed).  C1/C2 are the size-only and
    * period-only controls. */
   check('typing: forced-wide window (T) types exactly as well as static',
         fieldInk(shots.bt2) === staticInk,
         `static ${staticInk} vs T settled ${fieldInk(shots.bt2)} ink pixels`);
 
-  /* todos/0407: a MID-WINDOW shot of the T arm must read the settled
+  /* docs/archive/0407: a MID-WINDOW shot of the T arm must read the settled
    * field.  The T page is mid-re-conversion essentially always, so bt1 is
    * a redraw of the still-live OLD tree drawing the RECREATED widget.
    * That widget is now born with the box's own computed text style and
@@ -881,13 +881,13 @@ const shots = parsePngs(back.stdout, NAMES);
    * render.  Before the fix the widget was born at a hardcoded 10pt and
    * this read 204 against 285.  This is the one arm whose immediate shot
    * is guaranteed mid-window; the other arms print theirs above. */
-  check('typing: a mid-window render equals the settled one (T, todos/0407)',
+  check('typing: a mid-window render equals the settled one (T, docs/archive/0407)',
         fieldInk(shots.bt1) === fieldInk(shots.bt2),
         `T immediate ${fieldInk(shots.bt1)} vs settled ${fieldInk(shots.bt2)} ink pixels`);
-  check('typing: and is pixel-identical inside the field band (T, todos/0407)',
+  check('typing: and is pixel-identical inside the field band (T, docs/archive/0407)',
         fieldBandDiff(shots.bt1, shots.bt2) === 0,
         `differing pixels in the field band: ${fieldBandDiff(shots.bt1, shots.bt2)}`);
-  check('typing: click mid-re-conversion keeps its focus (T2, todos/0402)',
+  check('typing: click mid-re-conversion keeps its focus (T2, docs/archive/0402)',
         fieldInk(shots.bu2) === staticInk,
         `static ${staticInk} vs T2 settled ${fieldInk(shots.bu2)} ink pixels`);
   check('typing: size control (C1) unaffected',
@@ -910,7 +910,7 @@ const shots = parsePngs(back.stdout, NAMES);
   }
 }
 
-/* --- leg 5 (todos/0412): a gadget's repaint mid-window goes to the box
+/* --- leg 5 (docs/archive/0412): a gadget's repaint mid-window goes to the box
  * ON SCREEN.  form_radio_set damaged control->box, which mid-re-conversion
  * is the NEW tree's box: no coordinates, zero size, so the damage
  * rectangle was empty and the click repainted nothing at all.  The dot

@@ -338,7 +338,7 @@ const spawnReq = (p, extra) => Object.assign(
   check('stopped-then-termed waits as WTERMSIG 15', r.status === 15, String(r.status));
   Atomics.store(page(1).i32, K.KP_SIGPEND, 0);      // drop the SIGCHLDs this section posted
 
-  // ---- interval timers (todos/0044): SETITIMER/GETITIMER over the SAB ----
+  // ---- interval timers (docs/archive/0044): SETITIMER/GETITIMER over the SAB ----
   // Real setTimeout drives expiry, so these legs sleep with generous margins
   // (arm 50ms, observe at 150ms) rather than exact deadlines.
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -401,7 +401,7 @@ const spawnReq = (p, extra) => Object.assign(
   check('termsig is SIGALRM', r.status === 14, JSON.stringify(r));
   Atomics.store(page(1).i32, K.KP_SIGPEND, 0);      // drop this section's SIGCHLDs
 
-  // ---- shebang exec (todos/0065): #! images re-dispatch to the interpreter ----
+  // ---- shebang exec (docs/archive/0065): #! images re-dispatch to the interpreter ----
   const sb = (s) => new Uint8Array(Buffer.from(s, 'latin1'));
   images.set('/bin/interp', new Uint8Array([9]));
   images.set('/root/bin/interp', new Uint8Array([10]));

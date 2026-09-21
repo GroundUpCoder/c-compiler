@@ -1,0 +1,291 @@
+# GAMEDEV-EPIC — game development inside gucOS is THE primary epic
+
+## 🟢 STATUS: PRIMARY AND EXCLUSIVE — full throttle (jku direct ruling, 2026-08-13)
+
+jku ruled by email on 2026-08-13: **table PKGDEV, pivot all work to gamedev
+full throttle.** `docs/PKGDEV-EPIC.md` is TABLED and must not be dispatched;
+the 2026-08-07 promotion that put PKGDEV above this epic is **superseded**.
+
+Selection policy, in order:
+
+0. **Broken-build preemption** — unchanged, always first (`main` red, or
+   landing requires `--no-verify`).
+1. **Gamedev is PRIMARY and EXCLUSIVE in allocation.** Select work that
+   directly advances this document, then apply the standing weight sort
+   (light → medium → heavy, `Pn` breaks ties inside a tier, bug-fix-first
+   within a tier). **Dependencies outrank the sort** — only recorded
+   `blockedBy` edges count.
+2. **Every queued ticket still needs a WRITTEN gamedev justification**, in
+   the kickoff AND the state note. Membership is ARGUED, never
+   pattern-matched — "does the ticket say game" is the WRONG test. The burden
+   of proof is on the selector.
+3. **A landed-PKGDEV defect may be selected only on a concrete
+   gamedev-blocker argument**, never to restart the PKGDEV backlog
+   indirectly.
+
+Ruling note: `~/git/meta/meta/notes/ruling-gamedev-full-throttle-pkgdev-tabled-2026-08-13.md`.
+Current ranking: `~/git/meta/notes/gamedev-queue-ranking.md`.
+
+> **jku, 2026-08-04, verbatim:** *"The gamedev in gucOS is the primary focus
+> indefinitely until otherwise specified."* — restored in full on 2026-08-13.
+
+**Retired status (2026-08-07 → 2026-08-13): ACTIVE but SECOND PLACE**, while
+`docs/PKGDEV-EPIC.md` ranked above this epic. Its rules (membership argued,
+justification burden, dogfood mechanics, API honesty) were inherited by
+PKGDEV-EPIC. Original status (2026-08-04): the north star every batch falls
+under. Companion principle: `docs/OS.md` "Dev-experience first" (commit
+`3fc46971`).
+
+> **jku, 2026-08-04, verbatim:** *"The gamedev in gucOS is the primary focus
+> indefinitely until otherwise specified."*
+
+## 🔴 THE ACCEPTANCE BAR, RAISED — jku, 2026-08-09
+
+> **jku, verbatim:** *"That one should clearly show making various games should
+> be very stable and very enjoyable both when coding is done manually as well
+> as when it's done with gcode."*
+
+This is **higher than the bar the rest of this document states**, and it is the
+bar this epic is judged against when it eventually takes primacy back from
+PKGDEV. Three things it changes:
+
+1. **"Various games", not one showcase.** A single working demo does not
+   satisfy it. The plural is load-bearing.
+2. **"Very stable AND very enjoyable."** Stability is measured today (crashes,
+   wedges, gate greens). 🔴 **"Enjoyable" is measured by NOTHING in the current
+   acceptance estate** — there is no frame-pacing, input-latency, or
+   authoring-friction criterion anywhere in this epic. Until such a criterion
+   exists, any claim that this epic is met is an assertion, not a measurement.
+   Closing that gap is itself epic work.
+3. **The gcode-authored path is FIRST-CLASS, not a side quest.** The bar must
+   be met *both* when a human writes the game by hand *and* when gcode writes
+   it. A game that is pleasant to build by hand but not through gcode fails
+   this bar. Every gamedev pass therefore has two arms, and a pass that
+   exercises only the hand-coded arm is incomplete.
+
+Recorded by @master from the email thread of 2026-08-09 (the same reply that
+ruled PKGDEV not yet done, so this bar governs the epic that is *next*, not the
+one running now).
+
+That directive is **not scoped to a batch or a cycle** — it stands until he
+says otherwise. **Operative reading for queue selection: gamedev primacy is a
+FILTER APPLIED BEFORE the weight sort.** Select the gamedev-advancing tickets
+first, *then* order them light → medium → heavy with Pn breaking ties inside a
+tier. It does **not** override bug-fix-first (which applies within a tier) and
+it does **not** override broken-build preemption (a build that blocks lands is
+still the top immediate priority).
+
+## 🔴 Epic membership is ARGUED, not pattern-matched — three rulings (jku, 2026-08-04)
+
+Email `rK6UPpixi_e3`, confirmed `8ZrO7qF3eJFk` (*"Yup those assessments are
+good"*). **jku, verbatim:**
+
+> *"Largely A, but I would argue some of the git experience in a way relates to
+> game work as well. I mean how would you clone code or push code to a repo
+> without git? But if there are more fundamental things, do that first. All work
+> you should going forward should be justifiable in the context of the epic."*
+
+**These are three separable rulings. Do not collapse them.**
+
+**1. jku's own provenance on a ticket is NOT a bypass.** A P0 he filed himself
+does not ride ahead of the epic merely because he filed it — **`#391` and `#202`
+WAIT.** They are **RULED, not pending**: do not carry them forward as open asks
+and do not re-raise them as "blocked on jku". ⚠️ Distinguish this from the
+**"Foundation tickets"** section below, which is a *deliberate, explicit* manual
+promotion — the sanctioned weight-sort override. Provenance is not promotion;
+only an explicit intervention is.
+
+**2. The membership test is an ARGUMENT, not the word "game".** jku admitted git
+into the epic on a **developer-workflow** argument — *"how would you clone code
+or push code to a repo without git?"* — not because git is game code. ⇒ **Anything
+on the path of a developer building a game inside gucOS qualifies**: toolchain,
+text/fonts, source control, the in-OS dev loop, platform stability.
+🔴 **Testing membership by whether a ticket says "game" is the WRONG test** — it
+would have excluded the very work he just admitted. This is the ruling a literal
+reader is most likely to get wrong.
+
+**3. 🔴 A STANDING BURDEN OF PROOF, ON THE SELECTOR.** *"All work going forward
+should be justifiable in the context of the epic."* Every ticket queued needs a
+**written** epic justification — in the kickoff **and** in the coordinator's state
+note. **Queueing a ticket with no articulated justification is now itself the
+error.** Note the direction: a filter is something a ticket passes; a
+justification is something the selector **produces**.
+
+### The ranking jku delegated, and his confirmation of it
+
+He did **not** rank git against anything — *"if there are more fundamental
+things, do that first"* delegates that. The coordinator's call, put to him and
+**confirmed**: **`#464` (FreeType, app-side text) is more fundamental than git** —
+you cannot draw a score, a menu or a debug readout without text, and **`#468` is
+hard-blocked on `#464`** (verified by UUID). `#487` Pass A round 1 independently
+corroborated it: its finding **`#494` is "no text rendering at all"**.
+
+**Confirmed sequence:** `#487` → `#488` → `#464` → `#475` (git write set) →
+`#478` (git network) — *with dogfood findings allowed to reorder anything behind
+them*, since measuring what is actually fundamental is what those passes are for.
+
+⚠️ **One flag, recorded honestly because it was NOT put to him:** that sequence
+was presented as a ranking **among the P0 medium/heavy tickets only**. `#464` is
+`medium`, and dependency-free **`light` P1s are ready** (`#422`, `#424`, `#435`,
+`#110`, `#423`, `#446`), which his own standing weight rule puts first — his
+verbatim clause is that a blocker never takes a slot *"while any dependency-free
+light work is ready"*. The operative reading is that he approved the **relative**
+ranking he was asked about (FreeType before git), not a suspension of the weight
+rule. **Run the light front first, then `#464` → `#475` → `#478`.** He can
+override this in one sentence; until he does, his weight rule governs.
+
+## The goal
+
+gucOS is judged by whether a person can sit inside it and **actually develop
+games** — in **C with SDL3**, using **gcode** (the in-OS DeepSeek coding
+agent) — with a good developer experience. Not "the demo compiles": the whole
+loop — write, build, run, crash, diagnose, iterate — has to feel good, for a
+human working directly and for a human working through the in-OS agent.
+
+The backlog is rescrubbed against this goal (jku, 2026-08-04): the next
+batches select work that advances SDL3/C gamedev DX in-OS. Unrelated work is
+deprioritized — not deleted — subject to the standing bug-fix-first and
+broken-build-preemption rules.
+
+**Asset placement policy (#616):** new large assets, optional-app payloads,
+and independently-authored package sources default to the sibling repo
+**`gucos-packages`** (`github.com/josephkimgpt/gucos-packages`). A new
+top-level vendor blob larger than **~5 MB** needs a stated reason to live in
+c-compiler — keeping the platform repo lean is what keeps every lane's clone
+(and this epic's dev loop) cheap.
+
+## Foundation tickets (jku manual promotion, 2026-08-04)
+
+Pulled to the **front of P0 and scheduled for the next cycle** by explicit
+jku intervention (the sanctioned weight-sort override). All three come out of
+the measured SDL3 busy-loop incident (a legal poll-only render loop crashed
+the whole tab):
+
+1. **GPU present transport backpressure** (absorb) — clamp/coalesce presents
+   at the producer seam (`presentTo`, host.js browser flavor) to ~vsync rate;
+   mailbox newest-wins preserved. Kills the tab-crash class outright.
+2. **`SDL_PollEvent` pumps the input ring** (SDL3 conformance) — poll-only
+   loops are currently input-dead and unclosable; upstream SDL3 pumps inside
+   PollEvent, we must too.
+3. **Hung-app contain** — kernel detects a close request that sits undrained
+   (~seconds) and force-quits that process with a legible "not responding"
+   reason. The platform kills the offender; the OS never dies with it.
+
+These are also the epic's first real content: the first thing every naive
+game does is a poll-only render loop.
+
+## Critically required game infrastructure (jku, 2026-08-04)
+
+Beyond stability, the epic explicitly includes the infrastructure games
+**critically require**. Named so far:
+
+- **Text rendering: FreeType, properly supported for game/app use.** Clean
+  text is table stakes for games. FreeType is already vendored
+  (`vendor/freetype`, the 0275 ksvc kernel text service uses it); the gap is
+  app-side linkability — **#464 (P0): FreeType as a standalone srclib
+  package with automatic source linking** is the vehicle. "Properly" means
+  the app-facing path, not just the kernel service.
+- **SDL3_ttf: great if we can, honest escape hatch if not.** jku verbatim:
+  if the complexity is too high and the workaround is reasonable, we may
+  work around it (e.g. games use FreeType directly, or a small custom text
+  helper). **#468** (SDL_ttf classic API as a veneer over FreeType,
+  `TTF_Text` deliberately excluded) is the scoped-honest shape of this.
+
+**API honesty (jku, 2026-08-04 — general principle, not just text):**
+*"It's better to not implement at all or have a custom API rather than
+incorrectly implement or lie with API."* A standard-named function that
+subtly diverges poisons every port and every dogfood signal; an absent
+symbol fails loud at link time; a custom-named API tells the truth about
+what it is. Scoped-but-honest subsets are fine when the boundary is explicit
+(SDL_ttf classic API without TTF_Text is the model; the VLA "real or absent,
+never faked" ruling is prior art). Pass A/B findings proposing new SDL3
+surface must respect this: implement correctly, or file it as
+custom/deferred — never approximately.
+
+🔴 **This ruling is the seed of `docs/PRINCIPLES.md` (jku, 2026-08-13)** — the
+canonical contract-anchored-correctness + honest-shape principles, which generalize
+it beyond SDL surface and add the filing classification and the P0 rule. The jku
+verbatims above stay here; `PRINCIPLES.md` is the operative text.
+
+## The two recurring pass types
+
+Each batch includes dogfood passes. Each pass is its own thread with a fresh
+context; findings become tickets (both keys set — `--difficulty` AND
+`--priority`), and fixes ride normal lanes.
+
+### 🔴 These passes are TICKETS now — prose here has no scheduling force
+
+**Round 1 is `#487` (Pass A) and `#488` (Pass B).** Until 2026-08-04 both
+passes existed *only* as the prose below, and prose does not schedule
+anything: the foundation batch would have merged, shipped and closed with no
+investigative pass ever firing. If you add a pass type here, **file it as a
+ticket in the same breath.**
+
+**PROMOTED — jku, 2026-08-04, verbatim:** *"Yes I want these passes to run
+right after. And I want this to repeat after doing the pass and identifying
+things to fix."* So: round 1 runs **immediately after `#484`/`#485`/`#486`
+merge**, by explicit manual heavy-promotion. Read as a **standing promotion
+for the Pass A / Pass B family only** — each later round is pre-promoted to
+run when its dependency edge clears, with no fresh ask per round. It does not
+generalise to any other heavy ticket.
+
+**The recurrence is a `blockedBy` chain, NOT the word "recurring".** That word
+has a perfect zero-for-three record in this tracker (`#4` is stalled literally
+*at* "round 3"; `#37` and `#109` say "recurring" and never recurred; `#220`
+was a hand re-file that collided and was dropped). **Definition of done for
+round N is three things:** (1) file every finding with both keys and evidence;
+(2) **file round N+1**; (3) **set a hard `blockedBy` edge from round N+1 onto
+round N's finding tickets**. Only then may round N close. This is
+self-perpetuating, it encodes jku's sentence exactly (N+1 cannot start until
+N's fixes land), and it terminates — cc rejects cycles. Full rationale:
+`~/git/meta/meta/notes/gamedev-dogfood-loop-2026-08-04.md`.
+
+### Pass A — dogfood-direct (Opus plays the game developer)
+
+An **Opus agent manually creates and runs games inside gucOS** using C +
+SDL3 itself (terminal, gcode as editor, cc, run in a window). It plays the
+role of a human game developer: picks a small game (pong, breakout, snake,
+asteroids…), builds it up, runs it, iterates. What it hunts:
+
+- **Stability**: anything that crashes, wedges, or corrupts — the app, the
+  window, or the OS. A platform crash from userland is always P0-class
+  (OS.md principle).
+- **Missing-but-expected SDL3 surface**: common functions a real game
+  reaches for that we lack — useful, expected, and **not too difficult to
+  implement** (that triple is the filter; a hard/rare API gets a ticket
+  tagged for discussion, not an implementation).
+- **Performance**: frame pacing, input latency, compile turnaround —
+  anything that makes the loop feel bad.
+- **DX friction**: error messages, crash diagnostics, the build-run-debug
+  loop, file management.
+
+### Pass B — dogfood-via-agent (Opus plays the human, DeepSeek writes the code)
+
+An **Opus agent drives the in-OS DeepSeek agent (gcode) to do the coding** —
+the Opus agent does NOT write code itself. It behaves exactly like a human
+who wants a game built: prompts gcode, reviews what appears, asks for
+changes, runs the result. What it hunts: **every blocker that would make it
+difficult or annoying for a HUMAN to develop games with DeepSeek inside
+gucOS** — agent iteration latency, gcode tooling gaps, how build/runtime
+errors surface back into the agent loop, run/debug ergonomics, context the
+agent can't see but needs.
+
+### Pass mechanics
+
+- Findings are filed as tickets in this repo's tracker with evidence
+  (screenshots to `s3://groundupcoder/gucos/<topic>/<date>/`, transcripts,
+  exact repro C source).
+- Passes REPORT and FILE; they do not land platform fixes mid-pass. (An
+  Opus-written fix, when one is assigned later, carries the standing
+  independent-review rule — Codex, else Kimi K3; Fable implementations
+  skip it.)
+- A pass that finds nothing new shrinks the finding bar, not the pass: try a
+  harder game, a new SDL3 subsystem (audio, textures, sprites, text), or a
+  longer session.
+
+## EPIC 2 (QUEUED — later, do not start until jku says)
+
+The same epic shape on **CPython (cpython-clang) + pygame**: dogfood-direct
+and dogfood-via-agent passes for Python game development inside gucOS.
+Interpreter state: `docs/CPYTHON.md`. Queued behind Epic 1 by design — no
+pygame work rides the current batches.

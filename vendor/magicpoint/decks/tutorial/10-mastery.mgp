@@ -1,4 +1,4 @@
-%% 10-mastery.mgp - learn MagicPoint on gucOS, deck 10 of 10 (todos/0202).
+%% 10-mastery.mgp - learn MagicPoint on gucOS, deck 10 of 10 (docs/archive/0202).
 %% The preamble machinery in depth (%default/%tab/%deffont/%nodefault/
 %% %include), what this port deliberately leaves out, and deck craft.
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"

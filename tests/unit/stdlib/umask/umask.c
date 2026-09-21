@@ -1,4 +1,4 @@
-// todos/0382 gap 1 — umask(2).
+// docs/archive/0382 gap 1 — umask(2).
 //
 // This asserts BEHAVIOUR, not linkage, deliberately: the ticket's own warning
 // is that "an umask that links and returns 0 unconditionally is worse than an

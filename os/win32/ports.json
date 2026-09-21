@@ -1,5 +1,5 @@
 {
-  "description": "The 0060 Win32 port corpus (todos/WIN32.md). Targets for tools/win32ports.js; report in PORTS.md. expect: links | missing-symbols | parse-errors.",
+  "description": "The 0060 Win32 port corpus (docs/WIN32.md). Targets for tools/win32ports.js; report in PORTS.md. expect: links | missing-symbols | parse-errors.",
   "targets": [
     {
       "name": "gdidemo",

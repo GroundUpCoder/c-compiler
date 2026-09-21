@@ -29,7 +29,7 @@
 /* This frontend declares no options of its own.
  *
  * The core's `core_select_menu` is turned ON as a gucOS DEFAULT in
- * main.c's set_defaults (todos/0422), not redeclared here: this file is
+ * main.c's set_defaults (docs/archive/0422), not redeclared here: this file is
  * the option TABLE (declarations only), and a second NSOPTION_BOOL for a
  * core option would collide with desktop/options.h.  The window table
  * still supplies no `create_form_select_menu` — with the core menu on,

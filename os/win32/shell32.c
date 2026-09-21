@@ -1,4 +1,4 @@
-/* shell32.c — the shell32 veneer slice (todos/0068, design todos/WIN32.md).
+/* shell32.c — the shell32 veneer slice (docs/archive/0068, design docs/WIN32.md).
  * First entry: ShellAboutW, composed over the user32 MessageBox modal (the
  * icon parameter is one of user32's stub handles — nothing to draw).
  * Grow strictly to os/win32/PORTS.md demand (ShellExecuteW,
@@ -34,7 +34,7 @@ int SHNewDest(const char *dir, const char *base, const char *ext,
     return fo_new_dest(dir, base, ext, out, (size_t)cap);
 }
 
-/* The trash store (todos/0093, fileops.h /root/.recycle — files/ entries
+/* The trash store (docs/archive/0093, fileops.h /root/.recycle — files/ entries
  * + info/ sidecars). Same veneer-local convention as the SHFile* set. */
 int SHFileTrash(const char *path) { return fo_trash(path); }
 int SHFileRestore(const char *stored) { return fo_restore(stored); }

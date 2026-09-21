@@ -1,5 +1,5 @@
 // BUG: companion to diag_pp_unknown_directive — pins what must STAY
-// accepted around the new invalid-directive diagnostic (todos/0227 G22):
+// accepted around the new invalid-directive diagnostic (docs/archive/0227 G22):
 // unknown directives inside a SKIPPED conditional group, GNU line
 // markers (`# 1 "file.c"` — PP_NUMBER after '#'), and the null
 // directive (`#` alone).

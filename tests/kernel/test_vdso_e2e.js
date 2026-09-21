@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// vDSO page end-to-end (todos/0179): a REAL C program compiled by
+// vDSO page end-to-end (docs/archive/0179): a REAL C program compiled by
 // compiler.js runs as a worker_thread under the kernel and reads its
 // pid/ppid/pgrp/sid off the published page. The kernel's RPC dispatch is
 // wrapped with an op counter — the acceptance is that the whole run makes

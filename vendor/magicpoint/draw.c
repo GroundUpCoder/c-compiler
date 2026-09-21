@@ -404,7 +404,7 @@ draw_one(state, e)
 		fprintf(stderr, "internal error\n");
 		cleanup(-1);
 	}
-	/* gucOS port (todos/0119): never block — the frame loop owns
+	/* gucOS port (docs/archive/0119): never block — the frame loop owns
 	 * waiting. Upstream select()ed on the X fd here with a 2s timeout;
 	 * we return 2 ("would block") and frame_loop yields the frame. */
 	if (state->phase != P_END && !pause)

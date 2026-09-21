@@ -1,4 +1,4 @@
-%% 07-images.mgp - learn MagicPoint on gucOS, deck 7 of 10 (todos/0202).
+%% 07-images.mgp - learn MagicPoint on gucOS, deck 7 of 10 (docs/archive/0202).
 %% %newimage and its transforms, formats this port decodes, %valign.
 %% The one seeded sample image is /usr/share/mgp/demo.gif.
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"

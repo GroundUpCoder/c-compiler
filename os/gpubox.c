@@ -1,4 +1,4 @@
-/* gpubox.c — the seeded GPU demo (todos/0016), since todos/0258 a minimal
+/* gpubox.c — the seeded GPU demo (docs/archive/0016), since docs/archive/0258 a minimal
  * WIN32 app with a real menu: the M2 acceptance app of the uniform-menu
  * architecture (menu arch §4.a) — a GPU app's File/Options menu riding the
  * SAME user32 engine, anchored-child surfaces and agent tree as notepad's.
@@ -36,7 +36,7 @@
  * lets the headless no-Dawn acceptance e2e drive the menu
  * (tests/kernel/test_gpubox_menu_e2e.js).
  *
- * Environment is negotiated entirely below webgpu.h (todos/WM.md invariant 1):
+ * Environment is negotiated entirely below webgpu.h (docs/WM.md invariant 1):
  * browser = per-process WebGPU device + ImageBitmap handoff; headless + the
  * optional `webgpu` (Dawn) package = render to a plain texture + readback into
  * the shm SAB; stock Node = adapter-unavailable -> the A14 survival mode.
@@ -48,7 +48,7 @@
  * readback may be in flight — quit goes through SDL_Quit alone (WM.md
  * spike S3 caveat).
  *
- * Resize (todos/0019): kernel RESIZED -> user32 WM_SIZE -> reconfigure the
+ * Resize (docs/archive/0019): kernel RESIZED -> user32 WM_SIZE -> reconfigure the
  * surface at the new FULL window size (the swapchain covers the whole
  * surface; the menu bar strip child overlays its top MENU_BAR_H pixels)
  * and rebuild the depth buffer — the canonical webgpu.h resize dance.

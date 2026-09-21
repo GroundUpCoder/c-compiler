@@ -90,7 +90,7 @@ try {
     }, Z, { timeout: 30000, polling: 'raf' });
     const s = await page.evaluate(() => window.__osScreen);
     // Sample the empty strip just LEFT of the clock (s.w - 108): reliably bar
-    // face, clear of the app-button strip — which since todos/EXPOSE starts
+    // face, clear of the app-button strip — which since docs/EXPOSE starts
     // further right (past the Start strip AND the Task-View button), so the
     // old 0.62*w point now lands on a focused button (sunken 222) at Z=2.
     await waitPixel(Math.floor(s.w - 108), s.h - 8, FACE, 60000, 'taskbar re-laid at zoom');

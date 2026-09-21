@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Paginated FS_OPENDIR/FS_READDIR (todos/0241, arch CS2): a directory whose
+// Paginated FS_OPENDIR/FS_READDIR (docs/archive/0241, arch CS2): a directory whose
 // entry list exceeds one kernel-page payload must list FULLY, page by page,
 // instead of degrading to ENOMEM at _respond's oversize guard. Driven over
 // the real SAB RPC protocol with fake workers (the test_procfs.js pattern —

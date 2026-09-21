@@ -118,7 +118,7 @@ try {
   await setVt(2);
   await waitPixel(132, 116, ORANGE, 60000);      // winbox client at 12,36
   // Button 0 sits at x~112 — past the Start strip AND the Task-View/overview
-  // button (todos/EXPOSE shifted the app strip by TASKVIEW_W); the menu parks
+  // button (docs/EXPOSE shifted the app strip by TASKVIEW_W); the menu parks
   // above the 28px bar at the button's left edge. Gutter sample at row 2.
   const BARY = SH - 14, BMX = 114, BMY = SH - 36 - 134;
   await clickAt(150, BARY, 'right');

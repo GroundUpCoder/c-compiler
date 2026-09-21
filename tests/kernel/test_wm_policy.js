@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The WM protocol (todos/0014) without wasm: a SCRIPTED wm client (fake
+// The WM protocol (docs/archive/0014) without wasm: a SCRIPTED wm client (fake
 // worker, test_wm.js / test_sockets.js plumbing) drives the kernel-owned
 // AF_UNIX endpoint at /run/wm.sock through the real SAB protocol —
 // connect-to-kernel-peer, framing (partial + coalesced writes), the
@@ -182,7 +182,7 @@ function present(fb, rgba) {
   Atomics.add(fb.i32, K.SH_SEQ, 1);
 }
 function drainRing(ring) {
-  // The owner focus pair (todos/0256, FOCUS_GAINED/LOST) interleaves with
+  // The owner focus pair (docs/archive/0256, FOCUS_GAINED/LOST) interleaves with
   // input at every focus transition by design; these legs assert INPUT
   // routing, so the pair is filtered here — its own coverage lives in
   // test_wm_anchored.js.
@@ -220,13 +220,13 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('connect to the kernel endpoint (no listener process)', !r.errno, JSON.stringify(r));
   const wm = mkConn(wmPid, wmFd);
 
-  // ---- distinct R_ERR errnos (todos/0242): a policy gesture refuses
+  // ---- distinct R_ERR errnos (docs/archive/0242): a policy gesture refuses
   // with ENODEV while no WM is subscribed — the cause, not a generic 22 ----
   let f = await cmd(wm, WMP.MENU);
-  check('MENU with no subscriber -> R_ERR ENODEV (todos/0242)',
+  check('MENU with no subscriber -> R_ERR ENODEV (docs/archive/0242)',
     f.type === WMP.R_ERR && f.g(0) === 19, JSON.stringify([f.type, f.g(0)]));
   // Overview is policy too: every op refuses ENODEV before a WM subscribes
-  // (todos/EXPOSE — the command, and the SET/END takeovers a non-subscriber
+  // (docs/EXPOSE — the command, and the SET/END takeovers a non-subscriber
   // must never seize).
   f = await cmd(wm, WMP.OVERVIEW);
   check('OVERVIEW with no subscriber -> R_ERR ENODEV', f.type === WMP.R_ERR && f.g(0) === 19);
@@ -249,11 +249,11 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   const fb1 = makeFb(64, 48);
   const ring1 = makeRing(64);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fb1.sab, ring: ring1.sab });
-  // flags bit2 = resizable (todos/0021) — the RESIZE leg below needs it.
+  // flags bit2 = resizable (docs/archive/0021) — the RESIZE leg below needs it.
   const c1 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 64, h: 48, title: 'app one', flags: 4 });
   f = await readEvent(wm);
   const w1 = rec(f);
-  // Since todos/0256 the create-steal flows through the focus funnel AFTER
+  // Since docs/archive/0256 the create-steal flows through the focus funnel AFTER
   // the EV_CREATED emit (wm.c's dismissal gating needs the create echo to
   // name the sid before its EV_FOCUS arrives), so the record reports
   // focused=0 and the EV_FOCUS that follows carries the steal.
@@ -261,7 +261,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     f.type === WMP.EV_CREATED && w1.sid === c1.sid && w1.pid === appPid &&
     w1.w === 64 && w1.h === 48 && w1.title === 'app one' && (w1.flags & 1) === 0,
     JSON.stringify(w1));
-  check('record flag bit4 = resizable (todos/0021)', (w1.flags & 16) === 16,
+  check('record flag bit4 = resizable (docs/archive/0021)', (w1.flags & 16) === 16,
     JSON.stringify(w1));
   f = await readEvent(wm);
   check('EV_FOCUS follows create', f.type === WMP.EV_FOCUS && f.g(0) === c1.sid);
@@ -375,7 +375,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     evs[1].f[0] === 7 && evs[1].f[1] === 9 && evs[2].type === K.WMEV.QUIT,
     JSON.stringify(evs));
 
-  // ---- relative mouse (todos/0018): rel inject + record flag bit3 ----
+  // ---- relative mouse (docs/archive/0018): rel inject + record flag bit3 ----
   f = await cmd(wm, WMP.INJECT_POINTER, [c1.sid, 4 /* rel */, f32bits(6), f32bits(-4), 1, 0]);
   check('INJECT_POINTER rel -> R_OK', f.type === WMP.R_OK);
   const relEvs = drainRing(ring1);
@@ -384,7 +384,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     relEvs[0].f[0] === 6 && relEvs[0].f[1] === -4 &&
     relEvs[0].w[2] === 1 && relEvs[0].w[3] === 1, JSON.stringify(relEvs));
   // (keep bit2: SET_FLAGS replaces the whole word, and the resize leg
-  // below needs c1 to stay resizable — todos/0021)
+  // below needs c1 to stay resizable — docs/archive/0021)
   await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: c1.sid, flags: 2 | 4 });
   f = await cmd(wm, WMP.LIST);
   check('record flag bit3 = relative-mouse', f.type === WMP.R_LIST &&
@@ -410,7 +410,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('screen shot pixels match the direct composite',
     String(px(f.bytes.subarray(20), 640, 320, 460)) === '10,20,30,255');
 
-  // ---- Aero effects (todos/0063): THUMB, GLASS, the F_ALPHA record bit ----
+  // ---- Aero effects (docs/archive/0063): THUMB, GLASS, the F_ALPHA record bit ----
   f = await cmd(wm, WMP.THUMB, [c1.sid, 16, 16]);
   check('THUMB -> R_SHOT with aspect-fit dims (64x48 into 16x16 = 16x12)',
     f.type === WMP.R_SHOT && f.g(0) === c1.sid && f.g(1) === 16 && f.g(2) === 12 &&
@@ -428,7 +428,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fbAl.sab, ring: null });
   const cAl = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 16, h: 16, title: 'glassy', flags: 8 });
   f = await readEvent(wm);
-  check('EV_CREATED record flag bit5 = has-alpha (todos/0063)',
+  check('EV_CREATED record flag bit5 = has-alpha (docs/archive/0063)',
     f.type === WMP.EV_CREATED && rec(f).sid === cAl.sid && (rec(f).flags & 32) === 32,
     JSON.stringify(rec(f)));
   await readEvent(wm);                                   // its EV_FOCUS
@@ -459,19 +459,19 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('RESIZE bogus sid -> R_ERR EINVAL', f.type === WMP.R_ERR && f.g(0) === 22);
   f = await cmd(wm, WMP.RESIZE, [c1.sid, 8, 8]);
   check('RESIZE below the size floor -> R_ERR EINVAL', f.type === WMP.R_ERR && f.g(0) === 22);
-  // Ring-full delivery (todos/0242): the kernel knew EAGAIN and threw it
+  // Ring-full delivery (docs/archive/0242): the kernel knew EAGAIN and threw it
   // away pre-fix — flood the client's cap-64 ring, then ask for a resize.
   for (let i = 0; i < 70; i++) kernel.wmInjectKey(c1.sid, true, 4, 97, 0);
   f = await cmd(wm, WMP.RESIZE, [c1.sid, 90, 60]);
-  check('RESIZE into a full client ring -> R_ERR EAGAIN (todos/0242)',
+  check('RESIZE into a full client ring -> R_ERR EAGAIN (docs/archive/0242)',
     f.type === WMP.R_ERR && f.g(0) === 11, JSON.stringify([f.type, f.g(0)]));
   check('ring-full RESIZE left nothing pending',
     kernel.wmList().find(s => s.sid === c1.sid).configurePending === false);
   drainRing(ring1);                                    // shed the flood
-  // Non-resizable gating (todos/0021): the taskbar was created without
+  // Non-resizable gating (docs/archive/0021): the taskbar was created without
   // flags bit2, so RESIZE is refused and its record carries no bit4.
   f = await cmd(wm, WMP.RESIZE, [ct.sid, 100, 24]);
-  check('RESIZE a non-resizable surface -> R_ERR EPERM (todos/0021, 0242)',
+  check('RESIZE a non-resizable surface -> R_ERR EPERM (docs/archive/0021, 0242)',
     f.type === WMP.R_ERR && f.g(0) === 1, JSON.stringify([f.type, f.g(0)]));
   check('non-resizable stays unchanged, nothing pending',
     kernel.wmList().find(s => s.sid === ct.sid).w === 640 &&
@@ -486,7 +486,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
       return false;
     })());
 
-  // ---- viewport scaling (todos/0024): SET_DST/EV_SCALED, the scale-request
+  // ---- viewport scaling (docs/archive/0024): SET_DST/EV_SCALED, the scale-request
   // path (frame drag on a fixed-size surface -> EV_SCALE_REQ -> policy
   // answers), scaled hit-test/input, and the NN composite over the socket ----
   const fbX = makeFb(40, 30);
@@ -588,7 +588,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('fixed surface destroyed', f.type === WMP.EV_DESTROYED &&
     f.g(0) === cx.sid && idle(wm), JSON.stringify([f.type, f.g(0)]));
 
-  // ---- dynamic screen resolution (todos/0023): EV_SCREEN + the clamp ----
+  // ---- dynamic screen resolution (docs/archive/0023): EV_SCREEN + the clamp ----
   // Park c1 (100x70 after the configure) near the bottom-right corner, then
   // shrink the screen: the subscriber gets EV_SCREEN {w,h} first, then the
   // kernel's one-shot clamp emits EV_MOVED per stranded window (title bars
@@ -698,7 +698,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('WM reconnects', !r.errno);
   const wm2 = mkConn(wmPid, wmFd2);
   f = await cmd(wm2, WMP.SUBSCRIBE);
-  check('resubscribe -> R_OK with the CURRENT screen dims (todos/0023)',
+  check('resubscribe -> R_OK with the CURRENT screen dims (docs/archive/0023)',
     f.type === WMP.R_OK && f.g(0) === 640 && f.g(1) === 480,
     JSON.stringify([f.g(0), f.g(1)]));
   const snap = [await readEvent(wm2), await readEvent(wm2), await readEvent(wm2)];
@@ -715,7 +715,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('service spawn of a missing binary resolves 0',
     (await kernel.service({ path: '/bin/nope' })) === 0);
 
-  // ---- the maximize gesture (todos/0025): a title double-click emits
+  // ---- the maximize gesture (docs/archive/0025): a title double-click emits
   // EV_TITLE_ACTIVATE to the subscriber; the ACTIVATE command (wmctl max)
   // rides the SAME event — one policy path. The kernel keeps no maximize
   // state: policy (wm.c) answers with MOVE+RESIZE / MOVE+SET_DST. ----
@@ -752,7 +752,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('ACTIVATE on a borderless surface -> R_ERR EPERM (no title bar, no gesture)',
     f.type === WMP.R_ERR && f.g(0) === 1, JSON.stringify([f.type, f.g(0)]));
 
-  // ---- title-bar boxes (todos/0030) with a subscriber: the max box rides
+  // ---- title-bar boxes (docs/archive/0030) with a subscriber: the max box rides
   // the SAME EV_TITLE_ACTIVATE (one policy path — box, double-click, and
   // wmctl max are indistinguishable to /bin/wm); the min box is kernel-
   // direct and echoes EV_MINIMIZED + the focus fall. ----
@@ -778,7 +778,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('focus fall follows the min-box minimize', f.type === WMP.EV_FOCUS &&
     f.g(0) !== c1.sid, JSON.stringify([f.type, f.g(0)]));
 
-  // ---- window cycling (todos/0032) with a subscriber: the chord is
+  // ---- window cycling (docs/archive/0032) with a subscriber: the chord is
   // intercepted at the wmKey seam and rides EV_CYCLE; the keyup is
   // swallowed too; Shift reverses; the CYCLE command is the same event
   // (wmctl cycle = the chord). c1 is minimized from the min-box leg —
@@ -813,7 +813,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     return r.length === 2 && r[0].w[0] === 43;
   })());
 
-  // ---- the Start chord (todos/0078): Esc with Ctrl held rides EV_MENU
+  // ---- the Start chord (docs/archive/0078): Esc with Ctrl held rides EV_MENU
   // under the exact EV_CYCLE rules — subscriber-gated, keyup swallowed,
   // plain Esc passes through; the MENU command is the same event
   // (wmctl menu = the chord). ----
@@ -836,7 +836,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('MENU rides the same EV_MENU (wmctl menu = the chord)',
     f.type === WMP.EV_MENU && idle(wm2), f.type);
 
-  // ---- the window system menu (todos/0102): Space with Alt held rides
+  // ---- the window system menu (docs/archive/0102): Space with Alt held rides
   // EV_SYSMENU under the exact EV_CYCLE rules — subscriber-gated, keyup
   // swallowed, plain Space passes through; the event carries the FOCUSED
   // sid (policy raises the menu on it); the SYSMENU command is the same
@@ -863,7 +863,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('SYSMENU rides the same EV_SYSMENU (wmctl sysmenu = the chord)',
     f.type === WMP.EV_SYSMENU && f.g(0) === fsid && idle(wm2), f.type);
 
-  // ---- Aero Snap (todos/0095): mid-drag edge zones ride EV_SNAP_EDGE
+  // ---- Aero Snap (docs/archive/0095): mid-drag edge zones ride EV_SNAP_EDGE
   // (enter/leave/corners), the release rides EV_SNAP_DROP { sid, edge,
   // preX, preY } AFTER its EV_MOVED, the Win+arrow chord rides EV_SNAP_KEY
   // under the EV_CYCLE rules, and the SNAP command is the same event
@@ -949,7 +949,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('SNAP rides the same EV_SNAP_KEY (wmctl snap = the chord)',
     f.type === WMP.EV_SNAP_KEY && f.g(0) === 1 && idle(wm2),
     JSON.stringify([f.type, f.g(0)]));
-  // INJECT_SCREEN (todos/0095): screen coords through the full wmPointer
+  // INJECT_SCREEN (docs/archive/0095): screen coords through the full wmPointer
   // path — a complete headless title drag, chrome included.
   const iw = kernel.wmList().find(s => s.sid === c1.sid);
   f = await cmd(wm2, WMP.INJECT_SCREEN, [1, f32bits(iw.x + 8), f32bits(iw.y - 6), 1]);
@@ -1032,7 +1032,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   drainRing(ring1);                    // shed the idle-leg key records
   }
 
-  // ---- window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) ----
+  // ---- window overview / Exposé (docs/EXPOSE-MISSION-CONTROL.md) ----
   // The OVERVIEW command rides EV_OVERVIEW (the CYCLE/MENU pattern); the
   // Ctrl+Alt+E chord reaches wm.c via the grab table's EV_HOTKEY instead.
   // (c1 is focused from the INJECT_SCREEN title-drag above — so the "app ring
@@ -1093,7 +1093,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('OVERVIEW_SET with only dead sids -> R_OK + no overview',
     f.type === WMP.R_OK && kernel.wmScene().overview === null);
 
-  // ---- z layers (todos/0038): SET_LAYER pins furniture above (+1, the
+  // ---- z layers (docs/archive/0038): SET_LAYER pins furniture above (+1, the
   // taskbar) or below (-1, the desktop layer) the normal windows; EVERY
   // z-order op — create-raise, focus-raise, restack — stays within its
   // layer, so a window can never cover the bar or sink under the desktop.
@@ -1177,7 +1177,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   f = await cmd(wm2, WMP.SET_LAYER, [c1.sid, 2]);
   check('SET_LAYER out-of-range layer -> R_ERR EINVAL', f.type === WMP.R_ERR && f.g(0) === 22);
 
-  // ---- the focus fall skips pinned furniture (todos/0039 storm find):
+  // ---- the focus fall skips pinned furniture (docs/archive/0039 storm find):
   // after 0038 the top of raw z is ALWAYS the +1-pinned taskbar, so a
   // top-of-z fall parked keyboard focus on the bar whenever the focused
   // window minimized or died. The fall must prefer the topmost normal-
@@ -1227,7 +1227,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
     f.type === WMP.EV_FOCUS && f.g(0) === ct.sid,
     JSON.stringify([f.type, f.g(0)]));
 
-  // ---- map-on-placement (todos/0069): with a WM subscribed, a new surface
+  // ---- map-on-placement (docs/archive/0069): with a WM subscribed, a new surface
   // is NOT composited / hit-tested until the WM's first geometry/stacking
   // op on it lands (wm.c answers EV_CREATED with a MOVE — the map ack), so
   // the first visible frame is at the PLACED position, never the kernel
@@ -1328,7 +1328,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   check('its self-park MOVE maps it', f.type === WMP.R_OK &&
     kernel.wmList().find(s => s.sid === cf.sid).mapped === true);
   await readEvent(wm2);                                // EV_MOVED echo
-  // Subscriber-owned ANCHORED children (todos/0282 — wm.c's own menu
+  // Subscriber-owned ANCHORED children (docs/archive/0282 — wm.c's own menu
   // flyouts) are exempt from the gate: their placement is materialized
   // from the parent at create, and no map ack could ever land anyway
   // (every WM geometry/stacking op refuses children with EPERM), so
@@ -1338,7 +1338,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   const cfly = await rpc(wmPid, K.OP.SURFACE_CREATE,
     { w: 80, h: 60, title: '', flags: 64, parentSid: cf.sid, dx: 140, dy: 10 });
   await readEvent(wm2);              // EV_CREATED only — no create-focus steal
-  check('subscriber-owned anchored child maps AT CREATE (todos/0282)',
+  check('subscriber-owned anchored child maps AT CREATE (docs/archive/0282)',
     cfly.sid > 0 && kernel.wmList().find(s => s.sid === cfly.sid).mapped === true,
     JSON.stringify(kernel.wmList().find(s => s.sid === cfly.sid)));
   // ...and raising its owner cannot sink it: _wmZNormalize re-slots the
@@ -1362,7 +1362,7 @@ const px = (buf, w, x, y) => Array.from(buf.subarray((y * w + x) * 4, (y * w + x
   await readEvent(wm2); await readEvent(wm2);          // EV_CREATED + EV_FOCUS
   check('pending unmapped before the WM dies',
     kernel.wmList().find(s => s.sid === cm4.sid).mapped === false);
-  // Overview force-end valve (todos/EXPOSE, the 0069 rule): a killed WM must
+  // Overview force-end valve (docs/EXPOSE, the 0069 rule): a killed WM must
   // never leave the screen stuck in a mode only the WM can exit.
   f = await cmd(wm2, WMP.OVERVIEW_SET, [1, cm4.sid, 0, 0, 10, 10]);
   check('overview active before the WM dies', f.type === WMP.R_OK &&

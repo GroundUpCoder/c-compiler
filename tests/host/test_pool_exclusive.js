@@ -4,7 +4,7 @@
 // reason it exists rather than being expressed as a big RAM weight.
 //
 // The kernel suite's gucman-family rows drive mkpkg over one shared
-// content-addressed pool, and two concurrent builds is the todos/0388 race
+// content-addressed pool, and two concurrent builds is the docs/archive/0388 race
 // that retargeted a sibling's repo mid-read. #579 first tried to prevent that
 // with the WEIGHT: charge each row 7 GB, note that 2 x 7 = 14 exceeds the
 // 9.6 GB budget of a 16 GB box, and call it serialized.

@@ -1,11 +1,11 @@
-// BUG: none — this test PINS a judgment made while fixing todos/0321, so the
+// BUG: none — this test PINS a judgment made while fixing docs/archive/0321, so the
 //      guard it removed is not re-added on a hunch.
 //
 //      The re-declaration-of-a-static drop (compiler.js, "C11 6.2.2p4 (via p5
 //      ...)") was gated on THREE conditions, of which one — `specs.storageClass
 //      !== STATIC` — excluded the commonest shape of all and rejected valid C
-//      (todos/0321). It guarded nothing: the same repro fails identically on
-//      the compiler.js immediately BEFORE todos/0219 introduced the block, so
+//      (docs/archive/0321). It guarded nothing: the same repro fails identically on
+//      the compiler.js immediately BEFORE docs/archive/0219 introduced the block, so
 //      the condition was that fix's stated scope boundary (extern-after-static
 //      linkage inheritance), never a protection. It was removed, not narrowed.
 //
@@ -27,7 +27,7 @@
 static int pick(void) { return -1; }
 __import("c", "getpid") int pick(void);
 
-/* And the converse ordering is untouched by todos/0321: a `static`
+/* And the converse ordering is untouched by docs/archive/0321: a `static`
    declaration after an import keeps shadowing it, so this resolves to the
    local definition. */
 __import("c", "getpid") int shadowed(void);

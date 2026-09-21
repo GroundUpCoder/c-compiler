@@ -62,7 +62,7 @@
 //   const drive = await openHeadlessSession({ image, bootArgs: ['--screen=800x500'] });
 //   try { ... } finally { await drive.close(); }
 //
-// boot.js joins the machine-wide heavy-test lock (todos/0342): when another
+// boot.js joins the machine-wide heavy-test lock (docs/archive/0342): when another
 // heavy job owns the host this exits 3 and names the holder — that is a
 // refusal, not a failure. Pass --boot=--wait-lock to wait loudly instead.
 import { spawn } from 'node:child_process';
@@ -76,7 +76,7 @@ import readline from 'node:readline';
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-// Cross-tree preflight (todos/0341, extended by #142): boots its OWN tree's
+// Cross-tree preflight (docs/archive/0341, extended by #142): boots its OWN tree's
 // os/boot.js (which can re-bake that tree's image). Ahead of the boot spawn so
 // the refusal is ours, not a delegated one. Hand-run only — no harness spawns.
 require(path.join(ROOT, 'tests/lib/tree-guard.js'))
@@ -183,7 +183,7 @@ export async function openHeadlessSession(opts = {}) {
     waiters.add(w);
   });
 
-  // The loud-symptom gate (todos/0171, driveBoot parity): a `wmctl wait` that
+  // The loud-symptom gate (docs/archive/0171, driveBoot parity): a `wmctl wait` that
   // burns its clock prints to stderr and sails on — surface it as a throw.
   const scanWaitTimeouts = (allow) => {
     const fresh = serr.slice(errScanned).toString('latin1');

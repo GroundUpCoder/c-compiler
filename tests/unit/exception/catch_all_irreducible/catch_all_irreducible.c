@@ -1,6 +1,6 @@
 // BUG: a tag-less __catch (catch-all) in an irreducible-lowered function
 // ICEd: the dispatch-loop try-lowering did tags.set(cc.tag.name) with a
-// null tag (G11, todos/0217). This corpus runs both normally
+// null tag (G11, docs/archive/0217). This corpus runs both normally
 // (catch_all_multi) and under --force-dispatch-loop
 // (catch_all_irreducible): known tag caught by catch-all, specific catch
 // winning over catch-all, nested regions in both orders, and propagation

@@ -1,5 +1,5 @@
 /*
- * sdlx.h — the gucOS port's display backend (todos/0119).
+ * sdlx.h — the gucOS port's display backend (docs/archive/0119).
  *
  * MagicPoint speaks a small Xlib vocabulary (drawables, GCs, XImages,
  * colors, events). This fork replaces the X11 headers and x11.c with this

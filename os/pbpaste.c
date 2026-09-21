@@ -1,8 +1,8 @@
-/* pbpaste.c — the system clipboard -> stdout, the macOS name (todos/0397).
+/* pbpaste.c — the system clipboard -> stdout, the macOS name (docs/archive/0397).
  *
  *   pbpaste           (exit 1, and prints nothing, when the slot is empty)
  *
- * The same one kernel clipboard slot /bin/clip reads (todos/0090), so
+ * The same one kernel clipboard slot /bin/clip reads (docs/archive/0090), so
  * pbpaste really sees what a win32 app copied with Ctrl+C, what term
  * copied with Ctrl+Shift+C, and what the user copied on the HOST browser
  * (the clipboard seam refreshes the slot on the read). The operation

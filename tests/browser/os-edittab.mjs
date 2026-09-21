@@ -1,4 +1,4 @@
-// EDIT tab expansion browser acceptance (todos/0274, design todos/WIN32.md):
+// EDIT tab expansion browser acceptance (docs/archive/0274, design docs/WIN32.md):
 // a literal TAB (0x09) in the user32 multiline EDIT must render as whitespace
 // advancing to the next tab stop — NOT as gdi32's control-char '?' glyph.
 //

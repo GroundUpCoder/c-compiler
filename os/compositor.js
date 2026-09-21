@@ -1,7 +1,7 @@
-// compositor.js — the browser half of the kernel compositor (todos/WM.md;
+// compositor.js — the browser half of the kernel compositor (docs/WM.md;
 // scene state lives in kernel.js "WM surfaces"). Runs INSIDE the kernel
 // worker on the master offscreen canvas transferred from os.html: per rAF it
-// renders the scene bottom-up in ONE WebGPU render pass (todos/0055, the
+// renders the scene bottom-up in ONE WebGPU render pass (docs/archive/0055, the
 // pass WM.md designed) — desktop clear, then per surface its pixels as a
 // z-ordered textured quad + its kernel chrome (same WM_* metrics/colors
 // that drive hit-testing and the headless screenshot composite, so what
@@ -17,7 +17,7 @@
 //                 into a cached per-surface GPUTexture only when frameSeq
 //                 changes (move/z changes redraw from the cache with no SAB
 //                 traffic), sampled NEAREST at the surface's dst viewport
-//                 (todos/0024) — the same mapping as the headless composite.
+//                 (docs/archive/0024) — the same mapping as the headless composite.
 //
 // Chrome (border, title bar, boxes, rubber band) is flat-color quads over a
 // shared 1x1 white texture; title text and the close-box 'x' rasterize
@@ -32,7 +32,7 @@
 
 // Textured quads with per-vertex color (the color modulates the sampled
 // texel — a 1x1 white texture turns it into a solid fill), plus a per-quad
-// rounded-rect SDF (todos/0063, the Aero wave): every vertex carries its
+// rounded-rect SDF (docs/archive/0063, the Aero wave): every vertex carries its
 // offset from a MASK rect's center, the mask's half extents, a corner
 // radius, and a mode. mode 0 = plain quad (everything pre-0063); mode 1 =
 // clip to the rounded mask rect (window frame corners); mode 2 = drop
@@ -153,7 +153,7 @@ function makeShmUploader(getDevice, bindFor, stats, K) {
 
 function startCompositor(kernel, canvas, device) {
   var K = KERNEL;
-  // Label text renders via the kernel's ksvc text service (todos/0275) —
+  // Label text renders via the kernel's ksvc text service (docs/archive/0275) —
   // unreachable in a real boot (kernel-worker hard-failed before us), but
   // the compositor states its requirement: no quiet textless desktop.
   var svc = kernel.textService;
@@ -161,13 +161,13 @@ function startCompositor(kernel, canvas, device) {
   var gctx = canvas.getContext('webgpu');
   if (!gctx) throw new Error('compositor: no webgpu canvas context');
   var format = navigator.gpu.getPreferredCanvasFormat();
-  var confW = -1, confH = -1;   // reconfigure on screen-resize (todos/0023)
+  var confW = -1, confH = -1;   // reconfigure on screen-resize (docs/archive/0023)
 
   // ---- device-derived state: everything here is (re)built by initGpuState,
   // because the device is NOT immortal (#551): Chromium destroys this
   // worker's device when a blocked process worker exhausts its lifetime
   // ImageBitmap-ship budget (~16.7k transfers from a never-yielding worker),
-  // and any real GPU reset lands the same way. Loud-by-design (todos/0055)
+  // and any real GPU reset lands the same way. Loud-by-design (docs/archive/0055)
   // was a BOOT rule; a running OS must survive transient loss — on
   // device.lost we say so loudly, re-acquire, rebuild, and redraw
   // (shm surfaces re-upload from their SABs, gpu surfaces re-import the
@@ -214,9 +214,9 @@ function startCompositor(kernel, canvas, device) {
       },
       primitive: { topology: 'triangle-list' },
     });
-    // Nearest sampling (todos/0024) — pixel-art correct, and the same
+    // Nearest sampling (docs/archive/0024) — pixel-art correct, and the same
     // dst-viewport mapping the headless composite uses. The linear sampler
-    // is the glass blur chain's workhorse (todos/0063): each bilinear
+    // is the glass blur chain's workhorse (docs/archive/0063): each bilinear
     // resample is a 2x2 box filter.
     sampler = device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
     linSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
@@ -306,7 +306,7 @@ function startCompositor(kernel, canvas, device) {
   var COL_BORDER = norm(K.WM_COLORS.border);
   var WHITE = [1, 1, 1, 1];
   var BLACK = [0, 0, 0, 1];
-  // Glass-mode title tints (todos/0063): the same focus colors, translucent
+  // Glass-mode title tints (docs/archive/0063): the same focus colors, translucent
   // so the blurred backdrop shows through.
   var COL_FOCUS_GLASS = [COL_FOCUS[0], COL_FOCUS[1], COL_FOCUS[2], 0.55];
   var COL_BLUR_GLASS = [COL_BLUR[0], COL_BLUR[1], COL_BLUR[2], 0.55];
@@ -314,7 +314,7 @@ function startCompositor(kernel, canvas, device) {
   // ---- per-frame quad batch: one vertex buffer, one draw per contiguous
   // same-texture run (chrome runs batch on the white texture). With glass
   // OFF the whole frame is ONE segment = one render pass, exactly the 0055
-  // shape. Glass (todos/0063) splits the frame into segments: a segment
+  // shape. Glass (docs/archive/0063) splits the frame into segments: a segment
   // whose `blur` flag is set gets the downsample/blur chain run over
   // everything already composited before its quads draw, so its glass
   // chrome samples what is genuinely BEHIND that window.
@@ -366,11 +366,11 @@ function startCompositor(kernel, canvas, device) {
     else runs.push({ bind: bind, quads: 1 });
   }
 
-  // ---- Aero chrome constants (todos/0063) ----
+  // ---- Aero chrome constants (docs/archive/0063) ----
   var OV_CAPTION_H = 24;                    // overview caption strip per row —
                                            // MUST MATCH wm.c OV_CAPTION_H so the
                                            // browser caption lands in the space
-                                           // the layout reserved (todos/EXPOSE)
+                                           // the layout reserved (docs/EXPOSE)
   var CORNER_R = 7;                        // frame corner radius, px
   var SHADOW_EXT = 14;                     // MUST MATCH the shader constant
   var SHADOW_DY = 3;                       // shadow drop below the frame
@@ -378,7 +378,7 @@ function startCompositor(kernel, canvas, device) {
   var SHADOW_BLUR = [0, 0, 0, 0.3];
   var GLASS_TINT = [0.75, 0.8, 0.86, 0.5]; // whitish Aero frame tint
 
-  // ---- glass render targets (todos/0063), created on first use and on
+  // ---- glass render targets (docs/archive/0063), created on first use and on
   // resize: the scene composites into sceneTex; the blur chain is three
   // bilinear downsamples + one upsample (scene -> 1/2 -> 1/4 -> 1/8 -> 1/4),
   // each a fullscreen blit — every resample is a 2x2 box filter, so glass
@@ -502,7 +502,7 @@ function startCompositor(kernel, canvas, device) {
   }
 
   // ---- label textures: title text, the close 'x' and Exposé captions
-  // rasterized by the kernel's ksvc text service (todos/0275 — OUR
+  // rasterized by the kernel's ksvc text service (docs/archive/0275 — OUR
   // FreeType/fontchain stack; the Canvas2D path is DELETED, not gated),
   // uploaded via writeTexture once per distinct string+width and reused
   // every frame. Straight-alpha bytes + the pipeline's src-alpha blend =
@@ -534,7 +534,7 @@ function startCompositor(kernel, canvas, device) {
     return c;
   }
 
-  // Where a minimizing window flies to (todos/0063): a slab at the bottom
+  // Where a minimizing window flies to (docs/archive/0063): a slab at the bottom
   // edge under the window's center — the taskbar strip, without needing to
   // know the WM's button layout. k in [0,1] walks start -> target.
   function animRect(a, k) {
@@ -544,13 +544,13 @@ function startCompositor(kernel, canvas, device) {
              w: a.w + (tw - a.w) * k, h: a.h + (th - a.h) * k };
   }
 
-  // Linear interpolate a rect (todos/EXPOSE enter/exit flies) — k in [0,1].
+  // Linear interpolate a rect (docs/EXPOSE enter/exit flies) — k in [0,1].
   function lerpRect(x0, y0, w0, h0, x1, y1, w1, h1, k) {
     return { x: x0 + (x1 - x0) * k, y: y0 + (y1 - y0) * k,
              w: w0 + (w1 - w0) * k, h: h0 + (h1 - h0) * k };
   }
 
-  // Overview / Exposé pass (todos/EXPOSE-MISSION-CONTROL.md): live seq-gated
+  // Overview / Exposé pass (docs/EXPOSE-MISSION-CONTROL.md): live seq-gated
   // miniatures at the WM's cell rects — each a drop shadow + rounded border
   // (the 0063 SDF chrome) under the surface's OWN texture quad (shmBindFor/
   // gpuBindFor unchanged, so gpu apps miniature LIVE, not black), a caption
@@ -589,13 +589,13 @@ function startCompositor(kernel, canvas, device) {
       pushQuad(s.bitmap ? gpuBindFor(s) : shmBindFor(s),
                rect.x, rect.y, rect.w, rect.h, WHITE);
       // Caption in the reserved strip under the SETTLED cell — same text +
-      // geometry as the headless composite's _blitLabel (todos/0275).
+      // geometry as the headless composite's _blitLabel (docs/archive/0275).
       var cap = labelFor(s.title || ('pid ' + s.pid), Math.max(8, c.w), 0xFFFFFFFF);
       pushQuad(cap.bind, c.x + (c.w - cap.w) / 2, c.y + c.h + 2, cap.w, cap.h, WHITE);
     }
   }
 
-  // Resize rubber band (todos/0019): Win95 outline semantics — 4-on/4-off
+  // Resize rubber band (docs/archive/0019): Win95 outline semantics — 4-on/4-off
   // hairline dashes (was setLineDash([4,4]) strokeRect), outer 1px ring.
   function dashOutline(x, y, w, h) {
     for (var dx = 0; dx < w; dx += 8) {
@@ -608,7 +608,7 @@ function startCompositor(kernel, canvas, device) {
     }
   }
 
-  // ---- on-demand compositing (todos/0169, IDLE-POWER pieces A+B; absorbs
+  // ---- on-demand compositing (docs/archive/0169, IDLE-POWER pieces A+B; absorbs
   // the reverted 0160 damage skip). The compositor used to run one full
   // WebGPU pass every rAF forever. Now each frame computes DIRTY = (scene
   // signature changed) OR (a minimize/restore fly anim is active); a clean
@@ -653,7 +653,7 @@ function startCompositor(kernel, canvas, device) {
 
   function sceneSignature(scene) {
     var sig = [scene.version, frameW, frameH, scene.anims.length];
-    // Overview (todos/EXPOSE): fold its identity + hover + live-miniature
+    // Overview (docs/EXPOSE): fold its identity + hover + live-miniature
     // pixels (INCLUDING minimized windows, which the normal loop skips but the
     // overview draws) and the active enter/exit fly count so the anim ticks.
     if (scene.overview) {
@@ -727,7 +727,7 @@ function startCompositor(kernel, canvas, device) {
     // Device lost (#551): stop the rAF chain AND the vsync clock (an honest
     // pause, like a hidden tab) until recoverDevice re-arms us.
     if (deviceLost) { armed = false; return; }
-    // Vsync broadcast (todos/0100): this rAF IS the system frame clock —
+    // Vsync broadcast (docs/archive/0100): this rAF IS the system frame clock —
     // tick before anything can early-return, so SDL frame loops stay paced
     // even on degenerate-canvas frames. Presents made while we render land
     // in the next wmScene sample, exactly one composite behind.
@@ -750,7 +750,7 @@ function startCompositor(kernel, canvas, device) {
     }
     lastSig = sig;
     grace = GRACE_FRAMES;
-    // Reconfigure on screen-resize (todos/0023) — the canonical dance;
+    // Reconfigure on screen-resize (docs/archive/0023) — the canonical dance;
     // resizing the offscreen canvas invalidates the swap chain size.
     if (frameW !== confW || frameH !== confH) {
       gctx.configure({ device: device, format: format, alphaMode: 'opaque' });
@@ -759,7 +759,7 @@ function startCompositor(kernel, canvas, device) {
     vfloats = 0; segments.length = 0; newSegment(false);
     var now = Date.now();   // anim clock — the epoch the kernel stamps t0 with
 
-    // Overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md): a full presentation
+    // Overview / Exposé (docs/EXPOSE-MISSION-CONTROL.md): a full presentation
     // takeover — the normal surface loop is replaced by the overview pass
     // (live seq-gated miniatures at the WM's cell rects). The exit fly runs on
     // the normal path (overview already cleared) as an overlay below.
@@ -767,7 +767,7 @@ function startCompositor(kernel, canvas, device) {
     else {
     for (var i = 0; i < scene.surfaces.length; i++) {
       var s = scene.surfaces[i];
-      // Minimize/restore animation (todos/0063): a transient kernel record;
+      // Minimize/restore animation (docs/archive/0063): a transient kernel record;
       // the content flies to/from the taskbar strip and fades — a 200ms
       // flourish drawn WITHOUT chrome, never hit-testable (the kernel's
       // minimized/hit-test state is already final). An anchored child
@@ -815,14 +815,14 @@ function startCompositor(kernel, canvas, device) {
         continue;
       }
       if (!s.mapped) continue;                 // awaiting the WM's placement
-                                               // (todos/0069)
+                                               // (docs/archive/0069)
       if (anim && anim.kind === 'restore') {   // fly back out of the bar
         var rr = animRect(anim, 1 - ak);
         pushQuad(s.bitmap ? gpuBindFor(s) : shmBindFor(s), rr.x, rr.y, rr.w, rr.h,
                  [1, 1, 1, ak]);
         continue;                              // chrome lands with the anim
       }
-      var dw = s.dstW, dh = s.dstH;            // on-screen viewport (todos/0024)
+      var dw = s.dstW, dh = s.dstH;            // on-screen viewport (docs/archive/0024)
       var focused = s.sid === scene.focusSid;
       // Chrome frame first (the resize border sits UNDER title+client),
       // then client pixels; the next window in z covers both — painter's
@@ -837,7 +837,7 @@ function startCompositor(kernel, canvas, device) {
           focused ? SHADOW_FOCUS : SHADOW_BLUR,
           { mode: 2, radius: CORNER_R, mx: fx, my: fy + SHADOW_DY, mw: fw, mh: fh });
         if (scene.glass) {
-          // Glass (todos/0063): blur everything composited so far (= what
+          // Glass (docs/archive/0063): blur everything composited so far (= what
           // is below this window), then draw the frame sampling it.
           var gt = ensureGlassTargets();
           newSegment(true);
@@ -854,7 +854,7 @@ function startCompositor(kernel, canvas, device) {
       pushQuad(whiteBind, s.x, s.y - K.WM_TITLE_H, dw, K.WM_TITLE_H,
         scene.glass ? (focused ? COL_FOCUS_GLASS : COL_BLUR_GLASS)
                     : (focused ? COL_FOCUS : COL_BLUR));
-      // Title-bar boxes, Win95 order [min][max][close] (todos/0030) — the
+      // Title-bar boxes, Win95 order [min][max][close] (docs/archive/0030) — the
       // same offsets as the kernel hit test and the headless composite;
       // flat-rect glyphs (bar / hollow box) + the rasterized 'x'.
       var bx = s.x + dw - K.WM_CLOSE_W - K.WM_CLOSE_PAD;
@@ -879,7 +879,7 @@ function startCompositor(kernel, canvas, device) {
         Math.max(8, dw - 3 * (K.WM_CLOSE_W + K.WM_BOX_GAP) - 16), 0xFFFFFFFF);
       pushQuad(tl.bind, s.x + 6, s.y - K.WM_TITLE_H / 2 - tl.h / 2, tl.w, tl.h, WHITE);
     }
-    // Resize rubber band (todos/0019): the drag only previews; the client
+    // Resize rubber band (docs/archive/0019): the drag only previews; the client
     // renegotiates once, at release.
     if (scene.resizeDrag) {
       for (var r = 0; r < scene.surfaces.length; r++) {
@@ -890,7 +890,7 @@ function startCompositor(kernel, canvas, device) {
         break;
       }
     }
-    // Overview EXIT fly (todos/EXPOSE): overview is already cleared (windows
+    // Overview EXIT fly (docs/EXPOSE): overview is already cleared (windows
     // drawn normally above), so overlay each reverse fly — the miniature
     // shrinking back out of its cell into the window — as a fading scaled quad.
     if (scene.overviewAnims && scene.overviewAnims.length &&
@@ -951,7 +951,7 @@ function startCompositor(kernel, canvas, device) {
       drawSegment(pass, segments[0]);
       pass.end();
     } else {
-      // Glass (todos/0063): composite into sceneTex segment by segment;
+      // Glass (docs/archive/0063): composite into sceneTex segment by segment;
       // before a blur segment's quads draw, run the downsample chain over
       // what's already there — its glass chrome then samples exactly the
       // content below that window. One final 1:1 blit presents the scene.
@@ -1008,17 +1008,17 @@ function routeInput(kernel, sdlWeb, ev) {
     if (b & 1) state |= 1;
     if (b & 2) state |= 4;
     if (b & 4) state |= 2;
-    // Pointer-locked moves (todos/0018) carry movementX/Y deltas instead of
+    // Pointer-locked moves (docs/archive/0018) carry movementX/Y deltas instead of
     // coordinates; the kernel's locked routing consumes opts.dx/dy.
     if (ev.locked) kernel.wmPointer('move', 0, 0, { buttons: state, dx: ev.dx, dy: ev.dy });
     else kernel.wmPointer('move', ev.x, ev.y, { buttons: state });
   } else if (ev.kind === 'lockchange') {
-    // The page's pointerlockchange report (todos/0018): flips the kernel
+    // The page's pointerlockchange report (docs/archive/0018): flips the kernel
     // between locked (relative to the focused surface) and normal routing.
     kernel.wmPointerLockChanged(!!ev.active);
   } else if (ev.kind === 'down' || ev.kind === 'up') {
     // ev.t (event timestamp) feeds the kernel's title double-click
-    // detection (todos/0025) — real inter-click gap, not worker latency.
+    // detection (docs/archive/0025) — real inter-click gap, not worker latency.
     kernel.wmPointer(ev.kind, ev.x, ev.y, { button: (ev.button | 0) + 1, t: ev.t });
   } else if (ev.kind === 'wheel') {
     // SDL wheel units are NOTCHES (±1 per detent), not pixels — consumers

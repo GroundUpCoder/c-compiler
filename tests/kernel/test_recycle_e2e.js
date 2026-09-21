@@ -19,7 +19,7 @@
 //   - the wm.c desktop: the bin icon is a real /root/Desktop launcher
 //     pinned to the grid's TAIL (row 7 on the seeded desktop), its glyph
 //     flips empty->full->empty with store contents (tile-center pixel),
-//     the icon menu grew DELETE + RENAME (120x116, todos/0103), the bin's own menu is
+//     the icon menu grew DELETE + RENAME (120x116, docs/archive/0103), the bin's own menu is
 //     OPEN/EMPTY RECYCLE BIN (120x56; EMPTY grays when empty and a
 //     grayed click leaves the menu open), the Del key trashes the
 //     selection, and double-clicking the bin opens fileman AT the store
@@ -28,7 +28,7 @@
 // are OPEN 4-24 / EDIT 24-44 (0202) / sep / CUT 52-72 / COPY 72-92 /
 // DELETE 92-112; bin menu OPEN 4-24 / sep / EMPTY 32-52.
 // Desktop (1024x768): the seeded set wraps past column 0 (11 rows/col since
-// todos/0184) and the bin sorts LAST (entcmp tail-pin, todos/0093) into
+// docs/archive/0184) and the bin sorts LAST (entcmp tail-pin, docs/archive/0093) into
 // column 1 — every bin/junk/kdel cell is DERIVED from the drive.js grid
 // model (deskEntries/deskCell over os/image.json, the 0166 rule), never row
 // math. Click offset +30/+32 in the cell; glyph pixels at +18 (center) /
@@ -45,7 +45,7 @@ const { parsePng } = require('../lib/png.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 
-// The seeded desktop grid (drive.js model, todos/0184/0185): the icon set
+// The seeded desktop grid (drive.js model, docs/archive/0184/0185): the icon set
 // wraps past column 0 at 1024x768 (11 rows/col) and the Recycle Bin tail-pin
 // now lands in column 1, so every bin/junk cell is derived, never row math.
 const BIN = deskCell(deskEntries(), 'Recycle Bin');

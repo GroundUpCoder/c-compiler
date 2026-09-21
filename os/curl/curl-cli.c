@@ -1,5 +1,5 @@
 /*
- * /bin/curl — small fetch CLI over the os/curl easy veneer (todos/0182).
+ * /bin/curl — small fetch CLI over the os/curl easy veneer (docs/archive/0182).
  *
  * NOT a port of real curl's CLI: just enough tool, in the curl idiom, for
  * the shell to fetch. Links the 0173 easy veneer unchanged; the same source

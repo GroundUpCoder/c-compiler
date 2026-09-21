@@ -1,6 +1,6 @@
 /* See LICENSE file for copyright and license details.
  *
- * gucOS port (todos/0119): suckless sent with the display layer patched
+ * gucOS port (docs/archive/0119): suckless sent with the display layer patched
  * from Xlib/Xft to SDL + freetype (drw.c reimplements the drw API over the
  * SDL window surface) and the fork+filter farbfeld image pipeline replaced
  * by native loaders (.png via libpng's simplified API, .ff read directly).

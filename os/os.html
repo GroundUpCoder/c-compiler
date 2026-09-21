@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- os.html — the reference OS page (todos/0004; design: todos/OS.md
+<!-- os.html — the reference OS page (docs/archive/0004; design: docs/OS.md
      "Reference build"). A UI bridge: xterm renders bytes, keystrokes go to
      the kernel worker, and every OS-side concern — fs, processes, wm policy,
      compositing — lives in kernel.js / host.js / os-common.js so it stays
@@ -10,17 +10,17 @@
      it is NOT Node-testable — tests/browser/os-*.mjs is its only gate. Keep
      it thin, and keep it covered there.
 
-     VTs (todos/0022, Linux-console semantics): the xterm tty is VT1, the
+     VTs (docs/archive/0022, Linux-console semantics): the xterm tty is VT1, the
      desktop VT2 — the page shows exactly one at a time, switched with the
      Terminal/Desktop TAB BAR at the top (the discoverable, primary
      affordance; Ctrl+Alt+F1/F2 and Ctrl+Alt+1/2 remain as aliases). Boot
      STREAMS on VT1 (the log stays visible), then a healthy boot lands on
-     VT2 — the desktop is the default tab (todos/0070); boot-error and
+     VT2 — the desktop is the default tab (docs/archive/0070); boot-error and
      halt force VT1, and a manual switch during boot wins. The point is
      availability under partial failure: VT1's
      path is kernel worker + xterm only — no compositor, no wm — so the
      shell stays usable while the desktop is broken or merely suspect.
-     (Boot itself requires WebGPU since todos/0055 — the boot-nogpu guard
+     (Boot itself requires WebGPU since docs/archive/0055 — the boot-nogpu guard
      below; a tty-only no-GPU boot was considered and rejected there.)
      Pure page-side state; the kernel keeps compositing while hidden
      (mailbox frames, bounded cost).
@@ -74,7 +74,7 @@
 
      Two surfaces own every touch themselves and narrow to `none`:
        #screen — the desktop canvas; the touch layer below it owns the
-                 gesture (todos/0212).
+                 gesture (docs/archive/0212).
        #osk AND ITS WHOLE SUBTREE — an on-screen keyboard wants no browser
                  gesture at all, in the keys OR the gaps between them. This
                  deliberately narrows the keep-pinch contract INSIDE the
@@ -112,7 +112,7 @@
      row (Esc/arrows) — hide it so a thumb on the down-arrow can't graze or
      text-select it while typing. It returns when the keyboard closes. */
   body[data-osk] #status { display: none; }
-  /* VT tabs (todos/0022): the primary, discoverable switch — one tab per
+  /* VT tabs (docs/archive/0022): the primary, discoverable switch — one tab per
      VT, browser-tab styling. Ctrl+Alt+F1/F2 (or 1/2) are quiet aliases. */
   /* One row, sideways scroll on overflow: a phone-width bar holds more
      controls than fit, so children never shrink or wrap and the bar pans.
@@ -155,7 +155,7 @@
      there is no #vtbar-scoped rule; it no longer carries a local copy.) */
   #uploadbtn { display: none; }
   body[data-touchui] #uploadbtn { display: inline-block; }
-  /* VT1 font-size steps (todos/0212): right-aligned in the tab bar, only
+  /* VT1 font-size steps (docs/archive/0212): right-aligned in the tab bar, only
      meaningful while the tty is visible. */
   #fontctl { display: flex; gap: 2px; }
   body[data-vt="2"] #fontctl { display: none; }
@@ -201,7 +201,7 @@
     padding: 5px 6px; user-select: none; -webkit-user-select: none;
     align-self: center; min-width: 20px; text-align: center;
   }
-  /* Mobile key strip (todos/0212): tty keys a soft keyboard lacks. Shown
+  /* Mobile key strip (docs/archive/0212): tty keys a soft keyboard lacks. Shown
      only on VT1 and only on a touch/narrow UI (data-touchui, set by JS). */
   #keystrip { display: none; gap: 4px; padding: 4px 8px 6px; flex-wrap: wrap; }
   body[data-vt="1"][data-touchui] #keystrip { display: flex; }
@@ -290,7 +290,7 @@
     .oskin  { --oskfs: clamp(17px, 5.2vw, 22px); }
     .oskkey { padding: clamp(14px, 4.4vw, 18px) 0; }
   }
-  /* The desktop (todos/WM.md): the kernel composites windows onto this
+  /* The desktop (docs/WM.md): the kernel composites windows onto this
      canvas in its worker; the page only forwards raw input. At zoom Z=1 the
      canvas is natural-size (backing store == pane == CSS size), so event
      offsets equal screen coordinates. At Z>1 (VT2 desktop zoom) the backing
@@ -307,22 +307,22 @@
      the resize transient while the worker's canvas commit lags the layout. */
   #desktop { flex: 1; min-height: 0; display: flex; justify-content: center;
              align-items: center; background: #06131a; overflow: hidden; }
-  /* Host-file drop target highlight (todos/0067): while a drag hovers the
+  /* Host-file drop target highlight (docs/archive/0067): while a drag hovers the
      desktop pane, an inset ring says "this lands in ~/Desktop". */
   #desktop.droptarget { box-shadow: inset 0 0 0 3px #5599dd; }
   /* The touch layer below owns every touch gesture on the desktop canvas —
-     no browser scroll/double-tap-zoom (todos/0212). Declared as
+     no browser scroll/double-tap-zoom (docs/archive/0212). Declared as
      `#wrap #screen` in the touch-gesture block at the top, not here: a bare
      `#screen` (1,0,0) only TIES `#wrap *` (1,0,0), so it would win by this
      block's position alone. See the specificity note there. */
   #screen { outline: none; display: block;
             image-rendering: pixelated; }
   #terminal { flex: 1; min-height: 0; padding: 4px; }
-  /* VTs: exactly one of tty/desktop is visible (todos/0022). */
+  /* VTs: exactly one of tty/desktop is visible (docs/archive/0022). */
   body[data-vt="1"] #desktop { display: none; }
   body[data-vt="2"] #terminal { display: none; }
-  /* Boot guard screen — two-tab lock (todos/0045: retry re-attempts) and
-     the WebGPU requirement (todos/0055: no retry — the compositor IS
+  /* Boot guard screen — two-tab lock (docs/archive/0045: retry re-attempts) and
+     the WebGPU requirement (docs/archive/0055: no retry — the compositor IS
      WebGPU, no fallback) — shown INSTEAD of the VT panes. */
   #guard { flex: 1; display: none; flex-direction: column; gap: 14px;
            align-items: center; justify-content: center; text-align: center;
@@ -342,7 +342,7 @@
 <div id="wrap">
   <div id="vtbar">
     <span id="vt1tab" class="vttab active" title="the tty, VT1 (Ctrl+Alt+F1)">Terminal</span>
-    <span id="vt2tab" class="vttab" title="the desktop, VT2 (Ctrl+Alt+F2). Ctrl+Alt+Tab cycles windows, +Shift for previous (todos/0032); Ctrl+Esc opens the Start menu (todos/0078); Ctrl+Alt+E shows all windows (Exposé — the Task-View button right of Start does the same)">Desktop</span>
+    <span id="vt2tab" class="vttab" title="the desktop, VT2 (Ctrl+Alt+F2). Ctrl+Alt+Tab cycles windows, +Shift for previous (docs/archive/0032); Ctrl+Esc opens the Start menu (docs/archive/0078); Ctrl+Alt+E shows all windows (Exposé — the Task-View button right of Start does the same)">Desktop</span>
     <span id="oskbtn" class="fontbtn" title="on-screen keyboard">&#9000;</span>
     <span id="fontctl" title="terminal font size">
       <span id="fontminus" class="fontbtn">A&minus;</span><span id="fontplus" class="fontbtn">A+</span>
@@ -368,7 +368,7 @@
 </div>
 <script src="../vendor/xterm/xterm.js"></script>
 <script src="../vendor/xterm/xterm-addon-fit.js"></script>
-<!-- host.js on the page ONLY for createAudioReceiver (todos/0017): the
+<!-- host.js on the page ONLY for createAudioReceiver (docs/archive/0017): the
      mixer's output ring plays through the same Web Audio path standalone
      pages use. The page stays a dumb bridge — no other host.js use here. -->
 <script src="../host.js"></script>
@@ -389,7 +389,7 @@ if (typeof SharedArrayBuffer === 'undefined') {
 }
 
 // The phone-shaped-viewport predicate: the auto-default signal behind the
-// VT1 font bump (todos/0212) and the OSK's open-by-default — those two call
+// VT1 font bump (docs/archive/0212) and the OSK's open-by-default — those two call
 // sites and no others. It no longer drives any VT2 zoom default: #69 D6 was
 // revised to boot EVERY viewport at 1× (see vt2Zoom below).
 // It is a DIFFERENT predicate from touchUiSync's touch-or-narrow test, not a
@@ -402,7 +402,7 @@ function mobileViewport() {
   return Math.min(window.innerWidth, window.innerHeight) <= 700;
 }
 
-// VT1 font-size steps (todos/0212): an explicit choice persists in
+// VT1 font-size steps (docs/archive/0212): an explicit choice persists in
 // localStorage; with nothing stored, a narrow (phone-shaped) viewport
 // defaults to 26px against the desktop's 14 — THREE steps up VT1_FONTS, not
 // one (0212 shipped a one-step 18px mobile default; #69 D6 raised it).
@@ -473,13 +473,13 @@ var kernel = new Worker('kernel-worker.js?hostkeys=' + encodeURIComponent(hostKe
                         (spawnTrace ? '&spawntrace=1' : '') + poolParams);
 
 // ALL tty input funnels through vt1Input so the key strip's sticky Ctrl
-// (todos/0212, below) composes with the soft keyboard too.
+// (docs/archive/0212, below) composes with the soft keyboard too.
 term.onData(function (data) { vt1Input(data); });
 term.onResize(function (sz) { kernel.postMessage({ type: 'resize', cols: sz.cols, rows: sz.rows }); });
 window.addEventListener('resize', function () {
-  touchUiSync();               // narrow-viewport key strip (todos/0212)
+  touchUiSync();               // narrow-viewport key strip (docs/archive/0212)
   if (vt === 1) fitAddon.fit();
-  else scheduleScreenSync();   // dynamic screen resolution (todos/0023)
+  else scheduleScreenSync();   // dynamic screen resolution (docs/archive/0023)
 });
 window.addEventListener('orientationchange', function () {
   // The pane gets its post-rotation size a beat after the event.
@@ -490,7 +490,7 @@ window.addEventListener('orientationchange', function () {
   }, 120);
 });
 
-// VT1 mobile affordances (todos/0212): the tab bar's A−/A+ steps
+// VT1 mobile affordances (docs/archive/0212): the tab bar's A−/A+ steps
 // term.options.fontSize through VT1_FONTS (live refit; the choice
 // persists), and #keystrip offers the keys a soft keyboard lacks. Ctrl is
 // a STICKY modifier: it transforms the next single-char input — whether
@@ -621,7 +621,7 @@ function touchUiSync() {
 }
 touchUiSync();
 
-// The desktop (todos/WM.md): hand the canvas to the kernel worker (the
+// The desktop (docs/WM.md): hand the canvas to the kernel worker (the
 // compositor runs THERE — this page stays a dumb bridge) and forward raw
 // input. DOM events don't structured-clone, so ship plain objects; the
 // kernel side re-shapes them for SDL_WEB's mappers.
@@ -640,7 +640,7 @@ function wmSend(ev) { kernel.postMessage({ type: 'wm-input', ev: ev }); }
 // more fits on a small screen); a downscale is inherently filtered, so
 // fractional steps are fine there and the render-mode flips to smooth
 // (vt2ApplyRenderMode below). The render/wm path is UNTOUCHED (still
-// 1 logical px = 1 backing px, todos/0023's ruling holds) — the ONLY thing
+// 1 logical px = 1 backing px, docs/archive/0023's ruling holds) — the ONLY thing
 // zoom taints is the page's pointer seam, confined to mapX/mapY (absolute
 // coords) and the /vt2Eff delta divides below.
 // Defaulting (#69 D6, revised): an explicit choice (the ± control or the
@@ -816,7 +816,7 @@ document.getElementById('desksite').addEventListener('click', function () {
 });
 window.__osVt2SetZoom = vt2SetZoom;   // agent probe (tests drive zoom without a click)
 
-// Dynamic screen resolution (todos/0023): on VT2 the screen tracks the
+// Dynamic screen resolution (docs/archive/0023): on VT2 the screen tracks the
 // #desktop pane (1 CSS px = 1 screen px at Z=1; DPR deliberately ignored).
 // A transferred canvas can't be resized from the page, so the LOGICAL pane
 // size (floor(pane/Z)) rides {type:'screen-resize'} and the WORKER resizes
@@ -859,7 +859,7 @@ function mods(e) {
     .forEach(function (k) { out[k] = e.getModifierState ? e.getModifierState(k) : false; });
   return out;
 }
-// Pointer lock (todos/0018): the kernel sends {type:'pointer-lock', wanted}
+// Pointer lock (docs/archive/0018): the kernel sends {type:'pointer-lock', wanted}
 // when the focused surface wants relative mouse, and RE-SENDS wanted=true
 // when a client-area click lands on it (the kernel hit-tests; the page can't)
 // — that click is the user gesture the Pointer Lock API needs, so the
@@ -869,7 +869,7 @@ function mods(e) {
 // kernel flips between relative and absolute routing.
 var ptrLockWanted = false;
 function ptrLocked() { return document.pointerLockElement === screen; }
-// Cursor shapes (todos/0105): the kernel derives the effective cursor per
+// Cursor shapes (docs/archive/0105): the kernel derives the effective cursor per
 // pointer move (chrome resize cursors overlaid on the hovered surface's own
 // SDL_SetCursor shape) and posts {type:'cursor', shape}; we map it to a CSS
 // `cursor` name on the desktop canvas. Index is the SDL_SystemCursor wire
@@ -877,7 +877,7 @@ function ptrLocked() { return document.pointerLockElement === screen; }
 // NB local name CURSOR_CSS_MAP, not CURSOR_CSS: host.js is loaded as a
 // classic <script> above, so its top-level `const CURSOR_CSS` leaks into this
 // page's global scope — a bare `var CURSOR_CSS` here would be a redeclaration
-// SyntaxError that kills this whole inline block. See todos/0125.
+// SyntaxError that kills this whole inline block. See docs/archive/0125.
 var CURSOR_CSS_MAP = [
   'default', 'text', 'wait', 'crosshair', 'progress',
   'nwse-resize', 'nesw-resize', 'ew-resize', 'ns-resize', 'move',
@@ -896,7 +896,7 @@ document.addEventListener('pointerlockchange', function () {
 screen.addEventListener('mousedown', function (e) {
   screen.focus();
   // t: the event timestamp — the kernel's title double-click detection
-  // (todos/0025) measures the real inter-click gap, not worker latency.
+  // (docs/archive/0025) measures the real inter-click gap, not worker latency.
   wmSend({ kind: 'down', x: mapX(e.offsetX), y: mapY(e.offsetY), button: e.button, t: e.timeStamp });
   e.preventDefault();
 });
@@ -987,7 +987,7 @@ screen.addEventListener('contextmenu', function (e) { e.preventDefault(); });
   window.addEventListener('gamepaddisconnected', padArm);
 })();
 
-// Touch input (todos/0212): synthesize the SAME wm-input records the mouse
+// Touch input (docs/archive/0212): synthesize the SAME wm-input records the mouse
 // handlers above send, so the kernel/WM never learns touch exists. Page-side
 // ONLY, and additive — touch events don't fire for a mouse, and preventDefault
 // on touchstart suppresses the browser's compatibility mouse events, so the
@@ -1108,7 +1108,7 @@ function touchEnd(e) {
 screen.addEventListener('touchend', touchEnd, { passive: false });
 screen.addEventListener('touchcancel', touchEnd, { passive: false });
 
-// Host paste-chord carve-out (todos/0398 D6): preventDefault on the paste
+// Host paste-chord carve-out (docs/archive/0398 D6): preventDefault on the paste
 // chord cancels the browser paste COMMAND, so a `paste` event could never
 // fire on VT2 — carve exactly that chord (⌘V on the mac scheme, ^V
 // otherwise) out of the swallow: let it default, HOLD its key events, and
@@ -1160,7 +1160,7 @@ screen.addEventListener('keyup', function (e) {
   e.preventDefault();
 });
 
-// The paste event itself (todos/0398 D6) — the ONLY web carrier of host
+// The paste event itself (docs/archive/0398 D6) — the ONLY web carrier of host
 // file BYTES into a page (readText only ever sees the text flavor). A
 // folder can NOT arrive here (the platform exposes no entries to
 // clipboardData.files for a Finder folder copy — stated, not silent):
@@ -1206,7 +1206,7 @@ document.addEventListener('paste', function (e) {
   }, function () { pasteArmFlush(); });
 });
 
-// Host-file ingest (todos/0067): files from the host land in /root/Desktop,
+// Host-file ingest (docs/archive/0067): files from the host land in /root/Desktop,
 // where the wm's icon grid picks them up within ~1s (no reboot). ONE loop
 // serves both entry points — desktop drag-drop below and the mobile Upload
 // button — so there is exactly one FS path. The page stays a dumb bridge:
@@ -1223,7 +1223,7 @@ function postHostFiles(files) {
   });
 }
 
-// Directory drops (todos/0398): the drop path is the ONE place the web
+// Directory drops (docs/archive/0398): the drop path is the ONE place the web
 // platform exposes a directory TREE (webkitGetAsEntry) — walk it and post
 // each file through the same drop-file loop with its tree-relative path;
 // the worker uniquifies the dropped ROOT once per episode so a folder
@@ -1326,7 +1326,7 @@ uploadInput.addEventListener('change', function () {
 // clipboard — the "last copy wins" model, with the host copy presumed the
 // fresher intent on arrival).
 var clipSynced = null;
-// clipShadow (todos/0398 D6): the text flavor recorded at a host FILE
+// clipShadow (docs/archive/0398 D6): the text flavor recorded at a host FILE
 // paste — Finder places the pasted file's NAME there, and the focused
 // app's immediately-following CLIP_GET refresh would read it and clobber
 // the staged fmt-2 file list. One more dedup memo beside clipSynced.
@@ -1374,7 +1374,7 @@ window.addEventListener('focus', clipFromHost);
 if (document.hasFocus()) clipFromHost();   // the boot-time import
 window.__osClipSync = clipFromHost;   // agent probe (tests/browser/os-clipboard.mjs)
 
-// VTs (todos/0022): Linux-console semantics — VT1 = the xterm tty, VT2 = the
+// VTs (docs/archive/0022): Linux-console semantics — VT1 = the xterm tty, VT2 = the
 // desktop; the page shows exactly one (body[data-vt] CSS above). The PRIMARY
 // switch is the Terminal/Desktop tab bar (discoverable; hotkeys are OS-
 // contested); Ctrl+Alt+F1/F2 and Ctrl+Alt+1/2 remain as aliases. Page-side
@@ -1385,7 +1385,7 @@ window.__osClipSync = clipFromHost;   // agent probe (tests/browser/os-clipboard
 // per 0018 on the next client click.
 var vt = 1;
 window.__osVt = 1;   // agent probe
-// Desktop-by-default (todos/0070): a healthy boot auto-switches to VT2 at
+// Desktop-by-default (docs/archive/0070): a healthy boot auto-switches to VT2 at
 // 'ready' — but only if the user hasn't already picked a VT themselves
 // (tab click, hotkey, or the __osVtSwitch probe) while the boot streamed.
 var vtTouched = false;
@@ -1411,7 +1411,7 @@ function setVt(n) {
   document.getElementById('vt1tab').className = 'vttab' + (n === 1 ? ' active' : '');
   document.getElementById('vt2tab').className = 'vttab' + (n === 2 ? ' active' : '');
   // Re-fit AFTER unhiding — xterm can't measure a display:none pane; same
-  // for the desktop pane (todos/0023: the screen syncs to it on VT2 entry).
+  // for the desktop pane (docs/archive/0023: the screen syncs to it on VT2 entry).
   if (n === 1) { fitAddon.fit(); term.focus(); }
   else { syncScreenSize(); screen.focus(); }
   // The OSK's mode-dependent keys (the tty-only Copy/Paste legends) re-draw
@@ -1526,7 +1526,7 @@ window.__osState = 'booting';
 window.__osLogs = [];   // boot-log/kernel lines (agent probe)
 window.__osCompositor = null;   // agent probe: latest on-demand-compositor stats
 // Request a fresh compositor-stats snapshot from the worker and resolve
-// with it (todos/0169: frames/submits/skipped/parks/wakes/vsyncNotifies).
+// with it (docs/archive/0169: frames/submits/skipped/parks/wakes/vsyncNotifies).
 // tests/browser/os-compositor.mjs measures park + wake behavior with it.
 window.__osCompositorStats = function () {
   return new Promise(function (resolve) {
@@ -1565,7 +1565,7 @@ kernel.onmessage = function (e) {
       term.write(m.bytes);
       window.__osOut += outDecoder.decode(m.bytes, { stream: true });
       break;
-    // On-demand-compositor probe replies (todos/0169) are consumed by the
+    // On-demand-compositor probe replies (docs/archive/0169) are consumed by the
     // one-shot listeners __osCompositorStats adds; nothing to do here.
     case 'compositor-stats':
       break;
@@ -1613,7 +1613,7 @@ kernel.onmessage = function (e) {
       clipFromHost(clipDone);
       break;
     }
-    // Egress (todos/0398): the kernel materialized ONE artifact (a file's
+    // Egress (docs/archive/0398): the kernel materialized ONE artifact (a file's
     // bytes, or one zip for a directory/multi-selection) for a Download /
     // Save-As the user clicked moments ago — that click's transient
     // activation is still live (the clip-read principle, no parking needed:
@@ -1666,10 +1666,10 @@ kernel.onmessage = function (e) {
       status('boot failed', true);
       window.__osState = 'error';
       window.__osBootErr = m.msg;   // agent probe: the full failure text
-      setVt(1);   // the escape hatch surfaces the failure (todos/0022)
+      setVt(1);   // the escape hatch surfaces the failure (docs/archive/0022)
       term.write('\r\n\x1b[31mboot failed:\x1b[0m\r\n' + m.msg.replace(/\n/g, '\r\n') + '\r\n');
       break;
-    // Two-tab boot guard (todos/0045): the kernel worker takes a Web Lock on
+    // Two-tab boot guard (docs/archive/0045): the kernel worker takes a Web Lock on
     // the image pair BEFORE mounting OPFS; a losing tab lands here with
     // nothing mounted. Retry (below) re-attempts — the lock frees when the
     // winning tab closes. No steal in v1.
@@ -1679,7 +1679,7 @@ kernel.onmessage = function (e) {
       document.getElementById('guardRetry').style.display = '';
       document.body.setAttribute('data-guard', '1');
       break;
-    // WebGPU boot guard (todos/0055): the kernel worker found no adapter/
+    // WebGPU boot guard (docs/archive/0055): the kernel worker found no adapter/
     // device — the compositor is WebGPU with NO fallback (decision log
     // logs/2026-07-09/webgpu-mvu-direction.md), so the boot stops loudly
     // before mounting anything. No retry: a reload won't grow a GPU.
@@ -1697,7 +1697,7 @@ kernel.onmessage = function (e) {
       status('running (image: ' + m.mode + ') — files persist in OPFS');
       window.__osState = 'ready';
       kernel.postMessage({ type: 'resize', cols: term.cols, rows: term.rows });
-      // Desktop as the default tab (todos/0070): the boot log streamed on
+      // Desktop as the default tab (docs/archive/0070): the boot log streamed on
       // VT1; a HEALTHY boot now lands on the desktop. boot-error/halt never
       // race this ('ready' fires exactly once, on success), and a manual
       // switch during boot wins — the tty stays one click away either way.
@@ -1709,11 +1709,11 @@ kernel.onmessage = function (e) {
       var code = sig ? 128 + sig : (m.status >> 8) & 0xff;
       status('halted (exit ' + code + ') — reload to reboot', true);
       window.__osState = 'halted:' + code;
-      setVt(1);   // the halt notice lives on the tty (todos/0022)
+      setVt(1);   // the halt notice lives on the tty (docs/archive/0022)
       term.write('\r\n\x1b[33m[system halted — reload the page to reboot]\x1b[0m\r\n');
       break;
     }
-    // Relative mouse (todos/0018): the kernel's wanted state / lock re-offer
+    // Relative mouse (docs/archive/0018): the kernel's wanted state / lock re-offer
     // (see the pointer-lock comment above the mousedown handler).
     case 'pointer-lock':
       ptrLockWanted = !!m.wanted;
@@ -1730,7 +1730,7 @@ kernel.onmessage = function (e) {
         } catch (err) { /* no gesture yet */ }
       }
       break;
-    // Cursor shape (todos/0105): apply the kernel's effective cursor to the
+    // Cursor shape (docs/archive/0105): apply the kernel's effective cursor to the
     // desktop canvas. Ignore while pointer-locked (no cursor exists then).
     case 'cursor':
       if (!ptrLocked()) applyCursor(m.shape | 0);
@@ -1748,7 +1748,7 @@ kernel.onmessage = function (e) {
     case 'net-config':
       netBridgeProbe(m.on, m.url);
       break;
-    // The audio mixer's output ring (todos/0017): play it with host.js's
+    // The audio mixer's output ring (docs/archive/0017): play it with host.js's
     // createAudioReceiver — one synthetic device, resumed on the first user
     // gesture (browser autoplay policy gates AudioContext until then).
     case 'audio': {
@@ -1771,7 +1771,7 @@ kernel.onerror = function (e) {
   status('kernel worker error: ' + e.message, true);
 };
 
-// Two-tab boot guard retry (todos/0045): hide the guard optimistically; if
+// Two-tab boot guard retry (docs/archive/0045): hide the guard optimistically; if
 // the lock is still held the worker answers with another boot-locked and it
 // comes right back. The worker ignores retries while a boot is in flight.
 document.getElementById('guardRetry').addEventListener('click', function () {

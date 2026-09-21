@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// The browser OS sweep as ONE command (todos/0081): runs every os-*.mjs
+// The browser OS sweep as ONE command (docs/archive/0081): runs every os-*.mjs
 // acceptance file in this directory — real Chromium, real serve.js, full OS
 // boot each, exactly as when run by hand — SERIALLY (deliberate: the 0045
 // one-kernel-per-origin boot lock plus CPU contention make concurrent
-// Chromium+OS boots flaky by construction; see todos/0081).
+// Chromium+OS boots flaky by construction; see docs/archive/0081).
 //
 //   node os-sweep.mjs                # the full sweep, alphabetical
 //   node os-sweep.mjs --filter=shell # just os-shell.mjs
@@ -30,7 +30,7 @@ import { siblingIndexGap, buildPackageRepo } from './lib/os-harness.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Cross-tree preflight (todos/0341) — ahead of acquireHeavyLock() so a launch
+// Cross-tree preflight (docs/archive/0341) — ahead of acquireHeavyLock() so a launch
 // we are about to refuse never takes the machine-wide lock first. THIS runner
 // is the one the incident came from: os-hires.mjs resolves its PNG output dir
 // from its own location, so the main-tree copy of this sweep writes into main

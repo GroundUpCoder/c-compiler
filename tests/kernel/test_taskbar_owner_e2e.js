@@ -92,7 +92,7 @@ for (let i = 0; i < CYCLES; i++) {
 
 const r = driveBoot([
   '/root/tbown &',
-  // Boot barrier (todos/0154): the LAST window created resolving in the
+  // Boot barrier (docs/archive/0154): the LAST window created resolving in the
   // window list means all four are up and the app is pumping messages.
   'wmctl wait win tb-appwin 20000',
   'echo ==l1',

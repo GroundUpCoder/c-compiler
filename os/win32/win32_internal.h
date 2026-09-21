@@ -1,5 +1,5 @@
 /* win32_internal.h — the private seam between gdi32.c and user32.c
- * (todos/0058). Not on the app include path; both sources include it by
+ * (docs/archive/0058). Not on the app include path; both sources include it by
  * relative name.
  *
  * gdi32 owns DCs and drawing; user32 owns HWNDs and presenting. A "screen"
@@ -48,7 +48,7 @@ int __gdi_font_families(const char *const **names);
 int __gdi_obj_is_font(HGDIOBJ obj);
 
 /* ---- AQM: the agent seam at the user32 <-> any-control boundary
- * (todos/0370). Real common controls hold ITEMS internally, not as child
+ * (docs/archive/0370). Real common controls hold ITEMS internally, not as child
  * HWNDs — which would break the platform pillar that every widget is
  * addressable through the queryable tree (`wmctl click "OK"`, TOOLKIT.md).
  * These two veneer-internal messages let ANY item-bearing control expose
@@ -90,7 +90,7 @@ typedef struct {
  * InitCommonControls / InitCommonControlsEx(ICC_LISTVIEW_CLASSES). */
 void __comctl_register_listview(void);
 
-/* ---- fail-loud (todos/0211) ----------------------------------------
+/* ---- fail-loud (docs/archive/0211) ----------------------------------------
  * The veneer never silently no-ops: an unimplemented API, window message,
  * or style flag reports ONCE per call site to stderr as
  *     win32: unsupported <what>
@@ -104,7 +104,7 @@ void __win32_unsupported(const char *fmt, ...);
         if (!__w32_once) { __w32_once = 1; __win32_unsupported(__VA_ARGS__); } \
     } while (0)
 
-/* ---- UTF-8 stepping (todos/0211) -----------------------------------
+/* ---- UTF-8 stepping (docs/archive/0211) -----------------------------------
  * The veneer's ANSI charset is UTF-8 (kernel32's CP_UTF8 boundary); text
  * draw/measure/edit steps by CODE POINT while all indices stay BYTES.
  * Malformed bytes decode as U+FFFD advancing past the bad lead byte only,

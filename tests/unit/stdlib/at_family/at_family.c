@@ -1,4 +1,4 @@
-// todos/0325 Group B + todos/0382 gaps 7-8 — the *at() family.
+// docs/archive/0325 Group B + docs/archive/0382 gaps 7-8 — the *at() family.
 // BEHAVIOUR: each call must really act on the file, and the dirfd rules must
 // be POSIX-correct, INCLUDING the error cases.
 //
@@ -10,7 +10,7 @@
 // ENOTDIR for a live non-directory one. Those are asserted below rather
 // than left untested, because "returns the right errno" is the whole
 // difference between a real limit and a silent wrong answer.
-// Directory fds are todos/0400; when they land, only __at_ok changes.
+// Directory fds are docs/archive/0400; when they land, only __at_ok changes.
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>

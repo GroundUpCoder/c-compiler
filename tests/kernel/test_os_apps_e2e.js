@@ -116,7 +116,7 @@ function sessionApps() {
     gbRow !== '', JSON.stringify(list1));
   check('gameboy window is 480x432 (160x144 tripled)', gbRow.includes('480x432'), gbRow);
 
-  // Quake (todos/0018; a gucman package since the deploy-leg split — the
+  // Quake (docs/archive/0018; a gucman package since the deploy-leg split — the
   // fat fixture folds it to /usr/opt/quake, /usr/bin/quake is the launcher
   // script): the 18MB pak rides the package, the game boots into its demo
   // loop, and its VID_Init relative-mouse request shows as the 'r' flag.
@@ -129,7 +129,7 @@ function sessionApps() {
   check('quake requested relative mouse (r flag in wmctl list)',
     (qRow.split('\t')[5] || '').includes('r'), qRow);   // FLAGS col (after DST, 0024)
   check('wmctl relmove injects over the socket', out.includes('relmove-ok'));
-  check('wmctl resize on fixed-res doom is refused (todos/0021)',
+  check('wmctl resize on fixed-res doom is refused (docs/archive/0021)',
     out.includes('resize-refused'));
   check('doom is not resizable (no R flag in wmctl list)',
     !(doomRow.split('\t')[5] || '').includes('R'), doomRow);   // FLAGS col (after DST, 0024)
@@ -176,7 +176,7 @@ function sessionFrames() {
       check('gameboy frame has the LCD palette (>=2 colors, not a fill)',
         gn >= 2, gn + ' distinct colors');
       const qShot = parseShot(b.stdout, gbShot.next);
-      check('quake shot parses as PNG at full client size 320x200 (todos/0018)',
+      check('quake shot parses as PNG at full client size 320x200 (docs/archive/0018)',
         qShot !== null && qShot.w === 320 && qShot.h === 200,
         qShot && `${qShot.w}x${qShot.h}`);
       if (qShot) {

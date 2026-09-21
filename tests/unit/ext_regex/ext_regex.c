@@ -1,4 +1,4 @@
-/* POSIX regex via the optional libc-ext.js (vendored TRE). Exercises compile,
+/* POSIX regex via the vendored TRE engine built into compiler.js. Exercises compile,
    capture groups, POSIX character classes, REG_NOMATCH, and regerror text. */
 #include <stdio.h>
 #include <regex.h>

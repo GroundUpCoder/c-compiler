@@ -2,7 +2,7 @@
 // compiled to +0 — `memcpy(d, s, n) + n` returned d, so busybox's
 // mempcpy-based o_addblock wrote its NUL over the first copied byte and
 // hush corrupted every expanded word. Found porting busybox hush
-// (todos/0005).
+// (docs/archive/0005).
 // C11: 6.5.6 additive operators (constraint: complete object type) + the
 // gcc/clang extension treating void as size 1 for pointer arithmetic.
 // EXPECT: matches gcc/clang: void* +/- n moves by n bytes; void* difference

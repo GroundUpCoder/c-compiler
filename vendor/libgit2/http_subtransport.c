@@ -5,7 +5,7 @@
  * factory is git_smart_subtransport_http — the function this file provides.
  * The smart protocol machinery (smart.c / smart_pkt.c / smart_protocol.c) is
  * compiled in and does all the talking; this file only moves its bytes over
- * the kernel's Tier 2 HTTP transport (todos/0172, fd-shaped todos/0417):
+ * the kernel's Tier 2 HTTP transport (docs/archive/0172, fd-shaped docs/archive/0417):
  *
  *   __http_open -> an ordinary fd. __wait on it, consume the status with
  *   __http_status, then read(2) until 0 (EOF) / EAGAIN (WAIT again),
@@ -50,7 +50,7 @@
 #include "git2/sys/transport.h"
 #include "git2/sys/errors.h"
 
-/* The kernel HTTP primitive + unified wait (todos/0172/0417/0178), surfaced
+/* The kernel HTTP primitive + unified wait (docs/archive/0172/0417/0178), surfaced
    by host.js as env imports — declared here like any other consumer. */
 __import int __http_open(const char *method, const char *url, const char *headers,
                          const void *body, int blen, int headers_ms, int idle_ms);

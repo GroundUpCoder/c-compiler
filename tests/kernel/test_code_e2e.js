@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// /bin/gcode e2e (todos/0174): the agentic coding assistant IN the booted OS
+// /bin/gcode e2e (docs/archive/0174): the agentic coding assistant IN the booted OS
 // against a scripted fake Anthropic SSE server (tests/kernel/lib/
 // fake_anthropic.js — the standalone twin of os/gcode/test/smoke.mjs's
 // server; the native smoke stays the reference oracle). Deterministic, no

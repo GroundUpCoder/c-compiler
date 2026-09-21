@@ -1,5 +1,5 @@
 /* vfork_spawn.c — the vfork-on-__spawn shim (design: wasm_port.h and
- * vendor/busybox/README.md; decision trail: todos/OS.md "__spawn is the
+ * vendor/busybox/README.md; decision trail: docs/OS.md "__spawn is the
  * native primitive").
  *
  * The "child" is the parent process in journaling mode: fd ops and pgroup
@@ -210,7 +210,7 @@ int pv_execve(const char *path, char *const argv[], char *const envp[])
          * exec on this platform, so emulate the observable behavior —
          * spawn the image with an EMPTY journal (fds/cwd/pgroup inherit)
          * and become a shell around it: wait, then exit with its status.
-         * The lingering parent is invisible to scripts (todos/0035). */
+         * The lingering parent is invisible to scripts (docs/archive/0035). */
         int status = 0;
         spec.actions = 0;
         spec.n_actions = 0;

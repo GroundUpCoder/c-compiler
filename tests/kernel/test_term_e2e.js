@@ -3,7 +3,7 @@
 // kernel pty + freetype, seeded from os/term/bin.json) runs hush on a pty
 // inside a WM window, driven through os/boot.js:
 //   - `term &` opens a 640x486 window (80x24 at the mono font's 8x19 cell
-//     + the 30px menu bar strip on top, todos/0273c — the grid renders at
+//     + the 30px menu bar strip on top, docs/archive/0273c — the grid renders at
 //     y offset 30, so every row-anchored pixel probe below adds GRID_Y)
 //   - injected SDL keys become pty bytes: `ls /bin` renders MORE text
 //     (screenshot pixel deltas prove the echo + output path)
@@ -241,7 +241,7 @@ function sessionNested() {
     JSON.stringify(sec('nest4')));
 }
 
-/* ---- session D: less inside the terminal (todos/0035) ----
+/* ---- session D: less inside the terminal (docs/archive/0035) ----
  * The pager is pure tty work over the same pty the vi leg proved: alt
  * screen in, space to page, q back to the shell. Assertions: the shell
  * regains the keyboard after q (the rc-file echo executes), rc is 0, and
@@ -523,7 +523,7 @@ function sessionWide() {
     cellInk(p2, 1) === 0, String(cellInk(p2, 1)));
 }
 
-/* ---- session S: scrollback history ring (todos/0273a) ----
+/* ---- session S: scrollback history ring (docs/archive/0273a) ----
  * Lines that scroll off the top of the viewport are kept in a history ring;
  * the user scrolls UP into them with the mouse-wheel and PageUp/PageDown,
  * and new output or a keypress snaps back to the live bottom. The probe: a
@@ -552,7 +552,7 @@ function sessionScrollback() {
     ...Array(20).fill('wmctl key $TSID 0 ' + PGDN),
     'sleep 1',                                     // timing subject: repaint back to live (multi-frame)
     'wmctl shot $TSID /root/sb_pgdn.png && echo sb-pgdn-ok',
-    // Mouse-wheel up to the marker (the other scroll input, todos/0210).
+    // Mouse-wheel up to the marker (the other scroll input, docs/archive/0210).
     'wmctl wheel $TSID 100',
     'sleep 1',                                     // timing subject: wheel-scrolled repaint (multi-frame)
     'wmctl shot $TSID /root/sb_wheel.png && echo sb-wheel-ok',
@@ -941,7 +941,7 @@ function sessionSelScroll() {
     grab(out2, 'risclip') === 'RIS-SENT', JSON.stringify(grab(out2, 'risclip')));
 }
 
-/* ---- session R: side scrollbar (todos/0273b) ----
+/* ---- session R: side scrollbar (docs/archive/0273b) ----
  * The 8px overlay bar at the right edge is a pure view + controller over
  * the (a) ring: hidden with no history, track (dim, 25% blend) + thumb
  * (bright, 75% blend -> channel ~150 over the black bg) once output has
@@ -1042,7 +1042,7 @@ function sessionScrollbar() {
     row0Ink(shots.bar3.p) < 500, String(row0Ink(shots.bar3.p)));
 }
 
-/* ---- session M: menu bar (todos/0273c) ----
+/* ---- session M: menu bar (docs/archive/0273c) ----
  * The bar is a "menubar" strip child (the 0256 kernel anchored-child
  * primitive); dropdowns are menucore-ENGINE levels — real POPUP_MENU
  * anchored children titled "#32768" (the Win32 menu window class) holding
@@ -1163,7 +1163,7 @@ function sessionMenubar() {
     row0Ink(pt) > 1000, String(row0Ink(pt)));
 }
 
-/* ---- session P: settings window + cfgstore persistence (todos/0273d) ----
+/* ---- session P: settings window + cfgstore persistence (docs/archive/0273d) ----
  * Shell > Settings... (fired by the engine's modal keyboard — Down Down
  * Enter, metrics-independent) opens the hand-drawn "Term Settings" pane;
  * each button click applies LIVE and delta-writes ONE key to

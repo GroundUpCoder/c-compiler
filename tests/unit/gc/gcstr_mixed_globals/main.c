@@ -3,7 +3,7 @@
 // of all widths, mutable + ref globals, statics) shifts by K. A wrong index
 // here fails validation (type clash with a (ref extern) import) or corrupts
 // a neighbour — this test reads AND writes every defined-global kind with
-// gcstr imports in play. todos/0041.
+// gcstr imports in play. docs/archive/0041.
 #include <stdio.h>
 #include <guc.h>
 

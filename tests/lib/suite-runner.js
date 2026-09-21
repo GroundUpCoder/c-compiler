@@ -1,5 +1,5 @@
 'use strict';
-// Shared engine for file-granular test suites (todos/0081).
+// Shared engine for file-granular test suites (docs/archive/0081).
 //
 // A "suite" here is a list of standalone test FILES, each an executable that
 // exits 0/nonzero (the tests/kernel/*.js and tests/browser/os-*.mjs shape —
@@ -16,7 +16,7 @@
 //   - --resume (skip files that passed in the previous summary AND whose own
 //     source has not changed since that pass — see staleForResume, #455),
 //     --filter, --fail-fast, --timeout, -j, --list
-//   - a summary that records its own SCOPE (todos/0339): `filter`, a `files`
+//   - a summary that records its own SCOPE (docs/archive/0339): `filter`, a `files`
 //     block (total / selected / executed / carried / recorded) and a `runs`
 //     list, and results MERGED across runs so a two-`--filter`-half sweep
 //     accounts for the whole suite instead of the second half deleting the
@@ -91,7 +91,7 @@ function killGroup(child, { sync = false } = {}) {
 }
 
 // A filter is a comma-separated OR of substrings — `--filter=wm,term` selects
-// any file whose name contains "wm" OR "term". The flake gate (todos/0147)
+// any file whose name contains "wm" OR "term". The flake gate (docs/archive/0147)
 // relies on this to pick the tripwire SET in one invocation (so the files
 // contend against each other), not one substring at a time.
 function matchesFilter(name, filter) {
@@ -164,7 +164,7 @@ function ramBudgetGb(memFraction = 0.6) {
 // member (or a NAMED allowlist entry carrying its owner), and every declared
 // member must exist on disk. Diverge → refuse to run, naming the file — the
 // same fail-loud design the diff table applies to a new tools/ path
-// (todos/0333), applied to suite membership. Callers with hardcoded lists
+// (docs/archive/0333), applied to suite membership. Callers with hardcoded lists
 // (tests/kernel/run.js, tests/blockfs/run.js) invoke this BEFORE taking the
 // heavy lock; glob-discovered suites (the browser sweep) need no call — their
 // list IS the directory.
@@ -277,7 +277,7 @@ function usage(name, defaults) {
 Artifacts: <artifactDir>/summary.json (checkpointed after every file) and
 <artifactDir>/<file>.log (combined stdout+stderr per file).
 
-summary.json records the run's SCOPE (todos/0339): \`filter\`, a \`files\` block
+summary.json records the run's SCOPE (docs/archive/0339): \`filter\`, a \`files\` block
 (total / selected / executed / resumed / carried / recorded) and a \`runs\` list.
 Results are MERGED across runs — a suite split into two --filter halves ends up
 with one record accounting for the whole suite, with each half's results tagged
@@ -331,7 +331,7 @@ async function runSuite(entries, opts) {
     return { passed: 0, failed: 0, skipped: 0, ranNothing: true };
   }
 
-  // ---- selection, as a recorded fact (todos/0339) ----
+  // ---- selection, as a recorded fact (docs/archive/0339) ----
   //
   // A summary that does not say WHAT was selected cannot distinguish a full run
   // from a filtered one — and the full browser sweep exceeds a single tool call,
@@ -367,7 +367,7 @@ async function runSuite(entries, opts) {
   // behaves exactly as it did before the merge landed.
   const prevByFile = new Map(prevResults.filter(r => !r.carried).map(r => [r.file, r]));
 
-  // ---- merge, so half 2 cannot delete half 1 (todos/0339) ----
+  // ---- merge, so half 2 cannot delete half 1 (docs/archive/0339) ----
   //
   // Results for files this run did not select are carried forward, tagged, and
   // stamped with the run that actually measured them. Merging must never make a
@@ -480,7 +480,7 @@ async function runSuite(entries, opts) {
       // schema above). First user: the kernel suite's `sibling` block (#613)
       // — the artifact must state whether sibling-owned tests joined the run
       // or were skipped, or a shipper cannot tell a sibling-less green from
-      // a full one ("the record states its own scope", todos/0339).
+      // a full one ("the record states its own scope", docs/archive/0339).
       ...(opts.summaryExtra || {}),
     });
   }
@@ -537,7 +537,7 @@ async function runSuite(entries, opts) {
       // `entry.src` (sibling-owned members, #613) overrides the file root but
       // NOT the cwd: cwd stays opts.dir deliberately, because the children a
       // test spawns from there (os/boot.js and the tools/ writers) run the
-      // tree guard (todos/0341) against THEIR cwd — a sibling-repo cwd would
+      // tree guard (docs/archive/0341) against THEIR cwd — a sibling-repo cwd would
       // make every driveBoot refuse at exit 4. A sibling test finds its own
       // repo via __dirname and the host repo via the env its caller passes.
       const child = spawn(process.execPath,
@@ -587,7 +587,7 @@ async function runSuite(entries, opts) {
   // run, then die. Each is a detached node one-liner doing real arithmetic
   // (so V8 can't fold it away) until a far deadline; we SIGKILL the group when
   // the suite finishes. This is the deterministic contention the flake gate
-  // (todos/0147) uses to surface sleep/timing regressions an idle box hides.
+  // (docs/archive/0147) uses to surface sleep/timing regressions an idle box hides.
   const loadProcs = new Set();
   function startLoad() {
     if (underLoad <= 0) return;
@@ -628,7 +628,7 @@ async function runSuite(entries, opts) {
 
   // Splitting a suite with --filter is legitimate and will continue — the full
   // browser sweep does not fit one tool call. It should just never be silent
-  // (todos/0339), so say how much of the suite this run covers, up front.
+  // (docs/archive/0339), so say how much of the suite this run covers, up front.
   if (opts.filter) {
     process.stdout.write(`\x1b[33m⚠ ${opts.name}: --filter=${opts.filter} selected `
       + `${selectedSet.size} of ${totalFiles} files — this run covers PART of the suite.\x1b[0m\n`);

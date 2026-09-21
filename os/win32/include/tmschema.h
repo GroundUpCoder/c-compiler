@@ -1,5 +1,5 @@
 /* tmschema.h — theme part/state constants the port corpus references
- * (todos/0060; calc.h includes this when _WIN32_WINNT < 0x0600). */
+ * (docs/archive/0060; calc.h includes this when _WIN32_WINNT < 0x0600). */
 #pragma once
 
 #define BP_PUSHBUTTON 1

@@ -3,7 +3,7 @@
 // (expect BLUE = 'a' 97, no shift) then Shift+A (expect GREEN = 'A' 65 +
 // SDL_KMOD_SHIFT). SDL3 keycodes are MODIFIER-APPLIED — delivering the
 // unshifted 'a' for Shift+A (RED) is SDL2 semantics and a conformance bug
-// here (see todos/SDL3.md: a past review flagged this as broken; it isn't).
+// here (see docs/SDL3.md: a past review flagged this as broken; it isn't).
 import { chromium } from 'playwright';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';

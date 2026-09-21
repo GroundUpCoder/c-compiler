@@ -115,7 +115,7 @@ try {
   await waitPixel(WX + 120, WY + 80, GREEN);
   check('window renders at 1x (green fill intact)', true);
 
-  // Maximize (todos/0025) on a FIXED-SIZE window: the title double-click
+  // Maximize (docs/archive/0025) on a FIXED-SIZE window: the title double-click
   // dispatches to the 0024 scale-to-fit — aspect-fit dst into the work
   // area (SW x SH-56), centered, buffer untouched. Mirror wm.c's fit: the
   // 15% integer snap applies only if it does NOT overflow the work area.

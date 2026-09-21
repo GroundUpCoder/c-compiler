@@ -1,4 +1,4 @@
-/* wine/debug.h — port-corpus compat stub (todos/0060). Wine's debug
+/* wine/debug.h — port-corpus compat stub (docs/archive/0060). Wine's debug
  * channels compile away entirely here: winemine and friends TRACE into
  * the void. Grow into fprintf(stderr) plumbing if debugging a port ever
  * demands it. */

@@ -5,14 +5,14 @@
 //   File: New, New Window, Open..., Save (untitled -> Save As; named ->
 //         writes), Save As..., Page Setup... / Print... (no printing
 //         subsystem -> `win32: unsupported` report, no dead click), Exit
-//   Edit: Undo (todos/0135: EM_CANUNDO un-grays the item after an edit,
+//   Edit: Undo (docs/archive/0135: EM_CANUNDO un-grays the item after an edit,
 //         the menu click restores it, and the ^Z chord — KA_UNDO on the
 //         pinned windows scheme — re-applies via the undo/undo toggle;
 //         WM_SETTEXT clears the record and re-grays), Cut, Copy,
 //         Paste, Delete, Find..., Find Next, Replace..., Go To... (+ the
 //         out-of-range error box), Select All, Time/Date
 //   Format: Word Wrap (checkmark + Go To grays + buffer survives the EDIT
-//         recreate), Font... (the REAL ChooseFontW dialog, todos/0223 —
+//         recreate), Font... (the REAL ChooseFontW dialog, docs/archive/0223 —
 //         pick a larger size, OK, and the EDIT's rendered line height
 //         visibly grows: shot-before/shot-after last-ink-row pixel assert;
 //         plus the #330 style axis: Bold through the dialog at the same
@@ -283,7 +283,7 @@ const r = driveBoot([
   'wmctl tree | grep msctls',
   'echo ==cut',
 
-  // ---- Format > Font...: the REAL ChooseFontW dialog (todos/0223) ----
+  // ---- Format > Font...: the REAL ChooseFontW dialog (docs/archive/0223) ----
   // Seed ink-heavy lines, shot, pick a larger size through the dialog,
   // shot again: the EDIT's last ink row must move DOWN (line height grew).
   'wmctl settext EDIT:0 "$(printf \'MMMM\\nMMMM\\nMMMM\')"',
@@ -336,7 +336,7 @@ const r = driveBoot([
   'wmctl wait text EDIT:0 q 6000',
 
   // ---- File > Page Setup... / Print...: LOUD cancels + the USER-visible
-  // notice box (todos/0145 — the stderr report is invisible to a GUI click)
+  // notice box (docs/archive/0145 — the stderr report is invisible to a GUI click)
   'wmctl click "Page Setup..."',
   'wmctl wait win "Page Setup" 6000',
   'echo ==pagesetupbox',
@@ -497,7 +497,7 @@ check('Select All + Copy fills the clipboard',
 check('Select All + Delete empties the buffer',
   section(out, 'deleted').trim() === '.end', JSON.stringify(section(out, 'deleted')));
 
-/* ---- Undo (todos/0135: the single-level EDIT undo record) */
+/* ---- Undo (docs/archive/0135: the single-level EDIT undo record) */
 check('Undo enabled once the Edit popup computes state (EM_CANUNDO armed)',
   section(out, 'editmenu').includes("text='Undo'") &&
   !/text='Undo' grayed/.test(section(out, 'editmenu')),
@@ -552,7 +552,7 @@ check('Status Bar toggle hides the bar (vis=0)', /vis=0/.test(section(out, 'sbar
 check('Status Bar toggle shows it again (vis=1)', /vis=1/.test(section(out, 'sbaron')),
   section(out, 'sbaron'));
 
-/* ---- Format > Font...: the REAL ChooseFontW dialog (todos/0223) */
+/* ---- Format > Font...: the REAL ChooseFontW dialog (docs/archive/0223) */
 check('Font... loud-cancel report is GONE (real ChooseFontW)',
   !/win32: unsupported ChooseFontW/.test(all), 'stale ChooseFontW report');
 const ftree = section(out, 'fonttree');
@@ -646,7 +646,7 @@ check('Page Setup... reports loudly (PageSetupDlgW)',
   /win32: unsupported PageSetupDlgW/.test(all), 'no PageSetupDlgW report');
 check('Print... reports loudly (PrintDlgW)',
   /win32: unsupported PrintDlgW/.test(all), 'no PrintDlgW report');
-/* ...and tells the USER (todos/0145): the click raises a notice box, so it
+/* ...and tells the USER (docs/archive/0145): the click raises a notice box, so it
  * is never a silent no-op for someone who cannot see stderr */
 check('Page Setup... shows the user-visible no-printing notice',
   /There is no printing subsystem in this build\./.test(section(out, 'pagesetupbox')),

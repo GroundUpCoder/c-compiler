@@ -3,7 +3,7 @@
  * vendor/gameboy (Peanut-GB). This is the default .gb/.gbc handler (0072
  * store points at /bin/sameboy); Peanut-GB stays as the lighter alternate.
  *
- * Since todos/0260 (menu arch M3, §4.b) this is a WIN32 app — the CPU half
+ * Since docs/archive/0260 (menu arch M3, §4.b) this is a WIN32 app — the CPU half
  * of the "one system, BOTH transports" proof: the menu experience (model,
  * tracking, popups-as-children, dismissal, agent targets) is the SAME
  * menucore path gpubox (M2, GPU transport) and notepad ride; the only

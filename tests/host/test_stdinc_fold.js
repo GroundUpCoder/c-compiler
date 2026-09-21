@@ -5,16 +5,14 @@
 // Guards the fold that plants the compiler's MERGED builtin-header map into
 // the system image at the one bake choke point (os-common foldStdlibHeaders,
 // called by bakeSystemImage):
-//   - the planted set is EXACTLY the merged map (builtins + libc-ext.js's .h
-//     entries), every entry byte-equal — generated, never hand-copied, so it
+//   - the planted set is EXACTLY the merged map (the builtin headers, the
+//     folded musl regex/fnmatch/glob/search.h ones included), every entry byte-equal — generated, never hand-copied, so it
 //     cannot drift from what `#include <...>` actually resolves (hazard 1)
 //   - dirs derive parent-before-child (/usr/include, sys/, SDL3/, SDL3_image/)
 //   - collisions with existing image entries throw loudly, both a file at a
 //     header path and a file squatting a derived dir path (hazard 2)
 //   - a folded srclib package (the /usr/include symlink-farm tier) coexists:
 //     disjoint tops, no claim clash — verified against every shipped package
-//   - a merged map MISSING the ext headers fails the bake loud (a silently
-//     environment-dependent /usr/include is the failure mode, not a fallback)
 //
 // Run: node tests/host/test_stdinc_fold.js
 const fs = require('fs');
@@ -42,8 +40,8 @@ const hdrs = COMMON.stdlibHeaderMap(CompilerJS);
 check('merged map carries the builtin surface (stdio.h/stdlib.h/sys/stat.h/SDL3/SDL.h)',
   ['stdio.h', 'stdlib.h', 'string.h', 'sys/stat.h', 'SDL3/SDL.h', 'webgpu.h', 'guc.h']
     .every((n) => hdrs.has(n)));
-check('merged map carries the ext headers (libc-ext.js loaded)',
-  ['regex.h', 'fnmatch.h', 'glob.h'].every((n) => hdrs.has(n)));
+check('merged map carries the folded musl headers (regex.h/fnmatch.h/glob.h/search.h)',
+  ['regex.h', 'fnmatch.h', 'glob.h', 'search.h'].every((n) => hdrs.has(n)));
 
 /* ---- the fold on the real manifest ---- */
 const folded = COMMON.foldStdlibHeaders(manifest, CompilerJS);
@@ -96,16 +94,6 @@ check('the input manifest is not mutated',
   check('claim() stays silent across ALL shipped packages (hazard 2)', ok, msg);
 }
 
-/* ---- a map missing the ext headers fails loud ---- */
-throws('a merged map missing the ext headers fails the bake loud', () => {
-  const fake = {
-    createDefaultPPRegistry: () => ({
-      standardHeaders: new Map([['stdio.h', 'x']]),
-      extProvidedHeaders: ['regex.h', 'fnmatch.h', 'glob.h'],
-    }),
-  };
-  COMMON.foldStdlibHeaders({ version: 1, system: { dirs: [], files: {} } }, fake);
-}, /libc-ext\.js was not loaded/);
 
 console.log(failures ? `\n${failures} FAILURE(S)` : '\nall ok');
 process.exit(failures ? 1 : 0);

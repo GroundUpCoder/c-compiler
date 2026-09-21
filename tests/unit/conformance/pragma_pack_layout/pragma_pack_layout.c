@@ -8,7 +8,7 @@
 //      lower an explicit __attribute__((packed)) (which stays byte-tight).
 //      compiler.js used to give 8 for P and Q (default alignment; no
 //      diagnostic).
-// FIXED: todos/0191 — the preprocessor emits a pack marker the parser threads
+// FIXED: docs/archive/0191 — the preprocessor emits a pack marker the parser threads
 //      into computeStructLayout as an alignment cap. All sizes verified
 //      against clang.
 #include <stdio.h>

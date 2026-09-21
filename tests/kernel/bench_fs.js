@@ -3,7 +3,7 @@
 // RPCs) vs the standalone in-process BlockFS, so the amendment's latency
 // price is measured, not assumed. Manual tool — not part of run.js.
 //
-// The read-only-volume leg (todos/0180): the same READ workload against a
+// The read-only-volume leg (docs/archive/0180): the same READ workload against a
 // sealed /usr file, brokered vs served process-locally off the shipped SAB
 // (Kernel opts.roImage) — the fast path's payoff, measured.
 //
@@ -66,7 +66,7 @@ int main(void) {
 }
 `;
 
-// The SPSC pipe leg (todos/0181): a writer|reader pipeline moves 16 MB;
+// The SPSC pipe leg (docs/archive/0181): a writer|reader pipeline moves 16 MB;
 // the reader times first-byte -> EOF (spawn/compile overhead excluded).
 // "fast" lets the parent close both ends (promotion -> ring transport);
 // "brokered" parks a second holder on the READ end (the parent keeps its
@@ -203,7 +203,7 @@ fs.writeFileSync(pipeCFile, PIPE_BENCH_C);
 cp.execFileSync('node', [COMPILER, pipeCFile, '-o', pipeWasmFile], { stdio: 'pipe' });
 const pipeImage = fs.readFileSync(pipeWasmFile);
 
-// The pipe leg (todos/0181): same pipeline, ring vs pinned-brokered.
+// The pipe leg (docs/archive/0181): same pipeline, ring vs pinned-brokered.
 function runPipeOnce(fast) {
   return new Promise((resolve, reject) => {
     let out = '';
@@ -238,7 +238,7 @@ function runOnce(brokered) {
   });
 }
 
-// The RO leg (todos/0180): a two-volume world with an 8MB file baked into
+// The RO leg (docs/archive/0180): a two-volume world with an 8MB file baked into
 // the sealed /usr volume, run with and without opts.roImage.
 function runRoOnce(local) {
   return new Promise((resolve, reject) => {

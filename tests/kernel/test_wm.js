@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// WM surface semantics (todos/WM.md, todos/0007) without wasm: fake workers
+// WM surface semantics (docs/WM.md, docs/archive/0007) without wasm: fake workers
 // over a brokered kernel, the test playing the process side of the kernel-
 // page protocol (test_sockets.js pattern). Covers: SURFACE_CREATE handshake
 // (SABs precede the RPC on the same FIFO channel), mailbox present + kernel
@@ -102,7 +102,7 @@ function present(fb, rgba) {
   Atomics.add(fb.i32, K.SH_SEQ, 1);
 }
 function drain(ring) {
-  // The owner focus pair (todos/0256, FOCUS_GAINED/LOST) interleaves with
+  // The owner focus pair (docs/archive/0256, FOCUS_GAINED/LOST) interleaves with
   // input at every focus transition by design; this file asserts INPUT
   // routing sequences, so the pair is filtered here — its own coverage
   // lives in test_wm_anchored.js.
@@ -136,7 +136,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   const fb1 = makeFb(80, 48);
   const ring1 = makeRing(256);
   workers.get(appPid).msg({ type: 'wm-sabs', fb: fb1.sab, ring: ring1.sab });
-  // flags bit2 = resizable (todos/0021) — the resize legs below need it.
+  // flags bit2 = resizable (docs/archive/0021) — the resize legs below need it.
   const c1 = await rpc(appPid, K.OP.SURFACE_CREATE, { w: 80, h: 48, title: 'app one', flags: 4 });
   check('create -> sid 1', c1.sid === 1, JSON.stringify(c1));
   check('placement below the title bar', c1.y >= K.WM_TITLE_H, c1.y);
@@ -149,7 +149,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   let list = kernel.wmList();
   check('wmList has the window, focused', list.length === 1 && list[0].sid === 1 &&
     list[0].focused && list[0].title === 'app one', JSON.stringify(list));
-  check('no WM subscribed: created MAPPED (todos/0069 fallback is pre-0069 exact)',
+  check('no WM subscribed: created MAPPED (docs/archive/0069 fallback is pre-0069 exact)',
     list[0].mapped === true, JSON.stringify(list[0]));
 
   // ---- present + surface screenshot ----
@@ -233,7 +233,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     evs[0].win === 1 && evs[0].w[0] === 4 && evs[0].w[1] === 97, JSON.stringify(evs));
   check('doorbell rung for input', Atomics.load(kp1, K.KP_DOORBELL) > bellBefore);
 
-  // ---- window cycling chord with NO subscriber (todos/0032): the chord
+  // ---- window cycling chord with NO subscriber (docs/archive/0032): the chord
   // is NOT recognized — Alt+Tab lands in the focused app like any other
   // key (the kernel never silently eats keystrokes) ----
   kernel.wmKey(true, 43, 9, 0x140, false);            // Ctrl+Alt+Tab down
@@ -245,7 +245,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('wmCycle refuses with no subscriber: ENODEV (cycling IS policy)',
     kernel.wmCycle(1) === 'ENODEV');
 
-  // ---- the Aero Snap chord with NO subscriber (todos/0095): GUI+arrow is
+  // ---- the Aero Snap chord with NO subscriber (docs/archive/0095): GUI+arrow is
   // NOT recognized — it lands in the focused app like any other key ----
   kernel.wmKey(true, 80, 1073741904, 0x400, false);   // Win+Left down
   kernel.wmKey(false, 80, 1073741904, 0x400, false);
@@ -256,7 +256,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('wmSnap refuses with no subscriber: ENODEV (snap IS policy)',
     kernel.wmSnap(0) === 'ENODEV');
 
-  // ---- the screensaver mechanism (todos/0096): the kernel's idle clock
+  // ---- the screensaver mechanism (docs/archive/0096): the kernel's idle clock
   // stamps at the wmKey/wmPointer entries; the SAVER gesture is
   // subscriber-gated like every other policy gesture ----
   check('wmIdleMs: the key input above stamped the idle clock',
@@ -288,7 +288,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     JSON.stringify([moved.x, moved.y, x0, y0]));
   check('drag did not leak events to the app', drain(ring1).length === 0);
 
-  // ---- title double-click -> the maximize gesture (todos/0025) ----
+  // ---- title double-click -> the maximize gesture (docs/archive/0025) ----
   // Mechanism only here (no WM subscribed, the event goes nowhere; the
   // policy round-trip lives in test_wm_policy.js). opts.t drives the clock
   // deterministically. A second down within the interval+slop returns
@@ -342,7 +342,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     String(px(screen, moved.x + 2, moved.y + 2)) === '0,255,0,255', px(screen, moved.x + 2, moved.y + 2));
   check('blurred title bar gray behind', kernel.wmList().find(s => s.sid === c2.sid).focused === false);
 
-  // ---- raise-only focus must bump the scene version (todos/0165) ----
+  // ---- raise-only focus must bump the scene version (docs/archive/0165) ----
   // wmRestack deliberately doesn't move focus, so lowering the FOCUSED
   // window then focusing it again exercises wmFocus's reorder branch with
   // focus unchanged: z changes, and a version-delta consumer (the damage
@@ -354,7 +354,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   const sc165 = kernel.wmScene();
   check('raise-only focus reorders z (window 1 back on top)',
     sc165.surfaces[sc165.surfaces.length - 1].sid === 1);
-  check('raise-only focus bumps the scene version (todos/0165)',
+  check('raise-only focus bumps the scene version (docs/archive/0165)',
     sc165.version > v165, JSON.stringify([v165, sc165.version]));
 
   // ---- close box -> SDL_EVENT_QUIT ----
@@ -364,7 +364,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('close box posts QUIT', act === 'close' && evs.length === 1 && evs[0].type === K.WMEV.QUIT,
     JSON.stringify([act, evs]));
 
-  // ---- title-bar boxes (todos/0030): [min][max][close], same metrics ----
+  // ---- title-bar boxes (docs/archive/0030): [min][max][close], same metrics ----
   // No WM is subscribed here: the MAX box must be a complete no-op (the
   // same R_ERR/no-op as wmctl max — maximize IS policy), and the MIN box
   // must work anyway (minimize is kernel mechanism, focus-fall included).
@@ -417,7 +417,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   // ---- ring overflow: drop-newest + counter ----
   let lastInject = 0;
   for (let i = 0; i < 300; i++) lastInject = kernel.wmInjectKey(1, true, i, 0, 0);
-  check('inject into a full ring reports EAGAIN (todos/0242)', lastInject === 'EAGAIN');
+  check('inject into a full ring reports EAGAIN (docs/archive/0242)', lastInject === 'EAGAIN');
   const dropped = Atomics.load(ring1.i32, K.IR_DROPPED);
   evs = drain(ring1);
   check('overflow drops newest, keeps cap, counts drops',
@@ -434,7 +434,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   }
   check('10k-event storm: every event delivered in order', ok && seen === 10000, seen);
 
-  // ---- client resize: SURFACE_CONFIGURE renegotiation (todos/0019) ----
+  // ---- client resize: SURFACE_CONFIGURE renegotiation (docs/archive/0019) ----
   check('wmResize asks the client', kernel.wmResize(1, 96, 80) === 0);
   let s1r = kernel.wmList().find(s => s.sid === 1);
   check('geometry unchanged while pending', s1r.w === 80 && s1r.h === 48 &&
@@ -618,8 +618,8 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('wmResize below the floor is refused: EINVAL', kernel.wmResize(1, 8, 8) === 'EINVAL');
   check('wmResize on a bogus sid is refused: EINVAL', kernel.wmResize(999, 64, 64) === 'EINVAL');
 
-  // ---- SDL_WINDOW_RESIZABLE gating (todos/0021) + viewport scaling
-  // (todos/0024): a window created without flags bit2 is fixed-size —
+  // ---- SDL_WINDOW_RESIZABLE gating (docs/archive/0021) + viewport scaling
+  // (docs/archive/0024): a window created without flags bit2 is fixed-size —
   // wmResize is refused with nothing left pending; its frame drag zones
   // START A SCALE DRAG instead (rubber band; with no WM subscribed the
   // release applies the raw box as the dst rect, buffer untouched) ----
@@ -634,7 +634,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
     const s = kernel.wmList().find(s => s.sid === cFix.sid);
     return s.dstW === 50 && s.dstH === 40;
   })());
-  check('wmResize on a non-resizable surface is refused: EPERM (todos/0242)',
+  check('wmResize on a non-resizable surface is refused: EPERM (docs/archive/0242)',
     kernel.wmResize(cFix.sid, 100, 90) === 'EPERM');
   check('refusal leaves nothing pending, no event to the client',
     kernel.wmList().find(s => s.sid === cFix.sid).configurePending === false &&
@@ -649,7 +649,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   kernel.wmPointer('up', 400 + 50 - 1, 100 + 40 - 1, {});
   drain(ring1);                                        // the client-leg events
   fact = kernel.wmPointer('down', 400 + 50 + 1, 100 + 40 + 1, {});   // SE grip
-  check('SE grip on a fixed window starts a SCALE drag (todos/0024)',
+  check('SE grip on a fixed window starts a SCALE drag (docs/archive/0024)',
     fact === 'resize-start', fact);
   fact = kernel.wmPointer('move', 400 + 50 + 51, 100 + 40 + 41, {});
   const srd = kernel.wmScene().resizeDrag;
@@ -708,7 +708,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('injection stays in buffer coords (post-hit-test, resolution-independent)',
     evs.length === 1 && evs[0].f[0] === 3 && evs[0].f[1] === 4, JSON.stringify(evs));
 
-  // Title-bar boxes respect the dst rect (todos/0030): on the scaled
+  // Title-bar boxes respect the dst rect (docs/archive/0030): on the scaled
   // surface the min box sits at dstW-relative offsets, like the close box.
   fact = kernel.wmPointer('down',
     400 + 100 - K.WM_CLOSE_PAD - K.WM_CLOSE_W - 2 * (K.WM_CLOSE_W + K.WM_BOX_GAP) + 8,
@@ -725,7 +725,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   check('wmSetDst below the floor is refused: EINVAL', kernel.wmSetDst(cFix.sid, 8, 8) === 'EINVAL');
   check('wmSetDst on a bogus sid is refused: EINVAL', kernel.wmSetDst(999, 64, 64) === 'EINVAL');
 
-  // The wmSetScreen one-shot clamp (todos/0023) measures the SCALED size.
+  // The wmSetScreen one-shot clamp (docs/archive/0023) measures the SCALED size.
   kernel.wmMove(cFix.sid, -90, 100);       // dst is 100 wide: floor is 40-100
   kernel.wmSetScreen(632, 480);
   check('screen clamp uses the dst width (x -> 40 - dstW)',
@@ -736,7 +736,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
 
   // SET_FLAGS bit2 grants resizability at runtime (and the zones light up);
   // the grant snaps the viewport back to the buffer — resizable and scaled
-  // are exclusive modes (todos/0024).
+  // are exclusive modes (docs/archive/0024).
   await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: cFix.sid, flags: 4 });
   check('SET_FLAGS bit2 makes it resizable',
     kernel.wmList().find(s => s.sid === cFix.sid).resizable === true);
@@ -752,7 +752,7 @@ const px = (shot, x, y) => Array.from(shot.rgba.subarray((y * shot.w + x) * 4, (
   await rpc(appPid, K.OP.SURFACE_DESTROY, { sid: cFix.sid });
   kernel.wmFocus(1);                                   // restore for later legs
 
-  // ---- relative mouse / pointer lock (todos/0018) ----
+  // ---- relative mouse / pointer lock (docs/archive/0018) ----
   // SET_FLAGS validation, the wanted-state round trip, rel-record injection,
   // and locked vs unlocked routing. sid 1 is focused here.
   const badFlags = await rpc(appPid, K.OP.SURFACE_SET_FLAGS, { sid: 999, flags: 2 });

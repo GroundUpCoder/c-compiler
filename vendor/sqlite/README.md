@@ -48,7 +48,7 @@ sqlite> SELECT sum(value) FROM generate_series(1,100);
 5050
 ```
 
-See `todos/MISC.md` for follow-up notes.
+See `docs/MISC.md` for follow-up notes.
 
 ## Build (when it works)
 

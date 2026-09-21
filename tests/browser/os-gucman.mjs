@@ -1,6 +1,6 @@
 // gucman browser-realm HTTP acceptance (ticket #78 / P0 receiver-bug class).
 //
-// The kernel's HTTP transport (todos/0172) calls `this._fetch(url, init)`.
+// The kernel's HTTP transport (docs/archive/0172) calls `this._fetch(url, init)`.
 // Browsers BRAND-CHECK fetch's receiver: an unbound global `fetch` stored on
 // the Kernel throws `TypeError: Illegal invocation` before any request goes
 // out — which gucman surfaced live as "Couldn't connect to server". Node's

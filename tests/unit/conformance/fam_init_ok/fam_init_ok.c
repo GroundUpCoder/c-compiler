@@ -1,4 +1,4 @@
-// BUG: companion to diag_local_fam_init (todos/0205) — pins the FAM-init
+// BUG: companion to diag_local_fam_init (docs/archive/0205) — pins the FAM-init
 // forms that must KEEP working while automatic-storage FAM init is
 // rejected: file-scope, block-scope static (both sized with the FAM extra
 // via computeInitAllocSize, adjacent statics must not overlap), and an

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// todos/0293 (#101, the 0045 noted-only follow-up): headless boot.js takes a
+// docs/archive/0293 (#101, the 0045 noted-only follow-up): headless boot.js takes a
 // SINGLE-INSTANCE guard on its image pair — the twin of the browser's Web
 // Lock. Two live BlockFS instances over one writable root store are silent
 // cross-file corruption by BlockFS's own multi-instance rules, and the test

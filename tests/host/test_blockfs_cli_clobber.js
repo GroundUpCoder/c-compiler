@@ -1,4 +1,4 @@
-// Host-level regression test (todos/0233, code-debt scan CD1): the
+// Host-level regression test (docs/archive/0233, code-debt scan CD1): the
 // `--block-fs=path` CLI path must NOT silently clobber the image on a
 // read error. Before the fix, ANY readFileSync failure was swallowed →
 // a fresh empty image was created → the writeFileSync at exit OVERWROTE

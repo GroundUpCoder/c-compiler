@@ -1,5 +1,5 @@
-/* menucore.h — the ONE menu engine's public surface (todos/0257 A7/A13,
- * extracted to menucore.c by the M4 milestone, todos/0259).
+/* menucore.h — the ONE menu engine's public surface (docs/archive/0257 A7/A13,
+ * extracted to menucore.c by the M4 milestone, docs/archive/0259).
  *
  * The engine (model + geometry + tracking + raster over HDC) lives in
  * menucore.c and touches the world outside itself ONLY through the
@@ -10,7 +10,7 @@
  *   (a) an HDC over the overlay window's pixels   -> win_begin/win_present
  *   (b) overlay windows create/destroy            -> win_create/win_destroy
  *       (user32: SDL_CreatePopupWindow — the kernel anchored-child
- *       primitive of todos/0256, POPUP_MENU levels hold the kernel grab;
+ *       primitive of docs/archive/0256, POPUP_MENU levels hold the kernel grab;
  *       wm.c: its borderless top-layer furniture windows, which must hold
  *       kernel focus to receive keys — the WM has no parent app window)
  *   (c) a command sink                            -> post_command

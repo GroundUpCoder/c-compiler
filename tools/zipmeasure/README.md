@@ -1,6 +1,6 @@
-# zipmeasure — todos/0350 step-1 measurement harness (libarchive vs libzip)
+# zipmeasure — docs/archive/0350 step-1 measurement harness (libarchive vs libzip)
 
-Answers the one deciding question of `todos/0350`: the honest wasm image cost
+Answers the one deciding question of `docs/archive/0350`: the honest wasm image cost
 of each zip-library candidate, built by OUR compiler against the EXISTING
 `vendor/zlib` (never a second inflate/deflate).
 
@@ -50,7 +50,7 @@ number is its complete library; the libarchive number is already the cut-down
 set, so the comparison leans in libzip's favor, and libarchive still lands
 inside the noise band.
 
-## libc gaps found (matter for the real vendoring, todos/0350/0351)
+## libc gaps found (matter for the real vendoring, docs/archive/0350/0351)
 
 - `strcasecmp` lives in `<strings.h>` and libzip never includes it (expects
   the platform to). `zt-libzip/config.h` pulls it in.

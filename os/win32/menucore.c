@@ -1,5 +1,5 @@
-/* menucore.c — the ONE menu engine (todos/0257 A13, extracted by M4,
- * todos/0259): model + geometry + tracking + raster over HDC, moved
+/* menucore.c — the ONE menu engine (docs/archive/0257 A13, extracted by M4,
+ * docs/archive/0259): model + geometry + tracking + raster over HDC, moved
  * VERBATIM from user32.c's 0068/0091/0211/0257 menu engine and consumed
  * through the menucore.h seam by BOTH front-ends — user32 (the win32
  * HMENU API + bar furniture + agent protocol) and os/wm.c (Start-menu
@@ -188,7 +188,7 @@ int mc_row_h(const MenuItem *it) {
     return it->kind == 2 ? MENU_SEP_H : MENU_ITEM_H;
 }
 
-/* The accel column as DRAWN (ticket #96 / todos/0432). Under the macos
+/* The accel column as DRAWN (ticket #96 / docs/archive/0432). Under the macos
  * scheme the accelerator choke maps FCONTROL to the GUI modifier
  * (user32.c TranslateAcceleratorW), so a literal "Ctrl+..." accel string
  * advertises a chord the scheme deliberately leaves unbound. Rewrite the
@@ -533,7 +533,7 @@ void mc_level_mouse(int k, UINT msg, int x, int y) {
     }
 }
 
-/* Keyboard while a tracking is open (todos/0091): Up/Down walk the
+/* Keyboard while a tracking is open (docs/archive/0091): Up/Down walk the
  * enabled rows of the DEEPEST level, Enter fires the hot one, Right
  * opens a hot cascade / Left closes the deepest level (any depth, A12),
  * Esc closes the deepest level. Returns 1 for the keys it owns; 0 for

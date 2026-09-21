@@ -777,7 +777,7 @@ beep()
 }
 
 /*
- * gucOS port (todos/0119): the blocking XNextEvent/select main loop is now
+ * gucOS port (docs/archive/0119): the blocking XNextEvent/select main loop is now
  * a frame callback. draw_one() returns 2 ("would block") instead of
  * sleeping on the X fd; main_loop() seeds the render state and registers
  * frame_loop() with the runtime; handle_xevent() is upstream's per-event
@@ -879,7 +879,7 @@ frame_loop()
 						fl_reload();
 				}
 			}
-			/* IDLE-POWER Stage 2 (todos/0161): a settled page has
+			/* IDLE-POWER Stage 2 (docs/archive/0161): a settled page has
 			 * nothing to draw until input arrives — park on the OS
 			 * input ring instead of returning into a 60Hz frame
 			 * callback that re-enters just to find no event. The 2s
@@ -998,7 +998,7 @@ handle_xevent(e)
 			if (e->xbutton.button == 1) {
 				struct render_state tstate;
 #ifdef MGPP
-				/* MagicPointPlus (todos/0272): a left-half click
+				/* MagicPointPlus (docs/archive/0272): a left-half click
 				 * goes BACKWARD (mirrors button 3 / 'b'), a
 				 * right-half click keeps the upstream forward
 				 * behaviour below.  Hit-test on the rendered
@@ -1072,7 +1072,7 @@ handle_xevent(e)
 		case XK_Next:
 		case XK_space:
 #ifdef MGPP
-		case XK_Right:		/* MagicPointPlus (todos/0272): forward */
+		case XK_Right:		/* MagicPointPlus (docs/archive/0272): forward */
 #endif
 		    {
 			struct render_state tstate;
@@ -1110,7 +1110,7 @@ handle_xevent(e)
 		case XK_BackSpace:
 		case XK_Delete:
 #ifdef MGPP
-		case XK_Left:		/* MagicPointPlus (todos/0272): backward */
+		case XK_Left:		/* MagicPointPlus (docs/archive/0272): backward */
 #endif
 			if (fl_number == 0) fl_number = 1;
 			if (sp->page - fl_number >= 1) {

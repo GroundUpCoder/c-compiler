@@ -1,7 +1,7 @@
 // BUG: ++/-- on a void* compiled to a stride-0 add — the pointer never
 // moved (pre/post, inc/dec all affected). p+1 and p+=1 already used the
 // GNU stride-1 clamp (ptrArithElemSize), so mixed code silently walked
-// wrong. Found in the 2026-07 fresh-eyes hunt (todos/0203).
+// wrong. Found in the 2026-07 fresh-eyes hunt (docs/archive/0203).
 // C11: 6.5.2.4/6.5.3.1 (constraint: complete object type) + the gcc/clang
 // extension treating void as size 1 for pointer arithmetic.
 // EXPECT: matches gcc/clang: void* ++/-- moves by exactly 1 byte.

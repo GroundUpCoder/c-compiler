@@ -50,7 +50,7 @@ function check(name, cond, extra) {
 const priv = mkdtempOwned('os-gatehist-');
 const outDir = path.join(priv, 'out');
 
-// `todos` is the cheapest real suite (~7s); every leg that needs a full
+// `liabilities` is the cheapest real suite (~7s); every leg that needs a full
 // dispatcher run uses it.
 function gate(args, env) {
   return cp.spawnSync('node', [RUN, ...args, '--out=' + outDir],
@@ -65,8 +65,8 @@ const statOrNull = (p) => { try { const s = fs.statSync(p); return s.mtimeMs + '
 // ---- leg 1: a run records identity + telemetry and archives itself ------
 let runId1 = null;
 {
-  const r = gate(['todos']);
-  check('leg 1: todos gate passes', r.status === 0, { status: r.status, tail: (r.stdout + r.stderr).slice(-400) });
+  const r = gate(['liabilities']);
+  check('leg 1: liabilities gate passes', r.status === 0, { status: r.status, tail: (r.stdout + r.stderr).slice(-400) });
   const s = readSummary();
   runId1 = s.runId;
   check('leg 1: summary carries a runId', /^\d{8}-\d{6}-\d+$/.test(s.runId || ''), s.runId);
@@ -79,9 +79,9 @@ let runId1 = null;
   const hist = path.join(outDir, 'history', s.runId);
   check('leg 1: history/<runId>/summary.json archived', fs.existsSync(path.join(hist, 'summary.json')));
   let tee = '';
-  try { tee = fs.readFileSync(path.join(hist, 'logs', 'todos.log'), 'utf8'); } catch {}
+  try { tee = fs.readFileSync(path.join(hist, 'logs', 'liabilities.log'), 'utf8'); } catch {}
   check('leg 1: the suite transcript was tee\'d into history',
-    tee.includes('tests/todos/run.js') && tee.length > 100, tee.slice(0, 80));
+    tee.includes('tests/liabilities/run.js') && tee.length > 100, tee.slice(0, 80));
   check('leg 1: the gate lock was released on exit',
     !fs.existsSync(path.join(outDir, '.gate-lock')));
 }
@@ -89,7 +89,7 @@ let runId1 = null;
 // ---- leg 2: a retry cannot destroy the previous run's archive -----------
 {
   const before = fs.readFileSync(path.join(outDir, 'history', runId1, 'summary.json'));
-  const r = gate(['todos']);
+  const r = gate(['liabilities']);
   check('leg 2: second run into the same dir passes', r.status === 0);
   const s = readSummary();
   check('leg 2: distinct runId', s.runId && s.runId !== runId1, { first: runId1, second: s.runId });
@@ -111,7 +111,7 @@ let runId1 = null;
     pid: decoy.pid, startedAt: new Date().toISOString(), argv: ['stand-in'] }));
   const sumBefore = statOrNull(path.join(outDir, 'summary.json'));
   const histBefore = listHistory();
-  const r = gate(['todos']);
+  const r = gate(['liabilities']);
   check('leg 3: refused at exit 2 with the [gate-lock] marker',
     r.status === 2 && String(r.stderr).includes('[gate-lock]'),
     { status: r.status, stderr: String(r.stderr).slice(-300) });
@@ -184,7 +184,7 @@ let runId1 = null;
   const driver = cp.spawnSync(process.execPath, ['-e', `
     const cp = require('child_process');
     const go = () => new Promise((res) => {
-      const c = cp.spawn('node', [${JSON.stringify(RUN)}, 'todos', '--out=' + ${JSON.stringify(outDir)}],
+      const c = cp.spawn('node', [${JSON.stringify(RUN)}, 'liabilities', '--out=' + ${JSON.stringify(outDir)}],
         { cwd: ${JSON.stringify(ROOT)} });
       let err = '';
       c.stderr.on('data', (d) => { err += d; });
@@ -213,14 +213,14 @@ let runId1 = null;
 // ---- this models a pre-fix leftover or a foreign truncated write.)      ----
 {
   fs.writeFileSync(path.join(outDir, '.gate-lock'), '');   // fresh mtime, no JSON
-  const r = gate(['todos']);
+  const r = gate(['liabilities']);
   check('leg 3c: gate completes over aged-out garbage (steals past the grace)',
     r.status === 0, { status: r.status, stderr: String(r.stderr).slice(-300) });
   // PARSE the reported age rather than pattern-matching the sentence: an
   // instant steal prints "age 0.0s > 2s grace" — a false statement that
   // still matches any shape-only regex. (Found by CPM4: removing the grace
   // branch left the original shape-only assert green. A wall-clock bound on
-  // gate() is no better — the ~7s todos run satisfies >=2s vacuously.)
+  // gate() is no better — the ~7s liabilities run satisfies >=2s vacuously.)
   const m = /\[gate-lock\] unparseable lock file \(age ([\d.]+)s > 2s grace\)/.exec(String(r.stderr));
   check('leg 3c: the steal is LOUD and names the age + grace', !!m, String(r.stderr).slice(0, 300));
   check('leg 3c: the REPORTED age proves the grace was waited out (>= 2s)',
@@ -247,7 +247,7 @@ let runId1 = null;
   `], { stdio: 'ignore' });
   cp.execSync('sleep 0.5');   // let the toucher boot before the gate starts
   const t0 = Date.now();
-  const r = gate(['todos']);
+  const r = gate(['liabilities']);
   const elapsed = Date.now() - t0;
   toucher.kill('SIGKILL');
   fs.rmSync(lockPath, { force: true });
@@ -271,7 +271,7 @@ let runId1 = null;
   // the post-crash reuse shape.
   fs.writeFileSync(lockPath, JSON.stringify({
     pid: process.pid, startedAt: new Date().toISOString(), argv: ['stand-in'] }));
-  const r = gate(['todos']);
+  const r = gate(['liabilities']);
   check('leg 3e: a live non-dispatcher pid is treated as PID reuse — the gate runs',
     r.status === 0, { status: r.status, stderr: String(r.stderr).slice(-300) });
   check('leg 3e: the steal is LOUD and names the mechanism',
@@ -292,7 +292,7 @@ let runId1 = null;
     pid: decoy.pid,
     startedAt: new Date(Date.now() - 7 * 3600 * 1000).toISOString(),   // 7h > the 6h cap
     argv: ['stand-in'] }));
-  const r = gate(['todos']);
+  const r = gate(['liabilities']);
   check('leg 3f: an AGED but VERIFIED live dispatcher still REFUSES (never robbed by the age cap)',
     r.status === 2 && String(r.stderr).includes('[gate-lock] REFUSING'),
     { status: r.status, stderr: String(r.stderr).slice(-300) });
@@ -310,7 +310,7 @@ let runId1 = null;
   const deadPid = typeof dead === 'number' ? dead : +dead;
   fs.writeFileSync(path.join(outDir, '.gate-lock'), JSON.stringify({
     pid: deadPid, startedAt: new Date().toISOString(), argv: ['dead-holder'] }));
-  const r = gate(['todos']);
+  const r = gate(['liabilities']);
   check('leg 4: a dead holder\'s lock is stolen and the gate runs', r.status === 0,
     { status: r.status, stderr: String(r.stderr).slice(-300) });
   check('leg 4: lock released again', !fs.existsSync(path.join(outDir, '.gate-lock')));
@@ -328,7 +328,7 @@ let runId1 = null;
     fs.mkdirSync(path.join(histRoot, name), { recursive: true });
     seeded.push(name);
   }
-  const r = gate(['todos']);
+  const r = gate(['liabilities']);
   check('leg 5: gate still passes over an overflowing history', r.status === 0);
   const runs = listHistory();
   check(`leg 5: pruned to HISTORY_KEEP (${HISTORY_KEEP})`, runs.length === HISTORY_KEEP, runs.length);

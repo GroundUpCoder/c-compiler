@@ -1,7 +1,7 @@
 {
   "bin": true,
   "name": "notepad",
-  "description": "ReactOS notepad (todos/0060 win32 port corpus)",
+  "description": "ReactOS notepad (docs/archive/0060 win32 port corpus)",
   "deps": [
     "../../os/win32/lib.json"
   ],

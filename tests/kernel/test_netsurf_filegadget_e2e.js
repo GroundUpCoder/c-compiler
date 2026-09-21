@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// THE FILE GADGET OF /bin/netsurf (todos/0433).
+// THE FILE GADGET OF /bin/netsurf (docs/archive/0433).
 //
 // A click on <input type=file> used to reach gui_factory's EMPTY default:
 // the gucOS window table supplied no file_gadget_open.  The fix routes the
@@ -38,7 +38,7 @@
 //            which also pins the navigation teardown: GW_EVENT_NEW_CONTENT
 //            kills the picker, so its window must VANISH without a click.
 //            The file-BYTES half (multipart POST) needs an http fetcher:
-//            todos/0437, not here.
+//            docs/archive/0437, not here.
 //
 // GEOMETRY IS MEASURED, NEVER DERIVED FROM FONT MATH: the gadget and the
 // submit button carry probe background colours; a first session shoots the

@@ -30,7 +30,7 @@ bd83ef099cf9bcacdf8b9d1de0c6bbe82da5f24560b1039a0b380251cc850e8b  python-ours-v1
 ### Build provenance
 
 - **`cpython-ours`** — CPython 3.13.5, all 174 TUs, built by **stock v176 `compiler.js`
-  plus a single one-line `todos/0323` diagnostic relaxation at the link step**. That is
+  plus a single one-line `docs/archive/0323` diagnostic relaxation at the link step**. That is
   the entire caveat: the older "our side needs three open patches" claim is dead — v176
   compiles every CPython TU as shipped, and 0323 is the only remaining blocker. 0323 is
   **still open**; this is not "it works today".
@@ -59,7 +59,7 @@ It is absent by measurement, not by omission — see `run-2x2.sh`'s note.
 - `inos-startup.js` — in-OS (gucOS kernel) startup measurement.
 - `results/*.txt` — raw samples, **nanoseconds**, one per line, no header.
 
-### The todos/0332 diagnostics
+### The docs/archive/0332 diagnostics
 
 Added by the lane that root-caused and fixed the ~1000x dispatch gap
 (`logs/2026-07-27/0332-dispatch-1000x-rootcause.md`). These files read and time
@@ -82,7 +82,7 @@ the *emitted wasm*, so they answer "how was this lowered", not just "how fast is
   chain length. 135x before the fix, 4.4x after, against its own structured cell.
 - `results/0332-*.txt` — the raw before/after output, including the
   `--trace-wasm-compilation-times` census that localized the *separate* startup
-  defect now filed as `todos/0336`.
+  defect now filed as `docs/archive/0336`.
 
 An empty `results/*.txt` means the cell produced no samples. `run-2x2.sh` discards stderr,
 so an empty file records only *that* it failed, never *why* — a zero-byte file is

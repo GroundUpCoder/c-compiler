@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// cpython-clang acceptance, headless IN-OS (todos/0340 item 6 + todos/0331).
+// cpython-clang acceptance, headless IN-OS (docs/archive/0340 item 6 + docs/archive/0331).
 //
 // Everything CPYTHON.md verified host-side it verified against bare host.js —
 // node's filesystem, node's argv, no kernel. The claims that actually matter to
@@ -8,7 +8,7 @@
 // where those are measured rather than assumed. Legs:
 //
 //   - base purity IN-OS: the minimal image ships NO python IMPLEMENTATION (it
-//     does ship a `python` VERB since todos/0338 — the cmdalt dispatcher, which
+//     does ship a `python` VERB since docs/archive/0338 — the cmdalt dispatcher, which
 //     exits 127 naming the package to install)
 //   - `gucman install cpython-clang`: /opt tree + /usr/local/bin symlink
 //   - the banner reports Clang and `print(1+1)` prints 2 (0331)
@@ -107,7 +107,7 @@ const FEAT_PY = [
   'b.seek(0)',
   "print('GZIP ok=%r' % (gzip.GzipFile(fileobj=b).read() == raw,))",
   // A REAL file on the brokered BlockFS, not :memory: — a file-backed sqlite3
-  // db is what exposed the brokered-fsync crash fixed in todos/0036.
+  // db is what exposed the brokered-fsync crash fixed in docs/archive/0036.
   "cn = sqlite3.connect('/root/t.db')",
   "cn.execute('create table t(a)'); cn.execute('insert into t values (42)'); cn.commit()",
   "print('SQLITE %s %r' % (sqlite3.sqlite_version, cn.execute('select a from t').fetchone()))",
@@ -141,7 +141,7 @@ async function main() {
     //
     // This leg used to assert "NO python verb AT ALL" (`grep -c python` == 0).
     // That was true on this ticket's base and is false by design on main:
-    // todos/0338 bakes `python` as a cmdalt KEY whose value is the suggestion
+    // docs/archive/0338 bakes `python` as a cmdalt KEY whose value is the suggestion
     // `cpython-clang` (jku's 2026-07-28 name-split ruling — os/cmdalt.h). So a
     // fresh image DOES carry a `python` verb; what must stay true is that
     // nothing on the image can RUN python. Pin the dispatcher's behaviour too,

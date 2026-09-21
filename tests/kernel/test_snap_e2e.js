@@ -30,7 +30,7 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-snap-');
 
-// Preview pixels (todos/0063 deterministic src-over, integer math): white
+// Preview pixels (docs/archive/0063 deterministic src-over, integer math): white
 // fill a=80 over the teal desktop -> (80,168,168); the 2px border a=192 ->
 // (192,224,224). Asserted host-side out of the shot PNG after the boot
 // (#657): a compressed image has no fixed byte offset per pixel, and the
@@ -83,7 +83,7 @@ const script = [
   'wmctl wait nowin snappreview',
   'echo ==quarter',
   'wmctl list',
-  // ---- the command path (= the Win+arrow chord event, todos/0095).
+  // ---- the command path (= the Win+arrow chord event, docs/archive/0095).
   'wmctl snap right && echo snap-right-ok',
   'sleep 1',                                     // timing subject: geometry round-trip (snap right)
   'echo ==right',

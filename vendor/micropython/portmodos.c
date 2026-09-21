@@ -1,5 +1,5 @@
 // gucOS MicroPython port — the bodies extmod/modos.c asks the port for, plus
-// the POSIX filesystem surface and the `os.path` submodule (todos/0117 R2).
+// the POSIX filesystem surface and the `os.path` submodule (docs/archive/0117 R2).
 //
 // Named by MICROPY_PY_OS_INCLUDEFILE and #included INTO extmod/modos.c, so it
 // declares no includes of its own and is not in bin.json's sources. Upstream's
@@ -11,7 +11,7 @@
 // Upstream ships listdir/stat/mkdir/remove/rename/getcwd/chdir as `os`
 // re-exports of the VFS module's functions — every one of them is behind
 // `#if MICROPY_VFS` in modos.c's globals table. This port has no VFS on
-// purpose: gucOS's kernel already owns mounting (todos/KERNEL.md), and a
+// purpose: gucOS's kernel already owns mounting (docs/KERNEL.md), and a
 // second mount table inside MicroPython would be two filesystems disagreeing
 // about the same paths. R1 hit the same wall for file objects and resolved it
 // the same way — file.c is upstream's extmod/vfs_posix_file.c lifted out of
@@ -505,7 +505,7 @@ static mp_obj_t path_abspath(mp_obj_t path_in) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_1(path_abspath_obj, path_abspath);
 
-// realpath resolves symlinks for real (libc realpath, todos/0263). It is the
+// realpath resolves symlinks for real (libc realpath, docs/archive/0263). It is the
 // answer when normpath's lexical ".." would be wrong.
 static mp_obj_t path_realpath(mp_obj_t path_in) {
     char buf[MICROPY_ALLOC_PATH_MAX + 1];

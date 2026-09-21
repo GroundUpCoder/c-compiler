@@ -1,5 +1,5 @@
 /*
- * tfont.c — gucOS port (todos/0119): the TrueType glyph engine rewritten
+ * tfont.c — gucOS port (docs/archive/0119): the TrueType glyph engine rewritten
  * from FreeType 1 (TT_* API, 5-level gray pixmaps) to FreeType 2, keeping
  * upstream's interface and cache design:
  *
@@ -351,7 +351,7 @@ tfc_alloc(code, size, fontname, registry)
 		fprintf(stderr, "no glyph for 0x%04lx in \"%s\"\n",
 			unicode, tfloadedfont[tfcuridx]);
 	/* NO_AUTOHINT: keep pre-autofit rendering now the gucOS freetype
-	 * build registers a hinter (todos/0279). */
+	 * build registers a hinter (docs/archive/0279). */
 	if (FT_Load_Glyph(f, gidx, FT_LOAD_DEFAULT | FT_LOAD_NO_AUTOHINT))
 		return NULL;
 	if (FT_Render_Glyph(f->glyph, FT_RENDER_MODE_NORMAL))

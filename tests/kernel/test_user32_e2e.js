@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 0058 acceptance, headless: the win32 user32 layer (os/win32/user32.c,
-// design todos/WIN32.md) through os/boot.js. Covers:
+// design docs/WIN32.md) through os/boot.js. Covers:
 //   - the classic blocking message loop in main() (GetMessage parks in
 //     host.js __sdl_pump_wait) with the Windows lifecycle ORDER:
 //     WM_CREATE < WM_SIZE < WM_PAINT
@@ -47,7 +47,7 @@ function boot(script) {
 /* ---- session A: the whole interactive story in one boot ---- */
 const out = boot([
   'ctldemo &',
-  // Boot barrier (todos/0154): the agent tree serving a resolvable label means
+  // Boot barrier (docs/archive/0154): the agent tree serving a resolvable label means
   // the app created its controls and reached the GetMessage idle loop — so the
   // WM_CREATE<SIZE<PAINT prints and `ready` are already out, and the window is
   // listed. Replaces the old `sleep 4` guess-wait.
@@ -112,7 +112,7 @@ const out = boot([
   'wmctl click $SID 272 152',
   'wmctl click $SID 272 152',
   'wmctl click $SID 272 50',                     // up arrow
-  // Cursor shapes (todos/0105): move the window to a known origin, then a
+  // Cursor shapes (docs/archive/0105): move the window to a known origin, then a
   // REAL screen-injected motion (wmctl smove) over the Name EDIT (client rect
   // 76,10 180x24) makes user32's update_cursor set the I-beam on the surface;
   // over the transparent "Name:" STATIC it falls to the arrow. The kernel
@@ -324,7 +324,7 @@ check('scrollbar SB_LINEDOWN x2 walks the pos', out.includes('ctldemo: vscroll p
   out.includes('ctldemo: vscroll pos=2'));
 check('scrollbar SB_LINEUP walks back', /vscroll pos=2[\s\S]*vscroll pos=1/.test(out));
 
-/* cursor shapes (todos/0105): hover flips the surface cursor via SetCursor */
+/* cursor shapes (docs/archive/0105): hover flips the surface cursor via SetCursor */
 {
   const curVal = (k) => {
     const m = out.match(new RegExp('^' + k + '=(-?\\d+)', 'm'));
@@ -340,7 +340,7 @@ check('scrollbar SB_LINEUP walks back', /vscroll pos=2[\s\S]*vscroll pos=1/.test
 const mblist = section('mblist');
 check('MessageBox is a second kernel surface titled "About ctldemo"',
   mblist.split('\n').some(l => l.endsWith('\tAbout ctldemo')), mblist);
-/* todos/0281: the MessageBox is a TRANSIENT/owned modal. It must carry the
+/* docs/archive/0281: the MessageBox is a TRANSIENT/owned modal. It must carry the
  * WMP_F_TRANSIENT flag ('U' in wmctl FLAGS) and — the actual bug — get NO
  * taskbar button. wm.c gives a taskbar button to every non-borderless,
  * non-transient top-level; count those in the live list while the modal is up.

@@ -1,5 +1,5 @@
 // BUG: a block-scope compound literal that lost its frame slot was written at
-//      the CALLER's frame base instead (todos/0319). Only the declaration-
+//      the CALLER's frame base instead (docs/archive/0319). Only the declaration-
 //      initializer position actually mis-compiled, but the trigger is generic:
 //      any pass that rewrites the AST node in place can desynchronise the
 //      frame-layout walk from codegen. This is the per-position regression

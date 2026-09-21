@@ -1,4 +1,4 @@
-/* wasm_port.h — the busybox-on-wasm port layer (todos/0005).
+/* wasm_port.h — the busybox-on-wasm port layer (docs/archive/0005).
  *
  * Included from the bottom of libbb.h (port patch), so every busybox TU
  * sees it after all libc + libbb declarations. Two jobs:
@@ -6,7 +6,7 @@
  * 1. Small glibc-isms our libc doesn't carry (mempcpy, sigisemptyset).
  *
  * 2. THE VFORK-ON-__SPAWN SHIM. This platform has no fork and no vfork
- *    (see todos/OS.md, decided) — but it has a CreateProcess-class
+ *    (see docs/OS.md, decided) — but it has a CreateProcess-class
  *    __spawn with declarative fd_actions. hush's NOMMU discipline makes
  *    every vfork child a straight line of journalable operations:
  *    fd moves (dup2/close/open), setpgid/tcsetpgrp, signal tweaks, then
@@ -63,7 +63,7 @@ static ALWAYS_INLINE int sigisemptyset(const sigset_t *s)
 #define setpgrp() setpgid(0, 0)
 /* umask: was shimmed here as a value that round-tripped but did nothing —
  * "the fs layer has no notion of a process umask". The libc has a REAL one
- * now (todos/0382 gap 1) which open/mkdir actually apply, so the shim is
+ * now (docs/archive/0382 gap 1) which open/mkdir actually apply, so the shim is
  * both a duplicate definition and a lie. hush's `umask` builtin now takes
  * effect on files its children create. */
 
@@ -129,7 +129,7 @@ int  pv_sigprocmask(int how, const sigset_t *set, sigset_t *old);
 #define open(...)                 PV_OPEN_PICK(__VA_ARGS__, pv_open3, pv_open2)(__VA_ARGS__)
 #define PV_OPEN_PICK(a, b, c, f, ...) f
 #endif
-/* (Since todos/0035 BOTH binaries link vfork_spawn.c — the coreutils
+/* (Since docs/archive/0035 BOTH binaries link vfork_spawn.c — the coreutils
  * multicall gained the spawn-capable applets (find -exec, xargs, awk,
  * tar, env-exec), so the former PV_NO_INTERCEPT always-fail execvp stub
  * is gone. PV_NO_INTERCEPT remains only for the port's own TUs, which

@@ -42,7 +42,7 @@ const APP_C = `
 #include <string.h>
 #include <unistd.h>
 int main(void) {
-    /* Clipboard is usable without SDL_Init (todos/0090). */
+    /* Clipboard is usable without SDL_Init (docs/archive/0090). */
     SDL_SetClipboardText("GUC-COPY-ONE");
     printf("SET1\\n"); fflush(stdout);
     /* Wait for the embedder to feed the slot (the host->gucOS direction). */

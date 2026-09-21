@@ -32,7 +32,7 @@
 //     LOAD, asserted on ink. #176's premise check proved the cache
 //     limit never gates rendering (it gates retention only; decode is
 //     lazy and unconditional at redraw) — this leg pins that semantic
-//     AND the todos/0410 symptom class (a late-completing large image
+//     AND the docs/archive/0410 symptom class (a late-completing large image
 //     reaching a DONE document must still reflow to nonzero size).
 //
 // Run: node tests/kernel/test_netsurf_content_e2e.js

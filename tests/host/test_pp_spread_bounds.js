@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// todos/0320 regression guard — the preprocessor must not blow the JS stack on
+// docs/archive/0320 regression guard — the preprocessor must not blow the JS stack on
 // a macro that expands to a very large token list.
 //
 // WHY THIS SHAPE, and not a corpus fixture: the failure was

@@ -144,7 +144,7 @@ async function main() {
   check('and wakes on the next tick', woke2 === true);
 
   // ---- 0169: ARMED waiter accounting --------------------------------
-  console.log('ARMED/PARKED (todos/0169):');
+  console.log('ARMED/PARKED (docs/archive/0169):');
   check('ARMED is 0 with no waiter', Atomics.load(p1, K.KP_VSYNC_ARMED) === 0);
   let woke3 = false;
   const w3 = client.vsyncWait().then(() => { woke3 = true; });

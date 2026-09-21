@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // libcprobe — compile-probe the builtin libc surface for named symbols.
 //
-// todos/0382 plan step 1 and todos/0325's re-measurement both need the same
+// docs/archive/0382 plan step 1 and docs/archive/0325's re-measurement both need the same
 // thing: an answer to "is symbol X present in compiler.js's builtin headers?"
 // that can be re-run later. Grepping compiler.js answers a different question
 // (is the string there) — this compiles a real TU per probe, so a symbol that
@@ -38,7 +38,7 @@ const compiler = require(path.join(ROOT, 'compiler.js'));
 // `use` is a fragment placed inside main(). It must both NAME the symbol and
 // USE it in a way a declaration alone satisfies — taking the address is the
 // strongest form (it also proves the symbol is a real function and not a
-// function-like macro, which is exactly what todos/0325 Group D needs of the
+// function-like macro, which is exactly what docs/archive/0325 Group D needs of the
 // long-double entry points).
 // ---------------------------------------------------------------------------
 const PROBES = [
@@ -51,11 +51,11 @@ const PROBES = [
   { name: 'CONTROL- nosuchfunc', ctl: 'neg', hdr: ['stdio.h'], use: 'void *p = (void *)&__libcprobe_nosuchfunc; use(p);' },
   { name: 'CONTROL- nosuchtype', ctl: 'neg', hdr: ['sys/types.h'], use: '__libcprobe_nosuchtype_t v = 0; use(&v);' },
 
-  // ---- todos/0382 group 1-2: absent outright (hard blockers) ----
+  // ---- docs/archive/0382 group 1-2: absent outright (hard blockers) ----
   { name: '0382/1 umask', t: '0382', hdr: ['sys/stat.h'], use: 'mode_t m = umask(022); use(&m);' },
   { name: '0382/2 id_t', t: '0382', hdr: ['sys/types.h'], use: 'id_t v = 0; use(&v);' },
 
-  // ---- todos/0382 group 3: mis-headered ----
+  // ---- docs/archive/0382 group 3: mis-headered ----
   // The gap is NOT "strcasecmp is missing" — it is in <strings.h> already.
   // It is that <string.h> alone does not reach it, which is what glibc/musl
   // (and therefore portable code like libzip) rely on.
@@ -66,7 +66,7 @@ const PROBES = [
   // POSIX-correct include set linked only by accident of <stdio.h> also being there.
   { name: '0382/3b open via fcntl.h', t: '0382', hdr: ['fcntl.h'], use: 'void *p = (void *)&open; use(p);' },
 
-  // ---- todos/0382 group 4-9 / todos/0325 Group B overlap ----
+  // ---- docs/archive/0382 group 4-9 / docs/archive/0325 Group B overlap ----
   { name: '0382/4 gmtime_r', t: '0382+0325A', hdr: ['time.h'], use: 'void *p = (void *)&gmtime_r; use(p);' },
   { name: '0382/5 timegm', t: '0382+0325B', hdr: ['time.h'], use: 'void *p = (void *)&timegm; use(p);' },
   { name: '0382/6 tzset', t: '0382+0325A', hdr: ['time.h'], use: 'void *p = (void *)&tzset; use(p);' },
@@ -77,7 +77,7 @@ const PROBES = [
   { name: '0382/rd ctime_r', t: '0382', hdr: ['time.h'], use: 'void *p = (void *)&ctime_r; use(p);' },
   { name: '0382/rd asctime_r', t: '0382', hdr: ['time.h'], use: 'void *p = (void *)&asctime_r; use(p);' },
 
-  // ---- todos/0325 Group A: no configure escape ----
+  // ---- docs/archive/0325 Group A: no configure escape ----
   { name: '0325A fma', t: '0325A', hdr: ['math.h'], use: 'void *p = (void *)&fma; use(p);' },
   { name: '0325A clock_getres', t: '0325A', hdr: ['time.h'], use: 'void *p = (void *)&clock_getres; use(p);' },
   { name: '0325A wcstol', t: '0325A', hdr: ['wchar.h'], use: 'void *p = (void *)&wcstol; use(p);' },
@@ -85,7 +85,7 @@ const PROBES = [
   { name: '0325A clockid_t via sys/types.h', t: '0325A', hdr: ['sys/types.h'], use: 'clockid_t c = 0; use(&c);' },
   { name: '0325A struct timespec via sys/types.h', t: '0325A', hdr: ['sys/types.h'], use: 'struct timespec ts; ts.tv_sec = 0; use(&ts);' },
 
-  // ---- todos/0325 Group B ----
+  // ---- docs/archive/0325 Group B ----
   { name: '0325B tm_zone', t: '0325B', hdr: ['time.h'], use: 'struct tm t; t.tm_zone = "UTC"; use(&t);' },
   { name: '0325B explicit_bzero', t: '0325B', hdr: ['string.h'], use: 'void *p = (void *)&explicit_bzero; use(p);' },
   { name: '0325B memrchr', t: '0325B', hdr: ['string.h'], use: 'void *p = (void *)&memrchr; use(p);' },

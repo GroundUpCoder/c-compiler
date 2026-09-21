@@ -159,7 +159,7 @@ try {
     '#uploadbtn', '#vtbar', '#wrap', '#terminal', '#desktop', '#status',
     '#guard', '#guardRetry', '#keystrip'];
   // The deliberate exceptions — these own every touch and must NOT be folded
-  // into the blanket rule (todos/0212; the desktop/OSK gesture layers). The
+  // into the blanket rule (docs/archive/0212; the desktop/OSK gesture layers). The
   // OSK is `none` across its WHOLE subtree: keys and the gaps between them
   // alike. That narrows the keep-pinch contract inside the keyboard rectangle
   // on purpose (a pinch cannot start on the OSK; it still can over the

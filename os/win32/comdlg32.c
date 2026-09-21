@@ -1,4 +1,4 @@
-/* comdlg32.c — the common dialogs (todos/0048, design todos/WIN32.md).
+/* comdlg32.c — the common dialogs (docs/archive/0048, design docs/WIN32.md).
  *
  * GetOpenFileNameW/GetSaveFileNameW are REAL: a modal file-browser window
  * (own class, the MessageBox owner-disable + pump shape via public user32
@@ -17,7 +17,7 @@
  * notepad protocol end to end. Direction is always DOWN (the up/down
  * radios are not worth their pixels here); Match case is honored.
  *
- * ChooseFontW is REAL (todos/0223): the file-dialog modal shape with a
+ * ChooseFontW is REAL (docs/archive/0223): the file-dialog modal shape with a
  * face LISTBOX enumerating gdi32's baked family table (C2/#282 —
  * __gdi_font_families, never a parallel list), a style LISTBOX
  * (Regular/Italic/Bold/Bold Italic — #330, the C1 axes gdi32 renders),
@@ -35,7 +35,7 @@
  * PrintDlgW / PageSetupDlgW return FALSE (the user "cancelled"): there is
  * no printer — a cancel is the honest answer, and the apps' cancel paths
  * are exactly the well-tested ones. Both first tell the USER via a
- * MessageBox (todos/0145 — a stderr report is invisible to a GUI click;
+ * MessageBox (docs/archive/0145 — a stderr report is invisible to a GUI click;
  * PD_RETURNDEFAULT/PSD_RETURNDEFAULT keep the promised no-UI quiet
  * cancel). Agent-drivable throughout (OS.md
  * pillar): `wmctl settext EDIT:n` + `wmctl click OK|Open|Save|"Find Next"`. */
@@ -111,7 +111,7 @@ static void fd_refill(void) {
      * heap-scoped to the refill — the old static names[512][240] put
      * 120 KB of BSS in every app linking the veneer, dialog opened or
      * not (and it's too big for the wasm stack). Every way the listing
-     * can come up short is a VISIBLE row (todos/0255): an OOM or an
+     * can come up short is a VISIBLE row (docs/archive/0255): an OOM or an
      * unopenable directory must not read as an empty one, and a
      * capacity-clipped listing must not read as complete. */
     ld_ent *ents = (ld_ent *)malloc(FD_MAX_ENT * sizeof *ents);
@@ -290,7 +290,7 @@ static void fd_classes(void) {
 static BOOL file_dialog(OPENFILENAMEW *ofn, int saving) {
     if (!ofn || !ofn->lpstrFile || ofn->nMaxFile < 2) return FALSE;
     /* hooks/templates are documented-deliberate stubs (header note; the
-     * report-once honesty pass, todos/0145): the caller asked for one, the
+     * report-once honesty pass, docs/archive/0145): the caller asked for one, the
      * dialog it gets is the plain browser. */
     if ((ofn->Flags & (OFN_ENABLEHOOK | OFN_ENABLETEMPLATE)) ||
         ofn->lpfnHook || ofn->lpTemplateName)
@@ -458,7 +458,7 @@ static HWND fr_dialog(FINDREPLACEW *fr, int replace) {
     if (!fr || !fr->hwndOwner) return NULL;
     /* direction is always down (header note — the up/down radios are not
      * worth their pixels); report-once so search-up being unreachable is
-     * inventoried, not implicit (todos/0145). */
+     * inventoried, not implicit (docs/archive/0145). */
     WIN32_UNSUPPORTED("FindText/ReplaceText: search direction is always "
                       "down (no up/down radios)");
     static int registered;
@@ -527,7 +527,7 @@ static HWND fr_dialog(FINDREPLACEW *fr, int replace) {
 HWND FindTextW(FINDREPLACEW *fr) { return fr_dialog(fr, 0); }
 HWND ReplaceTextW(FINDREPLACEW *fr) { return fr_dialog(fr, 1); }
 
-/* ---- the font dialog (todos/0223; multi-face since C2/#282) ----
+/* ---- the font dialog (docs/archive/0223; multi-face since C2/#282) ----
  * The file_dialog shape verbatim: own class + WS_POPUP top-level, child
  * controls, the MessageBox owner-disable + local pump. The face list is
  * gdi32's family table (__gdi_font_families), a size EDIT + the classic
@@ -882,7 +882,7 @@ BOOL ChooseFontW(CHOOSEFONTW *cf) {
 }
 
 /* ---- the honest cancels ----
- * Each reports loudly (0211 fail-loud policy) AND tells the USER (todos/
+ * Each reports loudly (0211 fail-loud policy) AND tells the USER (docs/
  * 0145): the stderr line inventories the stub for a developer, but a GUI
  * user who clicks File>Print sees no stderr — without the box the click is
  * a silent no-op. A MessageBox, then FALSE (the well-tested cancel path).
@@ -909,7 +909,7 @@ BOOL PageSetupDlgW(PAGESETUPDLGW *psd) {
 }
 DWORD CommDlgExtendedError(void) {
     /* no extended-error tracking — report-once so "always 0" is an
-     * inventoried stub, not an invisible one (todos/0145) */
+     * inventoried stub, not an invisible one (docs/archive/0145) */
     WIN32_UNSUPPORTED("CommDlgExtendedError: not tracked (always 0)");
     return 0;
 }

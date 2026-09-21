@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// AF_UNIX sockets end-to-end (todos/0008): real C processes in
+// AF_UNIX sockets end-to-end (docs/archive/0008): real C processes in
 // worker_threads over the brokered kernel prove the acceptance criteria:
 //   - socket/bind/listen/accept/connect/send/recv between two SPAWNED
 //     processes (the server's accept PARKS and is woken by the client's

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Pty end-to-end (todos/0020): real C processes in worker_threads over the
+// Pty end-to-end (docs/archive/0020): real C processes in worker_threads over the
 // brokered kernel prove the C surface — openpty() + TIOCSWINSZ from
 // <pty.h>/<sys/ioctl.h>, spawn-on-slave via fd_actions, the line
 // discipline round trip (ICRNL in, echo + ONLCR out), TIOCGWINSZ through

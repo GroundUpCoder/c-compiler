@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Kernel-socket→input-ring wake end-to-end (todos/0168 commit 1, IDLE-POWER
+// Kernel-socket→input-ring wake end-to-end (docs/archive/0168 commit 1, IDLE-POWER
 // piece W's kernel prerequisite): a WMP subscriber parked on its input ring
 // via __sdl_pump_wait (the seam wm.c's event loop and user32's GetMessage
 // use) must wake PROMPTLY when the kernel-held peer sends it socket data —

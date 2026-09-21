@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Unified wait end-to-end (todos/0178): a REAL C program compiled by
+// Unified wait end-to-end (docs/archive/0178): a REAL C program compiled by
 // compiler.js runs as a worker_thread under the kernel and parks in the
 // kernel FS_WAIT RPC via the __wait host import — ONE deferred park over
 // {fds} ⊕ the input ring ⊕ a timeout, interruptible by signals. Proves:
@@ -88,7 +88,7 @@ int main(void) {
     SDL_Window *w = SDL_CreateWindow("waitbox", 64, 48, 0);
     if (!w) { printf("NOWIN\\n"); return 3; }
     signal(SIGUSR1, on_usr1);
-    /* todos/0256: creating the window takes focus and the owner focus pair
+    /* docs/archive/0256: creating the window takes focus and the owner focus pair
        rides the ring — consume the initial FOCUS_GAINED (and pin that it
        arrives) so the park legs below start from a drained queue. */
     why = __wait(NULL, 0, 1, 2000);
@@ -201,7 +201,7 @@ const watchdog = setTimeout(() => {
 
   // L4: ring wake out of an infinite park.
   await waitOut('PARK4');
-  check('create-steal FOCUS_GAINED arrived (todos/0256) and was consumed',
+  check('create-steal FOCUS_GAINED arrived (docs/archive/0256) and was consumed',
     field('FG', 'why') === 2 && field('FG', 'isfg') === 1, line('FG'));
   const sid = kernel.wmList().find((s) => s.title === 'waitbox').sid;
   await sleep(1200);                              // quiet interval: no phantom wake

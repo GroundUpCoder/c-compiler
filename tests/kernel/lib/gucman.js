@@ -42,7 +42,7 @@ function ensureMinimalImage(log) {
  * caller hands to startServer, `index` the parsed index.json. `need` = package
  * names the caller requires.
  *
- * PER-TEST repo, SHARED payload store (todos/0388). These e2es used to build
+ * PER-TEST repo, SHARED payload store (docs/archive/0388). These e2es used to build
  * into the one <repo>/dist/packages, which made the repo shared mutable state:
  * a base build's orphan prune deletes every payload its index doesn't name, so
  * at -j2 a sibling test would rewrite the index and delete the -clang payloads
@@ -103,7 +103,7 @@ function ensurePackages(need, opts) {
 }
 
 /* A producer SUPERSET repo (`mkpkg --<producer>` over a sibling root —
- * todos/0416: 'clang' and 'rust' are peers under one rule). Same isolation;
+ * docs/archive/0416: 'clang' and 'rust' are peers under one rule). Same isolation;
  * the only difference is the definition set, which is exactly what used to
  * collide with the base one. */
 function ensureProducerPackages(producer, need, siblingRoot, opts) {

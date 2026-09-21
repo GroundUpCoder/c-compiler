@@ -1,4 +1,4 @@
-/* deck.c — /bin/deck, the gucOS slide presenter (todos/0284;
+/* deck.c — /bin/deck, the gucOS slide presenter (docs/archive/0284;
  * design ~/git/meta/gucos/notes/slide-tool-design.md §1). Reads the
  * frozen .deck v1 JSON (model.h), renders through the supersample-AA
  * rasterizer (raster.h) + the fontcore text layer (text.h), presents in
@@ -41,7 +41,7 @@
 #include "raster.h"
 #include "text.h"
 
-/* The kernel's unified WAIT (todos/0178): fds ⊕ input ring ⊕ timeout —
+/* The kernel's unified WAIT (docs/archive/0178): fds ⊕ input ring ⊕ timeout —
  * how the watch fd composes into the SDL idle park (sdlx.c precedent).
  * -2 = no kernel WAIT in this flavor (fall back to the plain park). */
 __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
@@ -524,7 +524,7 @@ static void key_down(SDL_Keycode k, SDL_Keymod mod) {
 }
 
 /* Frame callback (the estate's SDL app model — sent/mgp): drain events,
- * apply state, and when settled park on the input ring (todos/0161,
+ * apply state, and when settled park on the input ring (docs/archive/0161,
  * peek semantics: a waking event stays queued for the next frame). */
 static void frame_cb(void) {
     SDL_Event ev;

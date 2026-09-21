@@ -1,4 +1,4 @@
-/* text.c — deck's fontcore adapter + wrap layout (todos/0284). The
+/* text.c — deck's fontcore adapter + wrap layout (docs/archive/0284). The
  * adapter is ksvc's multi-size shape (per-px slots over one shared
  * face 0, resize-on-demand) minus the bold knob; the layout is deck's
  * own: '\n' hard breaks, greedy word wrap, align/valign, overflow

@@ -1,4 +1,4 @@
-/* paint.c — the Paint accessory (todos/0107, design todos/WIN32.md): the
+/* paint.c — the Paint accessory (docs/archive/0107, design docs/WIN32.md): the
  * first *creative* app on the veneer (gdi32 0057, user32 0058/0068,
  * comdlg32 0048). A small mspaint-class program — NOT a ReactOS port
  * (mspaint is C++, the Solitaire rule) — so it exercises the whole stack:
@@ -652,7 +652,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_WIDTH3: set_width(3); return 0;
         case ID_WIDTH5: set_width(5); return 0;
         case ID_ABOUT:
-            MessageBox(h, "Paint — the todos/0107 gdi32 accessory.", "About Paint", MB_OK);
+            MessageBox(h, "Paint — the docs/archive/0107 gdi32 accessory.", "About Paint", MB_OK);
             return 0;
         case ID_EXIT:   DestroyWindow(h); return 0;
         }

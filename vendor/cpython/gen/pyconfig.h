@@ -1481,7 +1481,7 @@
 /* #undef HAVE_TERM_H */
 
 /* Define to 1 if you have the `timegm' function. */
-/* timegm grew into the libc at todos/0325 Group B (#544 re-vendor turned it
+/* timegm grew into the libc at docs/archive/0325 Group B (#544 re-vendor turned it
    on): both toolchains now link the real one, which — unlike timemodule.c's
    static fallback — is correct for tm_year < 1970. */
 #define HAVE_TIMEGM 1
@@ -2048,7 +2048,7 @@
 
 #include "ccprobe_libc.h"
 
-/* todos/0340: HAVE_SIGSET_T is absent from this configure's output entirely
+/* docs/archive/0340: HAVE_SIGSET_T is absent from this configure's output entirely
    (not "#undef" — never emitted), so posixmodule took the branch where
    os.posix_spawn(setsigdef=…) raises NotImplementedError. That branch is what
    subprocess hits on its DEFAULT restore_signals=True, i.e. every

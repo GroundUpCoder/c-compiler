@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Interval timers end-to-end (todos/0044): real C programs under a live
+// Interval timers end-to-end (docs/archive/0044): real C programs under a live
 // kernel proving alarm()/setitimer(ITIMER_REAL) -> SIGALRM through the
 // cooperative delivery path — the classic alarm-timeout idiom (EINTR on a
 // blocked pipe read), repeating it_interval fires, getitimer remaining

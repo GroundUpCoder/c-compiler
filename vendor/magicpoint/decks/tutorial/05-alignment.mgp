@@ -1,4 +1,4 @@
-%% 05-alignment.mgp - learn MagicPoint on gucOS, deck 5 of 10 (todos/0202).
+%% 05-alignment.mgp - learn MagicPoint on gucOS, deck 5 of 10 (docs/archive/0202).
 %% Justification (%left/%center/%right/%leftfill) and drawing areas (%area).
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"
 %default 1 area 90 90, size 2, fore "white", back "DarkGreen", font "standard"

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// NetSurf vendored-tree JavaScript smoke: the Lane A gate (todos/NETSURF-JS.md).
+// NetSurf vendored-tree JavaScript smoke: the Lane A gate (docs/NETSURF-JS.md).
 //
 // Builds the monkey frontend (same wasm as smoke.mjs — JS is compiled in
 // unconditionally now; `enable_javascript` is what turns it on) and drives the
@@ -35,7 +35,7 @@
 //                           plot NOTHING changing — a demo that passes with
 //                           and without the change proves nothing
 //
-// …and the Lane C legs (todos/0289), which need UI event coverage:
+// …and the Lane C legs (docs/archive/0289), which need UI event coverage:
 //
 //   9. paint/index.html     mousedown/mousemove/mouseup exist AND carry
 //                           coordinates: every coordinate the page reports
@@ -58,8 +58,8 @@
 //                           printed (not guessed), palette switching and
 //                           a clean stop
 //
-// …and the pointer-path legs (todos/0419 + todos/0420; the kill-switch
-// convention restored by todos/0431).  These drive test/ pages, not demos —
+// …and the pointer-path legs (docs/archive/0419 + docs/archive/0420; the kill-switch
+// convention restored by docs/archive/0431).  These drive test/ pages, not demos —
 // the full pointer semantics are the in-OS test_netsurf_pointer_e2e.js;
 // these legs exist to anchor the A/B:
 //

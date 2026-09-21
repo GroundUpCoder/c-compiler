@@ -1,4 +1,4 @@
-// kernel.js — the process control plane (owner side). Design: todos/KERNEL.md.
+// kernel.js — the process control plane (owner side). Design: docs/KERNEL.md.
 //
 // This is the per-SYSTEM half of the OS: process table, spawn/wait/kill,
 // signal routing, and (in later phases) tty line discipline and pipe
@@ -11,14 +11,14 @@
 //     orphan reparenting to pid 1, pid-1 exit halts the system); the
 //     per-process kernel page (SAB) + JSON block-RPC transport; KernelClient
 //     plugging into host.js's spawnHooks seam; spawn/wait/kill/compile.
-//   Phase 2 (todos/0001) — asynchronous signal delivery: SIGPEND/SIGBLOCK
+//   Phase 2 (docs/archive/0001) — asynchronous signal delivery: SIGPEND/SIGBLOCK
 //     live on the kernel page, host.js claims deliverable bits at libc safe
 //     points and runs C handlers via the __sig_dispatch export; blocking
 //     WAIT interrupts with EINTR (krpc-intr); SIGCHLD on child exit; the
 //     ordered exit handshake (OP.EXIT).
-//   Phase 3 (todos/0002) — the Tty object: kernel-side line discipline,
+//   Phase 3 (docs/archive/0002) — the Tty object: kernel-side line discipline,
 //     termios RPCs, control chars as fg-pgroup signals (Ctrl-C = SIGINT).
-//   Phase 4 (todos/0003) — pipes as OFDs (PIPE_CREATE + kernel-side buffers,
+//   Phase 4 (docs/archive/0003) — pipes as OFDs (PIPE_CREATE + kernel-side buffers,
 //     blocking read/write via deferred RPCs, EOF/EPIPE + SIGPIPE, select
 //     readiness) and job control (STOPPED state, cooperative stop at safe
 //     points via KP_FLAGS.STOP, SIGCONT resume, WUNTRACED/WCONTINUED,
@@ -52,7 +52,7 @@
  *   [7] KP_RPC_KIND   payload encoding: RPCK_JSON | RPCK_RAW.
  *   [8..] payload     UTF-8 JSON (request, then response, in place),
  *                     up to KP_PAYLOAD_CAP — the page tail past it holds:
- *   [N-16..N-5] the vDSO block (todos/0179) — kernel-written, process-read
+ *   [N-16..N-5] the vDSO block (docs/archive/0179) — kernel-written, process-read
  *                      state PUBLISHED instead of served (KERNEL.md "What
  *                      may leave the kernel"). One seqlock word guards the
  *                      rest: the kernel (the single writer, one thread by
@@ -73,18 +73,18 @@
  *     [N-9]  KP_VD_SCREEN_W   screen dims (ctor default, then wmSetScreen)
  *     [N-8]  KP_VD_SCREEN_H
  *     [N-7..N-5] reserved (published zero)
- *   [N-4] KP_VSYNC_ARMED  vsync-waiter count (todos/0169): the process side
+ *   [N-4] KP_VSYNC_ARMED  vsync-waiter count (docs/archive/0169): the process side
  *                      Atomics.add's it BEFORE parking on KP_VSYNC_SEQ and
  *                      subtracts on resolve; the compositor's park decision
  *                      re-reads it AFTER publishing KP_COMP_PARKED — the
  *                      Dekker pair that makes a lost waiter impossible.
  *   [N-3] KP_COMP_PARKED  1 = the compositor's rAF is parked, no ticks are
- *                      coming (todos/0169). The process side re-reads it
+ *                      coming (docs/archive/0169). The process side re-reads it
  *                      after publishing ARMED / a present's seq bump and
  *                      posts {type:'want-frame'} when set — the doorbell
  *                      that wakes the on-demand compositor.
  *   [N-2] KP_VSYNC_EN  1 = the embedder broadcasts vsync ticks (set once
- *                      at spawn from Kernel({vsync}); todos/0100).
+ *                      at spawn from Kernel({vsync}); docs/archive/0100).
  *   [N-1] KP_VSYNC_SEQ tick counter — vsyncTick() bumps + notifies it per
  *                      compositor frame; host.js's surface backend paces
  *                      SDL frame loops off it. No ticks (hidden tab) =
@@ -103,11 +103,11 @@ var KP_RPC_LEN = 6;
 var KP_RPC_KIND = 7;               // payload encoding: RPCK_JSON | RPCK_RAW
 var KP_PAYLOAD_OFF = 32;           // byte offset of the payload region
 var KP_SIZE = 64 * 1024;           // fits compile stdout/stderr comfortably
-var KP_VSYNC_ARMED = (KP_SIZE >> 2) - 4;   // tail words (todos/0169): vsync
+var KP_VSYNC_ARMED = (KP_SIZE >> 2) - 4;   // tail words (docs/archive/0169): vsync
 var KP_COMP_PARKED = (KP_SIZE >> 2) - 3;   // waiter count + compositor-parked flag
-var KP_VSYNC_EN = (KP_SIZE >> 2) - 2;   // tail words (todos/0100): vsync
+var KP_VSYNC_EN = (KP_SIZE >> 2) - 2;   // tail words (docs/archive/0100): vsync
 var KP_VSYNC_SEQ = (KP_SIZE >> 2) - 1;  // advertise flag + tick counter
-// vDSO block (todos/0179): seqlock-published kernel state, see layout above.
+// vDSO block (docs/archive/0179): seqlock-published kernel state, see layout above.
 var KP_VD_SEQ      = (KP_SIZE >> 2) - 16;
 var KP_VD_PID      = (KP_SIZE >> 2) - 15;
 var KP_VD_PPID     = (KP_SIZE >> 2) - 14;
@@ -120,7 +120,7 @@ var KP_VD_SCREEN_H = (KP_SIZE >> 2) - 8;
 var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF - 64;   // payload stops short of the
                                    // 16 tail words (vDSO block + vsync words)
 /* Bulk-lane chunk sizes — DERIVED from KP_PAYLOAD_CAP, never restated
- * (todos/0235). Byte-stream RPCs move at most one payload per round trip;
+ * (docs/archive/0235). Byte-stream RPCs move at most one payload per round trip;
  * each lane reserves framing headroom under the cap and rounds down to its
  * historical granule, so a future page-size change reaches every chunking
  * site from this one line:
@@ -131,7 +131,7 @@ var KP_PAYLOAD_CAP = KP_SIZE - KP_PAYLOAD_OFF - 64;   // payload stops short of 
  *    (frame headers ≤ 12 bytes; granule 16K → 49152 today). Published
  *    across the process boundary as spawnHooks().payloadChunk, so host.js
  *    never restates the kernel-page layout.
- *  - KP_DIR_PAGE — FS_OPENDIR/FS_READDIR entry pages (todos/0241). A JSON
+ *  - KP_DIR_PAGE — FS_OPENDIR/FS_READDIR entry pages (docs/archive/0241). A JSON
  *    lane, so the budget bounds the MEASURED per-entry bytes (UTF-8 of
  *    each entry's JSON, +1 for the array comma); 64 bytes reserves the
  *    {"entries":[…],"more":N} reply envelope. Kernel-internal — the
@@ -148,9 +148,9 @@ var KF_STOP = 1;                   // KP_FLAGS bit0: park at the next safe point
 var RPCK_JSON = 0, RPCK_RAW = 1;   // RAW: fs read/write bulk bytes — no JSON,
                                    // no structured clone, one memcpy each way
 
-/* Opcode space (todos/KERNEL.md): 0x00xx process, 0x01xx tty, 0x02xx pipes,
+/* Opcode space (docs/KERNEL.md): 0x00xx process, 0x01xx tty, 0x02xx pipes,
  * 0x03xx misc, 0x04xx brokered fs, 0x05xx AF_UNIX sockets, 0x06xx HTTP
- * transport (todos/0172, fetch-backed), 0x1xxx reserved for WM surfaces.
+ * transport (docs/archive/0172, fetch-backed), 0x1xxx reserved for WM surfaces.
  * Only the ops the current phase implements are dispatched; the rest
  * respond ENOSYS. */
 var OP = {
@@ -163,8 +163,8 @@ var OP = {
   SETSID: 0x0007,
   SIGDISP: 0x0008,
   SIGMASK: 0x0009,   // reserved: Phase 2
-  GETSID: 0x000A,    // libc getsid() (todos/0043 — pgrep -s 0 wants it)
-  // Interval timers (todos/0044): ONE real-time timer per process (POSIX
+  GETSID: 0x000A,    // libc getsid() (docs/archive/0043 — pgrep -s 0 wants it)
+  // Interval timers (docs/archive/0044): ONE real-time timer per process (POSIX
   // ITIMER_REAL); expiry posts SIGALRM through the ordinary SIGPEND path.
   // ms resolution over the wire; VIRTUAL/PROF answer EINVAL (no CPU
   // accounting — fail loud, documented).
@@ -174,7 +174,7 @@ var OP = {
   TCSETATTR: 0x0102,
   TCGETPGRP: 0x0103,
   TCSETPGRP: 0x0104,
-  // Ptys (todos/0020): PTY_CREATE makes a master/slave pair — the slave is
+  // Ptys (docs/archive/0020): PTY_CREATE makes a master/slave pair — the slave is
   // a full Tty (line discipline reused verbatim); TIOCSWINSZ is the master
   // side's resize (winsize words + SIGWINCH to the pty's fg pgroup).
   TIOCSWINSZ: 0x0105,
@@ -183,17 +183,17 @@ var OP = {
   // PIPE_REF/CLOSE/WAIT/NOTIFY are subsumed by the kernel-owned fd layer
   // (OFD refcounts + FS_READ/FS_WRITE/FS_CLOSE + the doorbell).
   PIPE_CREATE: 0x0201,
-  // SPSC fast-path doorbell (todos/0181): a fast end that committed a ring
+  // SPSC fast-path doorbell (docs/archive/0181): a fast end that committed a ring
   // op while the peer's PR_RWAIT/PR_WWAIT flag was up rings the kernel so
   // the parked peer (FS_WAIT / a brokered stream op) is re-served. With
   // {epipe:1} the caller hit PRF_RGONE locally and asks for its own
   // SIGPIPE (write-to-closed-pipe semantics, one RPC on the error path).
   PIPE_KICK: 0x0202,
   COMPILE: 0x0301,
-  // System clipboard (todos/0090): ONE kernel-held slot {fmt, bytes} so
+  // System clipboard (docs/archive/0090): ONE kernel-held slot {fmt, bytes} so
   // copy/paste crosses processes and survives the writer exiting (Win95
   // semantics — one slot, no history). fmt 1 = UTF-8 text; the tag exists
-  // so CF_BITMAP / file lists (todos/0092) can ride the same slot later.
+  // so CF_BITMAP / file lists (docs/archive/0092) can ride the same slot later.
   // Payloads chunk through the 64KB kernel page: SET is a RAW request
   // [u32 fmt][u32 last][u32 off][bytes...] staged per-pcb and committed
   // only on last (a dying writer never leaves a torn slot); GET is JSON
@@ -205,7 +205,7 @@ var OP = {
   // (opts.onClipRead — the clipboard seam, see the OP.CLIP_GET dispatch).
   CLIP_SET: 0x0302,
   CLIP_GET: 0x0303,
-  // Egress (todos/0398): gucOS -> host file transfer. RAW request, textual —
+  // Egress (docs/archive/0398): gucOS -> host file transfer. RAW request, textual —
   // a "download\n" | "saveas\n" disposition header line ("clipboard\n" is
   // RESERVED for a future file-flavored host clipboard write), then one
   // absolute path per '\n'-terminated line (the FO_CLIP_FMT=2 list shape).
@@ -228,7 +228,7 @@ var OP = {
   FS_GETCWD: 0x0415, FS_DUP: 0x0416, FS_DUP2: 0x0417, FS_OPENDIR: 0x0418,
   FS_REALPATH: 0x0419, FS_UTIME: 0x041A, FS_FUTIME: 0x041B, FS_ISATTY: 0x041C,
   FS_SELECT: 0x041D, FS_FCNTL_DUPFD: 0x041E, FS_FSYNC: 0x041F,
-  // FS_READDIR (todos/0241): the big-directory page fetch. FS_OPENDIR
+  // FS_READDIR (docs/archive/0241): the big-directory page fetch. FS_OPENDIR
   // returns the first page of entries under KP_DIR_PAGE; when more remain
   // it parks the open backend handle behind a per-process cursor id
   // (reply `more`), and FS_READDIR {dir} drains it page by page — the
@@ -246,19 +246,19 @@ var OP = {
   // rename-over-save trap is structurally absent. flags is reserved
   // (FSWF_RECURSIVE spec'd as a prefix compare; wired on first consumer).
   FS_WATCH_OPEN: 0x0422,
-  // Unified wait (todos/0178): ONE deferred park over fds ⊕ the input ring
+  // Unified wait (docs/archive/0178): ONE deferred park over fds ⊕ the input ring
   // ⊕ a timeout, interruptible by signals (krpc-intr → EINTR) — the only
   // sanctioned way to sleep on multiple sources (KERNEL.md single-writer
   // rule). Readiness-check and park are atomic kernel-side, so the
   // check→park lost-wakeup class (the 0168 kick + pre-park select era)
   // is structurally impossible.
   FS_WAIT: 0x0420,
-  // 0x05xx — AF_UNIX sockets (todos/0008). Stream-only; data flows through
+  // 0x05xx — AF_UNIX sockets (docs/archive/0008). Stream-only; data flows through
   // FS_READ/FS_WRITE/FS_CLOSE/FS_SELECT like every other OFD kind.
   SOCK_SOCKET: 0x0501, SOCK_BIND: 0x0502, SOCK_LISTEN: 0x0503,
   SOCK_ACCEPT: 0x0504, SOCK_CONNECT: 0x0505, SOCK_PAIR: 0x0506,
   SOCK_SHUTDOWN: 0x0507,
-  // 0x06xx — HTTP transport (todos/0172; fd-shaped since todos/0417).
+  // 0x06xx — HTTP transport (docs/archive/0172; fd-shaped since docs/archive/0417).
   // Fetch-shaped, one transfer per OFD: HTTP_BODY stages an optional request
   // body (RAW [u32 off][bytes], contiguous like CLIP_SET), HTTP_OPEN (JSON
   // {method,url,headers[],headersMs,idleMs}) consumes it, kicks off the
@@ -270,8 +270,8 @@ var OP = {
   // the readability leg it satisfies re-arms only on body progress). Two
   // kernel deadlines bound every transfer (headers + idle; expiry =
   // ETIMEDOUT on the error leg). Not a socket layer (the browser can't
-  // do raw TCP); TLS is the fetch stack's. Semantics: todos/0172 +
-  // todos/0417 + the "HTTP transport" section in KERNEL.md.
+  // do raw TCP); TLS is the fetch stack's. Semantics: docs/archive/0172 +
+  // docs/archive/0417 + the "HTTP transport" section in KERNEL.md.
   // 0x0604 (HTTP_READ) and 0x0605 (HTTP_CLOSE) are RETIRED by 0417 —
   // FS_READ/FS_CLOSE serve their roles; the opcodes are never reused.
   // HTTP_ERROR (#392) is the error-TEXT peek: {fd} -> {error, errno} — the
@@ -281,11 +281,11 @@ var OP = {
   // bridge, a bad URL) died in a host-side console.error.
   HTTP_BODY: 0x0601, HTTP_OPEN: 0x0602, HTTP_STATUS: 0x0603,
   HTTP_ERROR: 0x0606,
-  // 0x1xxx — WM surfaces (todos/WM.md). Control plane only: present rides
+  // 0x1xxx — WM surfaces (docs/WM.md). Control plane only: present rides
   // the surface SAB (flip+seq, mailbox) and gpu-transport frames ride
   // {type:'wm-frame'} messages — never RPCs. 0x1004 stays reserved for a
   // present RPC should damage tracking ever want one.
-  // SURFACE_CONFIGURE (todos/0019) is the client's resize ACK: the kernel
+  // SURFACE_CONFIGURE (docs/archive/0019) is the client's resize ACK: the kernel
   // asks via a WINDOW_RESIZED input-ring event; the client answers with a
   // NEW fb SAB (riding {type:'wm-sabs'}, the create handshake verbatim)
   // whose front buffer already holds the first frame at the new size — the
@@ -298,18 +298,18 @@ var OP = {
   // unknown or backward is ESTALE with no geometry change; a client that
   // cannot allocate the new buffer DECLINES the serial (no SAB) so no
   // pending state leaks. The buffer's header SH_GEN must equal the serial.
-  // SURFACE_SET_FLAGS (todos/0018) updates the surface flag word (bit0
+  // SURFACE_SET_FLAGS (docs/archive/0018) updates the surface flag word (bit0
   // borderless, bit1 relative-mouse, bit2 resizable, bit3 has-alpha —
-  // todos/0063: per-pixel alpha, composited src-over in both composites; bit4
-  // transient/owned — todos/0281, create-only, not settable here);
+  // docs/archive/0063: per-pixel alpha, composited src-over in both composites; bit4
+  // transient/owned — docs/archive/0281, create-only, not settable here);
   // the relative-mouse bit round-trips to the UI bridge as a pointer-lock
   // request
-  // (onPointerLock). The resizable bit (todos/0021, SDL3 semantics: only
+  // (onPointerLock). The resizable bit (docs/archive/0021, SDL3 semantics: only
   // SDL_WINDOW_RESIZABLE windows may be resized) gates every resize path
   // — wmResize, WMP RESIZE. Frame drag zones exist on BOTH kinds since
-  // todos/0024, but dispatch on the bit: resizable -> configure the client;
+  // docs/archive/0024, but dispatch on the bit: resizable -> configure the client;
   // fixed-size -> scale its dst rect (wmSetDst; the app never knows).
-  // SURFACE_RESIZE (todos/0068) is the OWNER-initiated resize (Win32 apps
+  // SURFACE_RESIZE (docs/archive/0068) is the OWNER-initiated resize (Win32 apps
   // size their window to content — winmine per difficulty): same
   // pendingConfigure + WINDOW_RESIZED flow as wmResize, but NOT gated on
   // the resizable bit — that bit protects fixed-size apps from the WM
@@ -318,7 +318,7 @@ var OP = {
   // snaps back to dst == buffer there, like any configure.
   SURFACE_CREATE: 0x1001, SURFACE_DESTROY: 0x1002, SURFACE_SET_TITLE: 0x1003,
   SURFACE_CONFIGURE: 0x1005, SURFACE_SET_FLAGS: 0x1006, SURFACE_RESIZE: 0x1007,
-  // SURFACE_SET_CURSOR (todos/0105): the per-surface client cursor shape (an
+  // SURFACE_SET_CURSOR (docs/archive/0105): the per-surface client cursor shape (an
   // SDL_SystemCursor value; -1 = hidden). The kernel overlays chrome cursors
   // (resize edges) over it on hit test and posts the effective cursor to the
   // UI bridge on every change (onCursor) — the pointer-lock wanted-state
@@ -331,9 +331,9 @@ var OP = {
   // visibility while the owner is hidden or minimized (their own requested
   // state is preserved), and die with it. ownerSid 0 clears the link.
   SURFACE_SET_OWNER: 0x100c,
-  // 0x2xxx — the audio mixer (todos/0017; design: WM.md "Audio mixing").
+  // 0x2xxx — the audio mixer (docs/archive/0017; design: WM.md "Audio mixing").
   // Control plane only: PCM rides the per-process source ring SABs and the
-  // one page-owned output ring — never RPCs. AUDIO_GAIN (todos/0048, the
+  // one page-owned output ring — never RPCs. AUDIO_GAIN (docs/archive/0048, the
   // control panel's volume): master output gain in percent, 0..200;
   // gain < 0 queries. Applied in audioPump before the clamp.
   AUDIO_OPEN: 0x2001, AUDIO_CLOSE: 0x2002, AUDIO_GAIN: 0x2003,
@@ -344,7 +344,7 @@ var OP = {
   PAD_NAME: 0x2101,
 };
 
-/* strace (todos/0046): the decode table IS the OP table — opcode names come
+/* strace (docs/archive/0046): the decode table IS the OP table — opcode names come
  * from the constants above, so a new opcode traces by construction. */
 var OP_NAMES = {};
 for (var opName in OP) OP_NAMES[OP[opName]] = opName;
@@ -375,7 +375,7 @@ var FSW_QUEUE_CAP = 128;   // per-watch-fd bound; overflow = clear + latch
 /* Wait options / status packing — must match <sys/wait.h>. */
 var WNOHANG = 0x01, WUNTRACED = 0x02, WCONTINUED = 0x08;
 
-/* Interval timers (todos/0044) — must match <sys/time.h>. Only the
+/* Interval timers (docs/archive/0044) — must match <sys/time.h>. Only the
  * real-time flavor exists (workers run on their own OS threads, so there
  * is no per-process CPU accounting to back VIRTUAL/PROF). */
 var ITIMER_REAL = 0;
@@ -384,13 +384,13 @@ function W_TERMSIG(sig) { return sig & 0x7f; }
 function W_STOPCODE(sig) { return ((sig & 0xff) << 8) | 0x7f; }
 var W_CONTINUED_STATUS = 0xffff;
 
-/* Pipes (todos/0003): kernel-side buffers — rendezvous, not bulk data.
+/* Pipes (docs/archive/0003): kernel-side buffers — rendezvous, not bulk data.
  * PIPE_ATOMIC mirrors POSIX PIPE_BUF (writes that small never interleave:
  * they defer whole rather than land partially). */
 var PIPE_CAP = 64 * 1024;
 var PIPE_ATOMIC = 512;
 
-/* ---- SPSC pipe rings (todos/0181; KERNEL.md "single-writer rule") ----
+/* ---- SPSC pipe rings (docs/archive/0181; KERNEL.md "single-writer rule") ----
  * A pipe whose creator posted a ring SAB ({type:'pipe-sab'}, the audio-sab
  * handshake) keeps its bytes in that ring IN EVERY MODE — the kernel's own
  * stream ops read/write the ring through the _pipeAvail/_pipeTake/_pipePut
@@ -469,13 +469,13 @@ function pipeRingTake(ring, n) {
   return out;
 }
 
-/* HTTP transport (todos/0172): per-transfer body backpressure threshold.
+/* HTTP transport (docs/archive/0172): per-transfer body backpressure threshold.
  * The async fetch reader pauses once this many bytes are queued and resumes
  * when an FS_READ drains below it — bounded kernel memory regardless of how
  * fast the network delivers vs how slowly the C consumer reads. */
 var HTTP_BUF_CAP = 256 * 1024;
 
-/* HTTP deadlines (todos/0417): kernel DEFAULTS, so a caller that sets
+/* HTTP deadlines (docs/archive/0417): kernel DEFAULTS, so a caller that sets
  * nothing is still bounded. HTTP_OPEN overrides per transfer: headersMs > 0
  * replaces the headers deadline (the response headers must arrive within
  * it); idleMs > 0 replaces the idle deadline (the body must deliver at
@@ -489,7 +489,7 @@ var HTTP_BUF_CAP = 256 * 1024;
 var HTTP_HEADERS_MS = 30 * 1000;
 var HTTP_IDLE_MS = 120 * 1000;
 
-/* ---- strace formatting (todos/0046) ----
+/* ---- strace formatting (docs/archive/0046) ----
  * Pure text: one strace-flavored line per RPC — NAME(k=v, ...) = result.
  * Strings/arrays/previews are capped so a traced `cat` of a big file stays
  * readable and the trace pipe stays small; the caps are presentation only
@@ -551,7 +551,7 @@ function traceVal(v, depth) {
  * past the dispatch turn). */
 function traceArgs(op, req) {
   if (req && req.raw) {
-    // RAW-request ops: FS_WRITE [u32 fd][bytes...], CLIP_SET (todos/0090)
+    // RAW-request ops: FS_WRITE [u32 fd][bytes...], CLIP_SET (docs/archive/0090)
     // [u32 fmt][u32 last][u32 off][bytes...].
     var raw = req.raw;
     if (op === OP.CLIP_SET && raw.length >= 12) {
@@ -588,19 +588,19 @@ function traceResult(resp, rawBytes) {
   return traceVal(resp, 2);
 }
 
-/* Ptys (todos/0020): the slave→master output direction. Sized so a whole
+/* Ptys (docs/archive/0020): the slave→master output direction. Sized so a whole
  * worst-case slave write always fits EVENTUALLY: RemoteFS caps writes at
  * KP_FS_CHUNK bytes and OPOST/ONLCR at most doubles them, so the
  * whole-or-block discipline (a \r\n must never split across a full buffer)
  * can always be satisfied by a draining master. The proof is enforced, not
- * prose (todos/0235): a page-layout change that grows KP_FS_CHUNK past the
+ * prose (docs/archive/0235): a page-layout change that grows KP_FS_CHUNK past the
  * margin fails loud at load instead of silently rotting the discipline. */
 var PTY_OUT_CAP = 256 * 1024;
 if (KP_FS_CHUNK * 2 > PTY_OUT_CAP) {
   throw new Error('PTY_OUT_CAP must hold one ONLCR-doubled RemoteFS write chunk (2*KP_FS_CHUNK)');
 }
 
-/* AF_UNIX sockets (todos/0008): a connection is two pipe-shaped directions
+/* AF_UNIX sockets (docs/archive/0008): a connection is two pipe-shaped directions
  * (same fields, same waiter queues), so the entire blocking/EOF/EPIPE/
  * select machinery is the pipe machinery. */
 function sockDir() {
@@ -610,7 +610,7 @@ function sockDir() {
 var S_IFSOCK_MODE = 0o140000;
 
 /* ============================================================
- * WM surfaces (todos/WM.md; opcodes 0x1xxx as reserved in the design).
+ * WM surfaces (docs/WM.md; opcodes 0x1xxx as reserved in the design).
  *
  * Surface framebuffer SAB — allocated by the PROCESS (host.js), shared to
  * the kernel via a {type:'wm-sabs'} postMessage immediately before the
@@ -668,7 +668,7 @@ var S_IFSOCK_MODE = 0o140000;
  *     host.js drainInput counts-and-skips it, no SDL event surfaces.
  *     key:    [2] scancode [3] keysym [4] mod [5] repeat
  *     motion: [2] x(f32 bits) [3] y(f32 bits) [4] button state mask
- *             [5] relative flag (todos/0018): 1 = [2]/[3] are dx/dy deltas
+ *             [5] relative flag (docs/archive/0018): 1 = [2]/[3] are dx/dy deltas
  *             (pointer-lock motion / injected rel), not positions
  *     button: [2] x(f32 bits) [3] y(f32 bits) [4] button index
  *     wheel:  [2] x(f32 bits) [3] y(f32 bits) [4] direction
@@ -687,7 +687,7 @@ var S_IFSOCK_MODE = 0o140000;
  *   The kernel rings the process doorbell after each write, so
  *   SDL_WaitEvent-style parks wake like every other blocking op; it also
  *   Atomics.notifies IR_WPOS itself so a host parked on the ring (host.js
- *   __sdl_pump_wait — user32's blocking GetMessage, todos/0058) wakes
+ *   __sdl_pump_wait — user32's blocking GetMessage, docs/archive/0058) wakes
  *   without polling.
  * ============================================================ */
 var SH_MAGIC = 0, SH_W = 1, SH_H = 2, SH_FORMAT = 3, SH_FLIP = 4, SH_SEQ = 5,
@@ -711,10 +711,10 @@ var IR_RECORD_WORDS = 8;                     // 32 bytes per event record
 
 /* SDL event type numbers (MUST MATCH <SDL3/SDL_events.h> / host.js
  * sdlEvents): the ring carries them verbatim. WINDOW_RESIZED is the resize
- * request (todos/0019): record words [2]=w [3]=h [4]=configure serial (#790);
+ * request (docs/archive/0019): record words [2]=w [3]=h [4]=configure serial (#790);
  * the client acks with the SURFACE_CONFIGURE RPC naming that serial once it
  * has a frame at the new size, or declines it.
- * FOCUS_GAINED/FOCUS_LOST are the owner focus pair (todos/0256, menu arch
+ * FOCUS_GAINED/FOCUS_LOST are the owner focus pair (docs/archive/0256, menu arch
  * A9): every kernel focus TRANSITION emits LOST to the old owner and GAINED
  * to the new one — by construction, since all _focusSid writes flow through
  * the ONE _wmSetFocus choke point. */
@@ -738,7 +738,7 @@ var WMEV = { WINDOW_SHOWN: 0x202, WINDOW_HIDDEN: 0x203, QUIT: 0x100, WINDOW_RESI
              POPUP_DISMISSED: 0x7101 };
 
 /* ============================================================
- * Audio mixer (todos/0017; design: WM.md "Audio mixing — the kernel sound
+ * Audio mixer (docs/archive/0017; design: WM.md "Audio mixing — the kernel sound
  * server"). Ring layout — MUST MATCH host.js createSharedAudioBuffer
  * (16-byte Int32 header + PCM ring):
  *   [0] AU_WPOS    writePos, masked mod capacity (producer-only cursor)
@@ -764,7 +764,7 @@ var AU_TARGET_MS = 80;                 // output queue depth the pump tops up to
 var AU_OUT_RING_BYTES = 256 * 1024;   // default output ring capacity (~0.68s)
 
 /* ONE published copy of the shared-SAB layout contract (the CD26 tripwire,
- * todos/0235's payloadChunk shape): host.js declares these same offsets
+ * docs/archive/0235's payloadChunk shape): host.js declares these same offsets
  * independently (WMSH_* / WMIR_* / WMEV_* / WMAU_* — it is a standalone
  * module that CANNOT import kernel.js), and drift between the two copies
  * corrupts presents/screenshots/input/audio SILENTLY — no error, just
@@ -787,7 +787,7 @@ var WM_SAB_LAYOUT = {
 };
 
 /* ============================================================
- * The WM protocol (todos/0014) — the kernel-owned AF_UNIX endpoint at
+ * The WM protocol (docs/archive/0014) — the kernel-owned AF_UNIX endpoint at
  * /run/wm.sock. ONE op set exposed twice (WM.md "Agent control channel"):
  * the kernel-JS wm* methods serve the outside (tests, Node agents); this
  * framed protocol serves the inside (/bin/wm policy client, /bin/wmctl).
@@ -801,14 +801,14 @@ var WM_SAB_LAYOUT = {
  * Window record (fixed 80 bytes, WMP_REC_BYTES): sid, pid, x, y, w, h, z,
  * flags (bit0 focused, bit1 minimized, bit2 borderless, bit3 relative-
  * mouse, bit4 resizable), frameSeq, dstW, dstH (the on-screen viewport,
- * todos/0024 — equals w/h unless scaled), layer (todos/0038: -1 bottom /
+ * docs/archive/0024 — equals w/h unless scaled), layer (docs/archive/0038: -1 bottom /
  * 0 normal / +1 top; was reserved), then 32 bytes NUL-padded UTF-8 title.
  *
  * Commands -> replies:
  *   SUBSCRIBE {}                 -> R_OK { screenW, screenH }, then
  *                                   EV_CREATED per surface (z-order) +
  *                                   EV_FOCUS (the snapshot); the dims can
- *                                   change later -> EV_SCREEN (todos/0023)
+ *                                   change later -> EV_SCREEN (docs/archive/0023)
  *   LIST {}                      -> R_LIST { count, count * record }
  *   MOVE { sid, x, y }           -> R_OK | R_ERR
  *   FOCUS { sid }                -> R_OK | R_ERR   (restores if minimized)
@@ -821,46 +821,46 @@ var WM_SAB_LAYOUT = {
  *   RESIZE { sid, w, h }         -> R_OK | R_ERR   (asks the client; geometry
  *                                   changes only at its SURFACE_CONFIGURE ack
  *                                   -> EV_CONFIGURED; R_ERR on a surface
- *                                   without flag bit4 resizable, todos/0021)
- *   SET_DST { sid, w, h }        -> R_OK | R_ERR   (viewport scaling, todos/
+ *                                   without flag bit4 resizable, docs/archive/0021)
+ *   SET_DST { sid, w, h }        -> R_OK | R_ERR   (viewport scaling, docs/
  *                                   0024: set the on-screen dst rect of a
  *                                   FIXED-SIZE surface — buffer untouched,
  *                                   app oblivious; R_ERR on a resizable
  *                                   surface, which configures instead)
- *   ACTIVATE { sid }             -> R_OK | R_ERR   (todos/0025: fire the
+ *   ACTIVATE { sid }             -> R_OK | R_ERR   (docs/archive/0025: fire the
  *                                   title-activate gesture — the wmctl-max
  *                                   path into the SAME policy code the title
  *                                   double-click hits; R_ERR when no WM is
  *                                   subscribed, since maximize IS policy)
- *   CYCLE { direction }          -> R_OK | R_ERR   (todos/0032: fire the
+ *   CYCLE { direction }          -> R_OK | R_ERR   (docs/archive/0032: fire the
  *                                   window-cycling gesture — the wmctl-cycle
  *                                   path into the SAME EV_CYCLE the Alt+Tab
  *                                   chord emits; R_ERR with no subscriber,
  *                                   since cycling IS policy)
- *   MENU { }                     -> R_OK | R_ERR   (todos/0078: fire the
+ *   MENU { }                     -> R_OK | R_ERR   (docs/archive/0078: fire the
  *                                   Start-menu gesture — the wmctl-menu
  *                                   path into the SAME EV_MENU the Ctrl+Esc
  *                                   chord emits; R_ERR with no subscriber,
  *                                   since the menu IS policy)
- *   SNAP { direction }           -> R_OK | R_ERR   (todos/0095: fire the
+ *   SNAP { direction }           -> R_OK | R_ERR   (docs/archive/0095: fire the
  *                                   Aero Snap gesture — the wmctl-snap path
  *                                   into the SAME EV_SNAP_KEY the Win+arrow
  *                                   chord emits; direction 0 left / 1 right
  *                                   / 2 up / 3 down; R_ERR with no
  *                                   subscriber, since snap IS policy)
- *   GET_IDLE { }                 -> R_IDLE { ms }  (todos/0096: ms since
+ *   GET_IDLE { }                 -> R_IDLE { ms }  (docs/archive/0096: ms since
  *                                   the last real input — wmKey/wmPointer,
  *                                   INJECT_SCREEN/INJECT_WMKEY included,
  *                                   per-window injection excluded. Its own reply type
  *                                   so a subscriber's fire-and-forget drain
  *                                   can route it, the R_SHOT precedent; the
  *                                   screensaver policy in /bin/wm polls it)
- *   SAVER { }                    -> R_OK | R_ERR   (todos/0096: fire the
+ *   SAVER { }                    -> R_OK | R_ERR   (docs/archive/0096: fire the
  *                                   screensaver gesture — wmctl saver / the
  *                                   Control Panel Preview — as EV_SAVER;
  *                                   R_ERR with no subscriber, since the
  *                                   saver IS policy)
- *   SET_LAYER { sid, layer }     -> R_OK | R_ERR   (todos/0038: pin the
+ *   SET_LAYER { sid, layer }     -> R_OK | R_ERR   (docs/archive/0038: pin the
  *                                   surface to a z LAYER — -1 below normal
  *                                   windows (the desktop layer), 0 normal,
  *                                   +1 above (the taskbar). Every z-order op
@@ -870,10 +870,10 @@ var WM_SAB_LAYOUT = {
  *   INJECT_KEY { sid, down, scancode, keysym, mod }        -> R_OK | R_ERR
  *   INJECT_POINTER { sid, kind, xf32, yf32, a, b }         -> R_OK | R_ERR
  *     kind: 0 move (a=buttons) | 1 down | 2 up (a=button) | 3 wheel
- *     (xf32/yf32 = wheelX/wheelY, a=direction) | 4 rel (todos/0018:
+ *     (xf32/yf32 = wheelX/wheelY, a=direction) | 4 rel (docs/archive/0018:
  *     xf32/yf32 = dx/dy deltas, a=buttons); sid 0 = focused window
  *   INJECT_SCREEN { kind, xf32, yf32, a }                  -> R_OK | R_ERR
- *     (todos/0095) SCREEN-coordinate injection into wmPointer — the full
+ *     (docs/archive/0095) SCREEN-coordinate injection into wmPointer — the full
  *     hit-test/chrome path a real mouse takes, so headless tests can drive
  *     title drags, edge snap, border resizes; kind: 0 move (a=buttons) |
  *     1 down | 2 up (a=button)
@@ -886,15 +886,15 @@ var WM_SAB_LAYOUT = {
  *     fails; R_OK doubles as the sequencing barrier (the 0x22 rule)
  *   SHOT { sid } / SHOT_SCREEN {} -> R_SHOT { sid, w, h, w*h*4 rgba } | R_ERR
  *   THUMB { sid, maxW, maxH }    -> R_SHOT { sid, w, h, rgba } | R_ERR
- *                                   (todos/0063 Aero Peek: the front buffer
+ *                                   (docs/archive/0063 Aero Peek: the front buffer
  *                                   box-filtered down to fit maxW x maxH,
  *                                   aspect preserved, never upscaled —
  *                                   deterministic, CPU pixels only)
- *   GLASS { on }                 -> R_OK   (todos/0063: toggle the Aero
+ *   GLASS { on }                 -> R_OK   (docs/archive/0063: toggle the Aero
  *                                   glass tier — browser-compositor-only
  *                                   chrome backdrop blur; headless
  *                                   composite ignores it by design)
- * R_ERR payload: one i32 errno naming the REAL cause (arch CS7, todos/0242;
+ * R_ERR payload: one i32 errno naming the REAL cause (arch CS7, docs/archive/0242;
  * v1 sent 22 for everything). The values come from WMP_ERRNO below —
  * EINVAL 22 bad/unknown sid or out-of-range args; EPERM 1 the surface's
  * declared mode forbids the op (RESIZE on a non-resizable surface, SET_DST
@@ -904,7 +904,7 @@ var WM_SAB_LAYOUT = {
  * ENOSYS 38 unknown op. Additive: legacy callers that treat any R_ERR as
  * failure keep working; wm_proto.h's wmp_cmd surfaces the value in errno.
  *
- * Map-on-placement (todos/0069): while a subscriber exists, a new surface
+ * Map-on-placement (docs/archive/0069): while a subscriber exists, a new surface
  * is composited and hit-tested only after the WM's first geometry/stacking
  * op on it (MOVE/RESIZE/SET_DST/SET_LAYER/RESTACK — wm.c answers every
  * EV_CREATED with a MOVE, which doubles as the map ack), so windows never
@@ -922,39 +922,39 @@ var WM_SAB_LAYOUT = {
  * EV_CONFIGURE_DECLINED { sid, serial, w, h } (the client could not
  * produce a buffer for that configure — allocation failure — and no pending
  * state remains; policy may re-ask, #790) | EV_SCREEN { w, h } (the screen changed resolution,
- * todos/0023 — RandR/wl_output shape: the display owner set a new mode via
+ * docs/archive/0023 — RandR/wl_output shape: the display owner set a new mode via
  * wmSetScreen; the kernel one-shot-clamps window positions itself so the
  * no-WM fallback stays usable, and a subscribed WM re-lays its furniture) |
  * EV_SCALED { sid, dstW, dstH } (a SET_DST landed; the on-screen viewport
- * is now dstW x dstH, todos/0024) | EV_SCALE_REQ { sid, w, h } (the user
+ * is now dstW x dstH, docs/archive/0024) | EV_SCALE_REQ { sid, w, h } (the user
  * released a frame drag on a FIXED-SIZE surface at that box — the wp_
  * viewport shape: policy answers with an aspect-preserving SET_DST; only
  * emitted with a subscriber, else the kernel applies the raw box itself) |
- * EV_TITLE_ACTIVATE { sid } (todos/0025: title-bar double-click, or an
+ * EV_TITLE_ACTIVATE { sid } (docs/archive/0025: title-bar double-click, or an
  * ACTIVATE command — the maximize gesture; the kernel keeps NO maximize
  * state, policy toggles configure-vs-scale on the resizable bit and holds
- * the saved geometry) | EV_CYCLE { direction } (todos/0032: the cycling
+ * the saved geometry) | EV_CYCLE { direction } (docs/archive/0032: the cycling
  * chord — Tab with Alt held, Shift reversing — or a CYCLE command; only
  * emitted with a subscriber, else the chord is not recognized and the key
  * passes through to the focused app; policy walks focus and sends FOCUS) |
- * EV_MENU { } (todos/0078: the Start chord — Esc with Ctrl held — or a
+ * EV_MENU { } (docs/archive/0078: the Start chord — Esc with Ctrl held — or a
  * MENU command; the same no-subscriber pass-through rule; policy toggles
- * the Start menu) | EV_SNAP_EDGE { sid, edge } (todos/0095: mid-title-drag
+ * the Start menu) | EV_SNAP_EDGE { sid, edge } (docs/archive/0095: mid-title-drag
  * the pointer entered (edge > 0) or left (edge 0) a screen-edge snap zone
  * — policy shows/hides the translucent preview; edges: 1 left, 2 right,
  * 3 top, 4 TL, 5 TR, 6 BL, 7 BR; only emitted with a subscriber) |
- * EV_SNAP_DROP { sid, edge, x0, y0 } (todos/0095: a title drag that MOVED
+ * EV_SNAP_DROP { sid, edge, x0, y0 } (docs/archive/0095: a title drag that MOVED
  * — past WM_SNAP_SLOP; a motionless click emits nothing — was released;
  * edge is the zone it dropped in, 0 for a plain drop; x0/y0 is the PRE-drag
  * position so policy can save the true floating rect on a snap commit;
  * policy commits the snap geometry, or restores a snapped window's floating
  * size on a drag-off; emitted after the drag-end EV_MOVED, only with a
  * subscriber) |
- * EV_SNAP_KEY { direction } (todos/0095: the Win+arrow chord — arrows with
+ * EV_SNAP_KEY { direction } (docs/archive/0095: the Win+arrow chord — arrows with
  * GUI held — or a SNAP command; 0 left / 1 right / 2 up / 3 down; the same
  * no-subscriber pass-through rule as EV_CYCLE; policy snaps the focused
  * window to halves, maximizes, restores/minimizes) |
- * EV_SAVER { } (todos/0096: a SAVER command — wmctl saver or the Control
+ * EV_SAVER { } (docs/archive/0096: a SAVER command — wmctl saver or the Control
  * Panel Preview button; policy raises the configured screensaver at once;
  * only emitted with a subscriber. Idle-triggered raising needs no event:
  * policy polls GET_IDLE and acts on its own timeout).
@@ -966,36 +966,36 @@ var WMP = {
   MOVE: 0x10, FOCUS: 0x11, MINIMIZE: 0x12, RESTORE: 0x13, RESTACK: 0x14,
   CLOSE_REQ: 0x15, RESIZE: 0x16, SET_DST: 0x17, ACTIVATE: 0x18,
   CYCLE: 0x19,                       /* { direction }: fire the window-cycling
-                                        gesture (todos/0032) — the wmctl-cycle
+                                        gesture (docs/archive/0032) — the wmctl-cycle
                                         path into the same EV_CYCLE the kernel
                                         chord emits. R_ERR with no subscribed
                                         WM (cycling IS policy) */
   SET_LAYER: 0x1A,                   /* { sid, layer }: pin a surface to a z
-                                        layer (todos/0038) — -1 bottom (the
+                                        layer (docs/archive/0038) — -1 bottom (the
                                         desktop layer), 0 normal, +1 top (the
                                         taskbar); z ops never cross layers */
   GLASS: 0x1B,                       /* { on }: toggle the Aero glass tier
-                                        (todos/0063) — browser-compositor-only
+                                        (docs/archive/0063) — browser-compositor-only
                                         backdrop blur behind window chrome.
                                         The headless composite NEVER reads it
                                         (deterministic goldens); default off */
   MENU: 0x1C,                        /* { }: fire the Start-menu gesture
-                                        (todos/0078) — the wmctl-menu path
+                                        (docs/archive/0078) — the wmctl-menu path
                                         into the same EV_MENU the Ctrl+Esc
                                         chord emits. R_ERR with no subscribed
                                         WM (the menu IS policy) */
   SNAP: 0x1D,                        /* { direction }: fire the Aero Snap
-                                        gesture (todos/0095) — the wmctl-snap
+                                        gesture (docs/archive/0095) — the wmctl-snap
                                         path into the same EV_SNAP_KEY the
                                         Win+arrow chord emits. R_ERR with no
                                         subscribed WM (snap IS policy) */
   GET_IDLE: 0x1E,                    /* { }: ms since the last real input
-                                        (todos/0096) -> R_IDLE { ms }. The
+                                        (docs/archive/0096) -> R_IDLE { ms }. The
                                         kernel is the only one who sees ALL
                                         input; the screensaver policy in
                                         /bin/wm polls this */
   SAVER: 0x1F,                       /* { }: fire the screensaver gesture
-                                        (todos/0096) — the wmctl-saver /
+                                        (docs/archive/0096) — the wmctl-saver /
                                         ctlpanel-Preview path into EV_SAVER;
                                         policy raises the saver at once.
                                         R_ERR with no subscribed WM (the
@@ -1004,7 +1004,7 @@ var WMP = {
   INJECT_SCREEN: 0x22,               /* { kind, xf32, yf32, a }: screen-coord
                                         pointer injection through the full
                                         wmPointer hit-test/chrome path
-                                        (todos/0095) — headless title drags,
+                                        (docs/archive/0095) — headless title drags,
                                         edge snap, border resizes */
   INJECT_WMKEY: 0x23,                /* { down, scancode, keysym, mod,
                                         repeat }: keyboard injection through
@@ -1028,19 +1028,19 @@ var WMP = {
                                         0..32767) */
   SHOT: 0x30, SHOT_SCREEN: 0x31,
   THUMB: 0x32,                       /* { sid, maxW, maxH }: downscaled
-                                        front-buffer thumbnail (todos/0063,
+                                        front-buffer thumbnail (docs/archive/0063,
                                         Aero Peek) -> R_SHOT { sid, w, h,
                                         rgba } aspect-fit inside maxW x maxH
                                         (never upscaled). Deterministic box
                                         filter over shm or GPU readback pixels */
   SYSMENU: 0x33,                     /* { }: fire the window system-menu
-                                        gesture (todos/0102) — the wmctl-sysmenu
+                                        gesture (docs/archive/0102) — the wmctl-sysmenu
                                         path into the same EV_SYSMENU the
                                         Alt+Space chord emits (carries the
                                         focused sid). R_ERR with no subscribed
                                         WM (the menu IS policy) */
   CURSOR_AT: 0x34,                   /* { xf32, yf32 }: the effective cursor
-                                        shape at a SCREEN point (todos/0105) ->
+                                        shape at a SCREEN point (docs/archive/0105) ->
                                         R_CURSOR { shape } (SDL_SystemCursor;
                                         -1 hidden). Pure query — the chrome
                                         overlay + per-surface client cursor,
@@ -1048,7 +1048,7 @@ var WMP = {
                                         headless; browser draws it) */
   GRAB_SET: 0x35,                    /* { n, n x (scancode, km, token) }:
                                         REPLACE the whole kernel key-grab table
-                                        (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3,
+                                        (docs/KEYBINDING-OVERRIDE-SYSTEM.md §3,
                                         the X11-passive-grab shape). Idempotent;
                                         n = 0 installs an EMPTY table (a WM that
                                         wants NO chord interception — a policy
@@ -1061,7 +1061,7 @@ var WMP = {
                                         last-subscriber-gone resets to it. km is
                                         the canonical KM_* mask (Shift excluded
                                         unless the entry names it) */
-  // Window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md). The design doc
+  // Window overview / Exposé (docs/EXPOSE-MISSION-CONTROL.md). The design doc
   // drafted these at 0x35/0x92 as the then-next-free slots; the keybind grab
   // chunk took 0x35 (GRAB_SET) / 0x92 (EV_HOTKEY) first, so these use the
   // ACTUAL next-free slots. MUST MATCH wm_proto.h.
@@ -1075,34 +1075,34 @@ var WMP = {
                                         pattern) — fire EV_OVERVIEW; R_ERR with
                                         no WM. Serves `wmctl overview` */
   R_OK: 0x40, R_ERR: 0x41, R_LIST: 0x42, R_SHOT: 0x43,
-  R_IDLE: 0x44,                      /* { ms }: the GET_IDLE reply (todos/
+  R_IDLE: 0x44,                      /* { ms }: the GET_IDLE reply (docs/
                                         0096) — its own type so /bin/wm's
                                         fire-and-forget drain can route it
                                         (the R_SHOT precedent) */
   R_CURSOR: 0x45,                    /* { shape }: the CURSOR_AT reply
-                                        (todos/0105; the R_IDLE precedent) */
+                                        (docs/archive/0105; the R_IDLE precedent) */
   EV_CREATED: 0x80, EV_DESTROYED: 0x81, EV_TITLE: 0x82, EV_FOCUS: 0x83,
   EV_MOVED: 0x84, EV_MINIMIZED: 0x85, EV_CONFIGURED: 0x86, EV_SCREEN: 0x87,
   EV_SCALED: 0x88, EV_SCALE_REQ: 0x89, EV_TITLE_ACTIVATE: 0x8A,
   EV_CYCLE: 0x8B,                    /* { direction }: the cycling chord
                                         (Alt/Ctrl+Alt+Tab; Shift reverses) or
                                         a CYCLE command — policy walks focus
-                                        (todos/0032); only emitted with a
+                                        (docs/archive/0032); only emitted with a
                                         subscriber, else the chord is NOT
                                         recognized and the key passes through
                                         (the kernel never eats keystrokes) */
   EV_MENU: 0x8C,                     /* { }: the Start chord (Esc with Ctrl
-                                        held) or a MENU command (todos/0078)
+                                        held) or a MENU command (docs/archive/0078)
                                         — policy toggles the Start menu; the
                                         same no-subscriber pass-through rule
                                         as EV_CYCLE */
   EV_SNAP_EDGE: 0x8D,                /* { sid, edge }: mid-title-drag zone
-                                        change (todos/0095) — the pointer
+                                        change (docs/archive/0095) — the pointer
                                         entered (edge 1-7) or left (0) a
                                         screen-edge snap zone; policy raises
                                         or drops the translucent preview */
   EV_SNAP_DROP: 0x8E,                /* { sid, edge, x0, y0 }: title drag
-                                        released (todos/0095) — after the
+                                        released (docs/archive/0095) — after the
                                         EV_MOVED, and only if it MOVED past
                                         WM_SNAP_SLOP (a click is not a
                                         drag); edge > 0 commits a snap
@@ -1111,24 +1111,24 @@ var WMP = {
                                         snapped window is the drag-off
                                         restore; only with a subscriber */
   EV_SNAP_KEY: 0x8F,                 /* { direction }: the Win+arrow chord
-                                        or a SNAP command (todos/0095) —
+                                        or a SNAP command (docs/archive/0095) —
                                         0 L / 1 R / 2 U / 3 D; the EV_CYCLE
                                         pass-through rule; policy acts on
                                         the focused window */
-  EV_SAVER: 0x90,                    /* { }: a SAVER command (todos/0096) —
+  EV_SAVER: 0x90,                    /* { }: a SAVER command (docs/archive/0096) —
                                         wmctl saver / the Control Panel
                                         Preview button; policy raises the
                                         configured screensaver immediately;
                                         only emitted with a subscriber */
   EV_SYSMENU: 0x91,                  /* { sid }: the Alt+Space chord or a
-                                        SYSMENU command (todos/0102) — policy
+                                        SYSMENU command (docs/archive/0102) — policy
                                         raises the window system menu on that
                                         (the focused) window; the EV_CYCLE
                                         pass-through rule (no subscriber, the
                                         chord reaches the app unchanged) */
   EV_HOTKEY: 0x92,                    /* { token, flags, focusSid }: a
                                         NON-reserved key-grab table entry
-                                        matched (todos/KEYBINDING-OVERRIDE-
+                                        matched (docs/KEYBINDING-OVERRIDE-
                                         SYSTEM.md §3) — the ONE event for every
                                         user-installed chord. flags bit0 = Shift
                                         held, bit1 = key repeat. The default
@@ -1138,7 +1138,7 @@ var WMP = {
                                         byte-identical; the EV_CYCLE
                                         pass-through rule (no subscriber, the
                                         chord reaches the app unchanged) */
-  EV_OVERVIEW: 0x93,                  /* { }: toggle the window overview (todos/
+  EV_OVERVIEW: 0x93,                  /* { }: toggle the window overview (docs/
                                         EXPOSE-MISSION-CONTROL.md) — an OVERVIEW
                                         command (wmctl overview). The Ctrl+Alt+E
                                         chord reaches wm.c via EV_HOTKEY
@@ -1157,7 +1157,7 @@ var WMP = {
                                         the picked window */
 };
 
-/* R_ERR errno values (arch CS7, todos/0242). The wm* command methods below
+/* R_ERR errno values (arch CS7, docs/archive/0242). The wm* command methods below
  * return 0 on success or one of these NAMES on failure; _wmpDispatch maps
  * the name to its libc <errno.h> number for the R_ERR payload (numbers MUST
  * MATCH host.js's errnoMap / the libc errno.h). Semantics are documented at
@@ -1166,7 +1166,7 @@ var WMP_ERRNO = { EPERM: 1, ESRCH: 3, EIO: 5, EBUSY: 16, EAGAIN: 11, EACCES: 13,
 var WMP_REC_BYTES = 80;
 var WM_SOCK_PATH = '/run/wm.sock';
 
-/* ---- kernel key-grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3) ----
+/* ---- kernel key-grab table (docs/KEYBINDING-OVERRIDE-SYSTEM.md §3) ----
  * Canonical modifier mask — the TWIN of os/keys.h KM_* + km_from_sdl(). The
  * two folds are kept in lockstep by hand (kernel is per-SYSTEM, keys.h is
  * app-side); test_keybind.js asserts they agree on a table of raw SDL words.
@@ -1226,7 +1226,7 @@ var WM_DEFAULT_GRABS = [
  * metrics, deterministic — the same numbers drive hit-testing here, the
  * browser compositor's drawing, and the headless screenshot composite.
  * The client rect is (x, y, w, h); the title bar sits ABOVE it, and a
- * WM_BORDER frame surrounds title+client (todos/0019). Resize drag zones
+ * WM_BORDER frame surrounds title+client (docs/archive/0019). Resize drag zones
  * on the frame: right edge -> E, bottom edge -> S, near the bottom-right
  * corner -> SE (left/top edges just focus — moving-edge resizes are
  * deliberately not in this version).
@@ -1250,7 +1250,7 @@ var WM_TITLE_H = 30;                         // font-20 retune (v133-qa): the
                                              // undersized) — 30px holds the 20px
                                              // bold label (WM_LABEL_PX — the
                                              // shared-chrome rule)
-var WM_LABEL_PX = 20;                        // label text pixel size (todos/0275):
+var WM_LABEL_PX = 20;                        // label text pixel size (docs/archive/0275):
                                              // BOTH composites — the browser
                                              // compositor's labelFor and the
                                              // headless _blitLabel — render
@@ -1285,7 +1285,7 @@ var WM_HUNG_GRACE_MS = 5000;                 // #486: close request unconsumed t
 // go green.
 var WM_HUNG_POLL_MS = 250;                   // #486: consumption poll cadence
 var WM_BOX_GAP = 2;                          // between the [min][max][close] boxes
-                                             // (todos/0030; same 20px metrics)
+                                             // (docs/archive/0030; same 20px metrics)
 var WM_BORDER = 4;                           // DRAWN frame width around
                                              // title+client (both composites)
 var WM_GRIP = 16;                            // pre-#388 SE-corner hit metric —
@@ -1299,15 +1299,15 @@ var WM_GRIP_HIT = 32;                        // hit-only SE widening along the
 var WM_GRIP_IN = 16;                         // hit-only SE inward reach into a
                                              // RESIZABLE client (#388)
 var WM_MIN_SIZE = 32;                        // client floor for resize requests
-var WM_DBLCLICK_MS = 400;                    // title double-click window (todos/0025)
+var WM_DBLCLICK_MS = 400;                    // title double-click window (docs/archive/0025)
 var WM_DBLCLICK_SLOP = 4;                    // ...and max px drift between the downs
-var WM_MAP_TIMEOUT_MS = 200;                 // map-on-placement backstop (todos/0069):
+var WM_MAP_TIMEOUT_MS = 200;                 // map-on-placement backstop (docs/archive/0069):
                                              // a WM-managed surface the WM never
                                              // places maps anyway after this
 var WM_ANIM_MS = 200;                        // minimize/restore compositor animation
-                                             // length (todos/0063) — records older
+                                             // length (docs/archive/0063) — records older
                                              // than this are pruned from wmScene()
-var WM_SNAP_MARGIN = 8;                      // Aero Snap edge-zone width (todos/0095):
+var WM_SNAP_MARGIN = 8;                      // Aero Snap edge-zone width (docs/archive/0095):
                                              // a mid-drag pointer within this many px
                                              // of a screen edge is "in the zone";
                                              // corners are within it on both axes
@@ -1448,7 +1448,7 @@ KernelClient.prototype.pending = function () {
   return Atomics.load(this._i32, KP_SIGPEND) & ~Atomics.load(this._i32, KP_SIGBLOCK);
 };
 
-/* Vsync broadcast (todos/0100). vsyncEnabled: the kernel advertised a real
+/* Vsync broadcast (docs/archive/0100). vsyncEnabled: the kernel advertised a real
  * frame clock at spawn (and this engine can await a SAB word). vsyncWait:
  * resolves on the next compositor tick. Tracks the last-delivered seq so a
  * tick that landed while the frame callback ran resolves immediately (rAF
@@ -1467,7 +1467,7 @@ KernelClient.prototype.vsyncWait = function () {
     return Promise.resolve();
   }
   var self = this;
-  // On-demand compositor (todos/0169): publish the waiter FIRST, then
+  // On-demand compositor (docs/archive/0169): publish the waiter FIRST, then
   // re-read the parked flag and ring the doorbell if set. This is one half
   // of the Dekker pair — the compositor stores PARKED before re-reading
   // ARMED — so either it sees our count and stays armed, or we see its
@@ -1495,7 +1495,7 @@ KernelClient.prototype.vsyncWait = function () {
  * Discipline per park chunk, in order:
  *   - STOP: park UNARMED in _stopWait instead — a SIGSTOPped vsync app must
  *     release the compositor (KP_VSYNC_ARMED 0 -> compKeepAlive lets the rAF
- *     park; todos/0169), not pin it awake. Resumes the vsync park on SIGCONT.
+ *     park; docs/archive/0169), not pin it awake. Resumes the vsync park on SIGCONT.
  *   - deliverable pending signal: give up the park (return the current seq)
  *     so the import returns and dispatch runs at the safe point — FS_WAIT's
  *     EINTR shape. The caller re-baselines on the returned seq, so an early
@@ -1518,7 +1518,7 @@ KernelClient.prototype.vsyncWaitUntil = function (target) {
   }
 };
 
-/* Job control (todos/0003): park while the kernel asserts STOP, until
+/* Job control (docs/archive/0003): park while the kernel asserts STOP, until
  * SIGCONT clears the flag (SIGKILL terminates the worker outright). Runs at
  * the two safe-point families a process is guaranteed to hit: entry to
  * every kernel RPC (_finish — i.e. every brokered syscall) and sigpoll
@@ -1551,7 +1551,7 @@ KernelClient.prototype.sigmask = function (mask) {
   Atomics.store(this._i32, KP_SIGBLOCK, mask | 0);
 };
 
-/* ---- vDSO block (todos/0179): seqlock reader ---- */
+/* ---- vDSO block (docs/archive/0179): seqlock reader ---- */
 
 /* Read the kernel-page words `indices` as ONE consistent snapshot: retry
  * while the seq word is odd (write in progress) or moved across the reads.
@@ -1633,7 +1633,7 @@ KernelClient.prototype.spawnHooks = function () {
     kill: function (pid, sig) { return self.call(OP.KILL, { pid: pid, sig: sig }); },
     setpgid: function (pid, pgid) { return self.call(OP.SETPGID, { pid: pid, pgid: pgid }); },
     setsid: function () { return self.call(OP.SETSID, {}); },
-    // vDSO fast path (todos/0179): the caller's OWN pgid/sid are published
+    // vDSO fast path (docs/archive/0179): the caller's OWN pgid/sid are published
     // on the kernel page, so getpgrp()/getpgid(0)/getsid(0) make zero RPCs.
     // Foreign pids — and a failed seqlock read — still ask the kernel, the
     // source of truth. The self-pid check rides the same snapshot as the
@@ -1649,7 +1649,7 @@ KernelClient.prototype.spawnHooks = function () {
       if (v && ((pid | 0) === 0 || (pid | 0) === v[0])) return { sid: v[1] };
       return self.call(OP.GETSID, { pid: pid });
     },
-    // Interval timers (todos/0044): ms over the wire; the libc converts
+    // Interval timers (docs/archive/0044): ms over the wire; the libc converts
     // timeval <-> ms and owns the sub-ms round-up.
     setitimer: function (which, valueMs, intervalMs) {
       return self.call(OP.SETITIMER, { which: which, valueMs: valueMs, intervalMs: intervalMs });
@@ -1657,10 +1657,10 @@ KernelClient.prototype.spawnHooks = function () {
     getitimer: function (which) { return self.call(OP.GETITIMER, { which: which }); },
     sigdisp: function (sig, kind) { self.call(OP.SIGDISP, { sig: sig, kind: kind }); },
     compile: function (argv, cwd) { return self.call(OP.COMPILE, { argv: argv, cwd: cwd }); },
-    // System clipboard (todos/0090): one kernel slot; host.js owns the
+    // System clipboard (docs/archive/0090): one kernel slot; host.js owns the
     // chunking (payloads pre-framed per the OP table's RAW layouts).
     // payloadChunk is the max chunk for those staging lanes (clipboard +
-    // http body) — derived kernel-side from KP_PAYLOAD_CAP (todos/0235)
+    // http body) — derived kernel-side from KP_PAYLOAD_CAP (docs/archive/0235)
     // so host.js never restates the kernel-page layout.
     payloadChunk: KP_HOOK_CHUNK,
     // Shared-SAB layout tripwire (CD26, the same 0235 shape): host.js
@@ -1677,11 +1677,11 @@ KernelClient.prototype.spawnHooks = function () {
     },
     // Gamepad name query (#607) — backs host.js __sdl_gamepad_name.
     padName: function (id) { return self.call(OP.PAD_NAME, { id: id | 0 }); },
-    // Egress (todos/0398): the pre-framed textual disposition+path list
+    // Egress (docs/archive/0398): the pre-framed textual disposition+path list
     // (host.js createEgress composes it; layout in the OP table). One RPC,
     // one artifact; the kernel materializes and hands it to the embedder.
     egress: function (bytes) { return self.callRaw(OP.EGRESS, bytes); },
-    // HTTP transport (todos/0172; fd-shaped since todos/0417): host.js's
+    // HTTP transport (docs/archive/0172; fd-shaped since docs/archive/0417): host.js's
     // createHttp drives these; the libcurl veneer (0173) sits on top.
     // httpBody stages request-body chunks (RAW [u32 off][bytes]); httpOpen
     // returns {fd} — body drain and close ride the ordinary fs hooks
@@ -1695,13 +1695,13 @@ KernelClient.prototype.spawnHooks = function () {
     sigpoll: function () { return self.sigpoll(); },
     sigmask: function (mask) { self.sigmask(mask); },
     park: function (ms) { return self.park(ms); },
-    // Unified wait (todos/0178): { r: [fds], ring: 0/1, timeoutMs } →
+    // Unified wait (docs/archive/0178): { r: [fds], ring: 0/1, timeoutMs } →
     // { why: 0 timeout / 1 fd / 2 ring } or { errno: 'EINTR' } on a posted
     // signal (interruptible like FS_SELECT). host.js's __wait import and
     // the surface backend own the ring drain around it.
     waitMulti: function (req) { return self.call(OP.FS_WAIT, req, true); },
     exit: function (status) { return self.call(OP.EXIT, { code: status }); },
-    // Vsync broadcast (todos/0100): host.js's surface backend paces SDL
+    // Vsync broadcast (docs/archive/0100): host.js's surface backend paces SDL
     // frame loops off the kernel's compositor clock when advertised.
     vsyncEnabled: function () { return self.vsyncEnabled(); },
     vsyncWait: function () { return self.vsyncWait(); },
@@ -1712,7 +1712,7 @@ KernelClient.prototype.spawnHooks = function () {
     // present clamp asks "which vsync interval is this?" per present — a
     // plain load, never a park (vsyncWait is the parking flavor).
     vsyncSeq: function () { return Atomics.load(self._i32, KP_VSYNC_SEQ); },
-    // On-demand compositor doorbells (todos/0169): shm presents are
+    // On-demand compositor doorbells (docs/archive/0169): shm presents are
     // SAB-only, so host.js re-reads the parked flag after every seq bump
     // and rings want-frame when set; frame-idle is pumpWait's entry saying
     // the app went back to waiting on events (host.js gates it on a
@@ -1733,11 +1733,11 @@ KernelClient.prototype.spawnHooks = function () {
     },
     ttyGetpgrp: function (fd) { return self.call(OP.TCGETPGRP, { fd: fd }); },
     ttySetpgrp: function (fd, pgid) { return self.call(OP.TCSETPGRP, { fd: fd, pgid: pgid }); },
-    // WM surfaces (todos/WM.md). The process allocates the SABs (the kernel
+    // WM surfaces (docs/WM.md). The process allocates the SABs (the kernel
     // can't hand one to a parked worker) and posts them on the same FIFO
     // channel immediately before the RPC that names them.
     // flags bit0: borderless (no kernel chrome — taskbar-class surfaces).
-    // flags bit6: anchored child (todos/0256) — parentSid names the parent
+    // flags bit6: anchored child (docs/archive/0256) — parentSid names the parent
     // surface, dx/dy the anchor offset in parent buffer coords; bit7 adds
     // the press-outside-dismisses grab (menu arch A2). Old callers omit the
     // trailing args (|0 -> 0 = a plain top-level).
@@ -1755,15 +1755,15 @@ KernelClient.prototype.spawnHooks = function () {
     surfaceSetOwner: function (sid, ownerSid) { return self.call(OP.SURFACE_SET_OWNER, { sid: sid, ownerSid: ownerSid | 0 }); },
     surfaceDestroy: function (sid) { return self.call(OP.SURFACE_DESTROY, { sid: sid }); },
     surfaceSetTitle: function (sid, title) { return self.call(OP.SURFACE_SET_TITLE, { sid: sid, title: title || '' }); },
-    // Flag-word update (todos/0018): bit0 borderless, bit1 relative-mouse.
+    // Flag-word update (docs/archive/0018): bit0 borderless, bit1 relative-mouse.
     surfaceSetFlags: function (sid, flags) { return self.call(OP.SURFACE_SET_FLAGS, { sid: sid, flags: flags | 0 }); },
-    // Per-surface cursor shape (todos/0105, SDL_SetCursor): SDL_SystemCursor
+    // Per-surface cursor shape (docs/archive/0105, SDL_SetCursor): SDL_SystemCursor
     // value, or -1 to hide. The kernel overlays chrome resize cursors.
     surfaceSetCursor: function (sid, shape) { return self.call(OP.SURFACE_SET_CURSOR, { sid: sid, shape: shape | 0 }); },
-    // Owner-initiated resize (todos/0068, SDL_SetWindowSize): kernel answers
+    // Owner-initiated resize (docs/archive/0068, SDL_SetWindowSize): kernel answers
     // with a WINDOW_RESIZED ring event; the ack is surfaceConfigure below.
     surfaceResize: function (sid, w, h) { return self.call(OP.SURFACE_RESIZE, { sid: sid, w: w | 0, h: h | 0 }); },
-    // Resize ack (todos/0019): the NEW fb SAB (first new-size frame already
+    // Resize ack (docs/archive/0019): the NEW fb SAB (first new-size frame already
     // presented into it) rides the FIFO channel like at create.
     // #790: the ack names the configure SERIAL it answers; a null fbSab
     // DECLINES that serial (the client could not allocate the buffer) so the
@@ -1780,20 +1780,20 @@ KernelClient.prototype.spawnHooks = function () {
     surfaceFrame: function (sid, bmp, serial) {
       self._post({ type: 'wm-frame', sid: sid, bmp: bmp, serial: serial | 0 }, [bmp]);
     },
-    // Audio mixer (todos/0017): the process-allocated source ring rides the
+    // Audio mixer (docs/archive/0017): the process-allocated source ring rides the
     // FIFO channel immediately before the RPC that names it (wm-sabs shape).
     audioOpen: function (freq, format, channels, sab) {
       self._post({ type: 'audio-sab', sab: sab });
       return self.call(OP.AUDIO_OPEN, { freq: freq, format: format, channels: channels });
     },
     audioClose: function (aid) { return self.call(OP.AUDIO_CLOSE, { aid: aid }); },
-    // Master gain (todos/0048): percent 0..200, gain < 0 queries.
+    // Master gain (docs/archive/0048): percent 0..200, gain < 0 queries.
     audioGain: function (gain) { return self.call(OP.AUDIO_GAIN, { gain: gain }); },
   };
 };
 
 /* ============================================================
- * Tty — the terminal as a kernel object (todos/KERNEL.md Phase 3).
+ * Tty — the terminal as a kernel object (docs/KERNEL.md Phase 3).
  *
  * The tty SAB is the same ring format host.js's BlockFS stdin path already
  * consumes (SI_* header, 32 bytes, ring after) — the kernel is simply the
@@ -2161,7 +2161,7 @@ Tty.prototype.setattr = function (actions, t) {
  *                   image (ArrayBuffer|null), module (WebAssembly.Module|null),
  *                   kernelPage (SAB) }
  *       Exactly one of image/module is non-null: module is the compiled-
- *       Module cache hit (todos/0037 — structured-clone it to the worker);
+ *       Module cache hit (docs/archive/0037 — structured-clone it to the worker);
  *       image is the raw-bytes path for everything uncacheable.
  *       handle:   { postMessage(msg), onMessage(fn), onExit(fn), terminate() }
  *   loadImage(path) -> bytes | Promise<bytes> | null   resolve a spawn path
@@ -2228,17 +2228,17 @@ function Kernel(opts) {
   this._compile = opts.compile || null;
   this._onOutput = opts.onOutput || function () {};
   this._onHalt = opts.onHalt || function () {};
-  // Pointer lock (todos/0018): the UI bridge is told when the WANTED state
+  // Pointer lock (docs/archive/0018): the UI bridge is told when the WANTED state
   // changes (focused surface requests relative mouse); it owns the actual
   // Pointer Lock API dance and reports transitions via wmPointerLockChanged.
   this._onPointerLock = opts.onPointerLock || function () {};
-  // Cursor (todos/0105): the UI bridge is told the effective cursor shape (an
+  // Cursor (docs/archive/0105): the UI bridge is told the effective cursor shape (an
   // SDL_SystemCursor value; -1 hidden) whenever it CHANGES on a pointer move —
   // chrome resize cursors over frames, the focused/hovered surface's client
   // cursor over its client area, arrow elsewhere. Browser-only rendering (the
   // page sets canvas.style.cursor); headless kernels leave it a no-op.
   this._onCursor = opts.onCursor || function () {};
-  // Audio pump gate (todos/IDLE-POWER.md "audioPump gate"): fired on every
+  // Audio pump gate (docs/IDLE-POWER.md "audioPump gate"): fired on every
   // AUDIO_OPEN so an embedder that parks its pump interval while the stream
   // table is empty can re-arm it. Disarm is the embedder's call — poll
   // audioStreamCount() after a pump (opens are the only RPC-visible
@@ -2267,7 +2267,7 @@ function Kernel(opts) {
   // worker.js backstops with a timeout). No hook (boot.js, unit tests,
   // standalone embedders) = the synchronous pre-seam path, byte-identical.
   this._onClipRead = opts.onClipRead || null;
-  // Egress (todos/0398): the OUTBOUND file hop. Fired from the OP.EGRESS
+  // Egress (docs/archive/0398): the OUTBOUND file hop. Fired from the OP.EGRESS
   // dispatch with the finished artifact — (dispo, name, bytes): dispo the
   // disposition word ('download' | 'saveas'), name the sanitized artifact
   // name, bytes ONE Uint8Array (a file's bytes, or a store-only zip for a
@@ -2295,7 +2295,7 @@ function Kernel(opts) {
   // own private in-process fs (the standalone/Phase-1 arrangement).
   this._fs = opts.fs || null;
   this._brokered = !!opts.fs;
-  // Process-side read-only /usr (todos/0180): the embedder ships the sealed
+  // Process-side read-only /usr (docs/archive/0180): the embedder ships the sealed
   // system image as ONE SharedArrayBuffer plus its mount prefix
   // (opts.roImage = { prefix: '/usr', sab }); every spawn forwards it and
   // the process worker mounts it locally (host.js SabByteStore + createV4
@@ -2303,7 +2303,7 @@ function Kernel(opts) {
   // immutable data serves itself (KERNEL.md single-writer rule). Brokered
   // only: standalone processes already own a private in-process fs.
   this._roImage = ownerRoImage(this._fs, opts.roImage);
-  // Kernel text service (todos/0275): the ksvc blob handle (os/ksvc.js
+  // Kernel text service (docs/archive/0275): the ksvc blob handle (os/ksvc.js
   // load()), PUBLIC — the browser compositor reads kernel.textService, the
   // headless composite blits through _blitLabel. OS embedders (kernel-worker,
   // boot.js) hard-fail the boot when the blob won't load, so an OS kernel
@@ -2315,15 +2315,15 @@ function Kernel(opts) {
   // before returning a Promise<{w,h,rgba}>. The compositor owns GPU resources;
   // the kernel owns thumbnail filtering and deterministic screen composition.
   this.captureSurface = opts.captureSurface || null;
-  // System clipboard (todos/0090): { fmt, bytes: Uint8Array } or null.
+  // System clipboard (docs/archive/0090): { fmt, bytes: Uint8Array } or null.
   // Kernel-owned so it outlives the copying process; see OP.CLIP_SET.
   this._clipboard = null;
-  // Vsync broadcast (todos/0100): opts.vsync declares that the embedder
+  // Vsync broadcast (docs/archive/0100): opts.vsync declares that the embedder
   // owns a real frame clock and will call vsyncTick() from it (the browser
   // compositor rAF). Advertised to every process at spawn via KP_VSYNC_EN;
   // headless embedders leave it off and processes pace by deadline timer.
   this._vsync = !!opts.vsync;
-  // On-demand compositor (todos/0169): the embedder's damage hook (the
+  // On-demand compositor (docs/archive/0169): the embedder's damage hook (the
   // browser compositor's scheduleFrame — registered late via wmOnDamage,
   // after the canvas arrives), the mirrored parked flag (single writer:
   // compSetParked, kernel worker only), and the cumulative vsync-notify
@@ -2332,9 +2332,9 @@ function Kernel(opts) {
   this._compParked = false;
   this._vsyncNotifies = 0;
   // Boot instant — /proc/uptime's zero and the base for per-process
-  // start_time (procfs, todos/0043).
+  // start_time (procfs, docs/archive/0043).
   this._bootMs = Date.now();
-  // procfs (todos/0043): a ProcFS volume in the mount table renders THIS
+  // procfs (docs/archive/0043): a ProcFS volume in the mount table renders THIS
   // kernel's process table. Bound here so embedders just add
   // `'/proc': new ProcFS()` to their MountFS mounts — nothing to wire.
   if (this._fs && Array.isArray(this._fs._mounts)) {
@@ -2343,7 +2343,7 @@ function Kernel(opts) {
       if (mfs instanceof ProcFS) mfs._kernel = this;
     }
   }
-  // The compiled-Module cache (todos/0037; generalized to writable volumes
+  // The compiled-Module cache (docs/archive/0037; generalized to writable volumes
   // by #188): spawn compiles each binary once and ships the
   // WebAssembly.Module in the spawn message (Modules structured-clone
   // across workers; Instances don't — and the engine's JIT state follows
@@ -2376,15 +2376,15 @@ function Kernel(opts) {
   this._sockBinds = new Map(); // resolved path -> listener/bound socket ofdId
   this._kernelSockServers = new Map(); // resolved path -> onConnect(peer, pcb)
                              // — KERNEL-owned AF_UNIX endpoints (sockServe;
-                             // todos/0014). Checked before _sockBinds.
-  // WM surfaces (todos/WM.md). The kernel owns the scene: registry, z-order,
+                             // docs/archive/0014). Checked before _sockBinds.
+  // WM surfaces (docs/WM.md). The kernel owns the scene: registry, z-order,
   // focus, input routing, kernel-chrome policy (v1 — a WM client takes over
   // placement policy in v2). The compositor (browser) and the screenshot
   // composite (headless) both read this state.
   this._surfaces = new Map(); // sid -> { sid, pid, sab, i32, u8, w, h, dstW, dstH, title, x, y, bitmap, minimized, borderless, relativeMouse, pendingConfigure, mapped, mapTimer, closeWd, parentSid, dx, dy, children, grab }
   this._nextSid = 1;
   this._zOrder = [];          // sids, bottom -> top
-  this._focusSid = 0;         // written ONLY through _wmSetFocus (todos/0256,
+  this._focusSid = 0;         // written ONLY through _wmSetFocus (docs/archive/0256,
                               // menu arch A9) — the one choke point that emits
                               // the owner FOCUS_GAINED/LOST pair + EV_FOCUS
   this._pads = new Map();     // gamepads (#607): slot -> {id, name, buttons
@@ -2398,11 +2398,11 @@ function Kernel(opts) {
   this._padNextId = 1;        // SDL instance ids: monotonic, never reused
   this._padNames = new Map(); // id -> name; outlives disconnect (an OPEN
                               // SDL handle may query the name after REMOVED)
-  this._wmAnchoredN = 0;      // live anchored-child count (todos/0256) — the
+  this._wmAnchoredN = 0;      // live anchored-child count (docs/archive/0256) — the
                               // zero-cost fast path for the _wmZNormalize
                               // subtree post-pass on anchor-free scenes
   this._wmOwnedN = 0;         // live owner links (#794) — the same gate
-  this._wmGrabs = [];         // active grab holders, oldest -> newest (todos/
+  this._wmGrabs = [];         // active grab holders, oldest -> newest (docs/
                               // 0256, menu arch A2): while the newest holder
                               // lives, a press OUTSIDE its root's client tree
                               // dismisses it (WMEV.QUIT to the holder) and is
@@ -2413,12 +2413,12 @@ function Kernel(opts) {
                                   // press (a click is eaten whole)
   this._wmDrag = null;        // { sid, dx, dy } during a title-bar drag
   this._wmTitleDown = null;   // { sid, x, y, t } — last title-bar mousedown,
-                              // for double-click detection (todos/0025)
+                              // for double-click detection (docs/archive/0025)
   this._wmResizeDrag = null;  // { sid, ex, ey, baseW, baseH, x0, y0, curW, curH }
-                              // during a border resize drag (todos/0019);
+                              // during a border resize drag (docs/archive/0019);
                               // ex/ey: 1 = that axis tracks the pointer.
                               // On a fixed-size surface the same drag is a
-                              // SCALE drag (todos/0024): base/cur are dst
+                              // SCALE drag (docs/archive/0024): base/cur are dst
                               // dims and release goes to wmSetDst/the WM
                               // instead of a configure.
   this._wmScreen = { w: (opts.screen && opts.screen.w) || 1024,
@@ -2429,7 +2429,7 @@ function Kernel(opts) {
   this._wmKeyGrabs = null;    // installed key-grab table (GRAB_SET); null =
                               // use the built-in WM_DEFAULT_GRABS. Reset to
                               // null when the last subscriber goes (0069 valve)
-  this._wmOverview = null;    // window overview / Exposé (todos/EXPOSE-MISSION-
+  this._wmOverview = null;    // window overview / Exposé (docs/EXPOSE-MISSION-
                               // CONTROL.md): null = inactive; else { cells:
                               // [{sid,x,y,w,h}], hoverSid }. A PURE presentation
                               // override — the WM sends the cell rects
@@ -2438,7 +2438,7 @@ function Kernel(opts) {
                               // NO focus/z/minimize/geometry (every real state
                               // change is the WM's after the PICK). Force-ended
                               // when the last subscriber goes (the 0069 valve).
-  this._wmOverviewAnims = []; // transient enter/exit fly records (todos/0063
+  this._wmOverviewAnims = []; // transient enter/exit fly records (docs/archive/0063
                               // shape): [{sid, fx,fy,fw,fh, tx,ty,tw,th, t0,
                               // reverse}], browser-visual only, pruned after
                               // WM_ANIM_MS. Never read by the headless composite.
@@ -2447,31 +2447,31 @@ function Kernel(opts) {
                                   // true, pointer input routes RELATIVE to the
                                   // focused relative-mouse surface (no hit-test)
   this._wmCursor = 0;             // last effective cursor shape emitted to the
-                                  // bridge (todos/0105); the browser starts on
+                                  // bridge (docs/archive/0105); the browser starts on
                                   // the default arrow, so 0 is the honest init
-  this._wmGlassOn = false;    // Aero glass tier (todos/0063): browser-
+  this._wmGlassOn = false;    // Aero glass tier (docs/archive/0063): browser-
                               // compositor-only backdrop blur behind window
                               // chrome; toggled via WMP GLASS / wmGlass().
                               // NEVER read by the headless composite.
   this._wmAnims = new Map();  // sid -> transient minimize/restore animation
-                              // record (todos/0063): {kind,x,y,w,h,t0} at the
+                              // record (docs/archive/0063): {kind,x,y,w,h,t0} at the
                               // moment of the transition. Browser-compositor
                               // visual only — pruned after WM_ANIM_MS, never
                               // read by the headless composite or hit test.
-  this._wmLastInput = Date.now();  // last user input (todos/0096): stamped at
+  this._wmLastInput = Date.now();  // last user input (docs/archive/0096): stamped at
                                    // the wmKey/wmPointer entry — the ONLY
                                    // places all real input crosses — and read
                                    // back via GET_IDLE/wmIdleMs(). Pure
                                    // mechanism: the screensaver policy (its
                                    // timeout, the saver itself) lives in
                                    // /bin/wm, which polls this.
-  // Audio mixer (todos/0017; WM.md "Audio mixing"). Streams register via
+  // Audio mixer (docs/archive/0017; WM.md "Audio mixing"). Streams register via
   // AUDIO_OPEN; the pump mixes them into the one output ring (audioInit).
   this._audioStreams = new Map(); // aid -> stream (see _audioRpc AUDIO_OPEN)
-  this._audioGain = 1;            // master output gain (todos/0048, AUDIO_GAIN)
+  this._audioGain = 1;            // master output gain (docs/archive/0048, AUDIO_GAIN)
   this._nextAid = 1;
   this._audioOut = null;          // { sab, control, f32, cap, freq, channels }
-  // HTTP transport (todos/0172). Defaults to the embedder's fetch (browser
+  // HTTP transport (docs/archive/0172). Defaults to the embedder's fetch (browser
   // worker or Node ≥18 global); opts.fetch overrides (a fake fetch in tests).
   // Passing `fetch: null` EXPLICITLY disables network — HTTP_OPEN answers
   // ENOSYS (standalone pages stay offline); omitting it uses the global.
@@ -2492,12 +2492,12 @@ Kernel.prototype._makeOfd = function (kind, extra) {
 
 /* Ref an OFD for a process. For ringed pipe ends this also maintains the
  * per-end holder map (pid → fd count) that drives the SPSC mode ladder
- * (todos/0181): the moment an end gains a SECOND holder process — spawn
+ * (docs/archive/0181): the moment an end gains a SECOND holder process — spawn
  * inheritance is the only event that can (the spawner is parked in the
  * spawn RPC, so the flip races nothing) — a FAST pipe demotes, finally.
  * pid 0 is the kernel pseudo-holder (the strace write-end ref): it blocks
  * promotion, keeping traced pipes brokered so every byte shows in the
- * trace (todos/0181's documented strace rule). */
+ * trace (docs/archive/0181's documented strace rule). */
 Kernel.prototype._ofdRef = function (o, pid) {
   o.refs++;
   if (o.kind !== 'pipe' || !o.holders) return;
@@ -2508,7 +2508,7 @@ Kernel.prototype._ofdRef = function (o, pid) {
   }
 };
 
-/* Promotion check (todos/0181), run when a pipe end LOSES a holder: with
+/* Promotion check (docs/archive/0181), run when a pipe end LOSES a holder: with
  * exactly one holder process per end (and no kernel pseudo-holder, no
  * traced holder, both ends open) the pipe is single-producer/single-
  * consumer and the holders may move bytes through the ring themselves.
@@ -2571,7 +2571,7 @@ Kernel.prototype._ofdUnref = function (id, pid) {
   }
   else if (o.kind === 'watch') this._watches.delete(o.id);
   else if (o.kind === 'http') {
-    // Last release of an HTTP transfer fd (todos/0417): abort the fetch.
+    // Last release of an HTTP transfer fd (docs/archive/0417): abort the fetch.
     // close(2), a dup'd twin's death, and _exitProcess's fd sweep all
     // funnel here — teardown needs no dedicated transfer sweep.
     this._httpDestroy(o.xfer);
@@ -2684,7 +2684,7 @@ Kernel.prototype.boot = function (spec) {
 Kernel.prototype.process = function (pid) { return this._procs.get(pid) || null; };
 Kernel.prototype.processCount = function () { return this._procs.size; };
 
-/* Spawn a kernel-owned service (todos/0014: the /bin/wm autostart): no
+/* Spawn a kernel-owned service (docs/archive/0014: the /bin/wm autostart): no
  * parent, own session, auto-reaped on exit (ppid 0 in _exitProcess — the
  * kernel never waits). Resolves to the pid, or 0 on failure (a missing
  * /bin/wm must not break boot: kernel-chrome is the fallback policy). */
@@ -2720,7 +2720,7 @@ Kernel.prototype._spawn = function (parent, spec, depth) {
   var self = this;
   if (this._halted) return Promise.resolve({ errno: 'ESRCH' });
   if (!spec || typeof spec.path !== 'string') return Promise.resolve({ errno: 'EFAULT' });
-  // Module cache (todos/0037, #188): compute the key BEFORE the image read,
+  // Module cache (docs/archive/0037, #188): compute the key BEFORE the image read,
   // in the same synchronous turn (both embedders' loadImage is sync, and fs
   // mutations arrive as whole RPC turns), so the identity the cache stores
   // is the identity the bytes were read under — no window for a concurrent
@@ -2754,7 +2754,7 @@ Kernel.prototype._spawn = function (parent, spec, depth) {
 
 /* The bytes leg of _spawn: read the image, compile-and-cache when mkey says
  * it's immutable, then hand off. A `#!` image re-dispatches to its
- * interpreter instead (todos/0065); `depth` counts those hops. */
+ * interpreter instead (docs/archive/0065); `depth` counts those hops. */
 Kernel.prototype._spawnBytes = function (parent, spec, mkey, depth) {
   var self = this;
   return Promise.resolve(this._loadImage(spec.path)).then(function (image) {
@@ -2769,7 +2769,7 @@ Kernel.prototype._spawnBytes = function (parent, spec, mkey, depth) {
   });
 };
 
-/* Shebang exec (todos/0065): a text image starting "#!" runs its interpreter
+/* Shebang exec (docs/archive/0065): a text image starting "#!" runs its interpreter
  * line, Unix-style — `./foo` and a desktop double-click work on shell
  * scripts with no explicit `sh`. The interpreter line is `#!` + path + at
  * most ONE optional argument (the rest of the line verbatim, per Linux — no
@@ -2780,7 +2780,7 @@ Kernel.prototype._spawnBytes = function (parent, spec, mkey, depth) {
  * interpreter lands exactly where the script would have. Depth caps a
  * script→script→… chain. The errno stays ENOEXEC where Linux reports ELOOP:
  * that started as a libc gap (no ELOOP in <errno.h>) but is now a deliberate,
- * asserted divergence — todos/0340 added `#define ELOOP 40`, and the contract
+ * asserted divergence — docs/archive/0340 added `#define ELOOP 40`, and the contract
  * is pinned by test_kernel.js's 'shebang cycle -> ENOEXEC';
  * non-`#!` bytes never reach here, so WASM binaries are untouched. */
 var SHEBANG_MAX = 256;        // interpreter-line budget (Linux BINPRM_BUF_SIZE)
@@ -2887,7 +2887,7 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     pgid: pgid,
     sid: parent ? parent.sid : pid,
     state: STATE_RUNNING,
-    // Identity for /proc (todos/0043): comm/cmdline render from these;
+    // Identity for /proc (docs/archive/0043): comm/cmdline render from these;
     // startMs backs stat field 22 (start_time) and ps -l's STIME/ELAPSED.
     path: spec.path,
     argv: (spec.argv && spec.argv.length) ? spec.argv.slice() : [spec.path],
@@ -2901,7 +2901,7 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     cwd: spec.cwd !== null && spec.cwd !== undefined ? spec.cwd
       : (parent ? parent.cwd : '/'),
     sigdisp: new Int8Array(NSIG),  // __on_sigdisp mirror; all DFL initially
-    itimer: null,                  // ITIMER_REAL (todos/0044): {expiresAt, intervalMs, timer}
+    itimer: null,                  // ITIMER_REAL (docs/archive/0044): {expiresAt, intervalMs, timer}
                                    // — not inherited (POSIX), cleared at exit
     // ONE deferred RPC at a time (the worker is parked):
     // {op:'wait',sel,options} | {op:'ttyread',count} | {op:'select',r,w,timer}
@@ -2910,18 +2910,18 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     waiter: null,
     fds: new Map(),                // procFd -> ofdId (brokered mode)
     dirRpc: null,                  // cursor -> {dh, pending} parked FS_OPENDIR
-                                   // pages mid-drain (todos/0241)
+                                   // pages mid-drain (docs/archive/0241)
     dirRpcNext: 1,
     page: null, i32: null, u8: null,
     worker: null,
     tty: self._tty,                // v1: the one system tty (or null)
     surfaces: new Set(),           // sids owned by this process (WM.md)
     wmRing: null,                  // input ring: { i32, f32, cap }
-    wantFrame: false,              // compositor pin (todos/0169): set on the
+    wantFrame: false,              // compositor pin (docs/archive/0169): set on the
                                    // want-frame doorbell, cleared ONLY by
                                    // frame-idle (pumpWait entry) and exit
     _wmPendingFb: null,            // SAB from 'wm-sabs' awaiting SURFACE_CREATE
-    audios: new Set(),             // aids owned by this process (todos/0017)
+    audios: new Set(),             // aids owned by this process (docs/archive/0017)
     _audioPendingSab: null,        // SAB from 'audio-sab' awaiting AUDIO_OPEN
     _httpStage: null,              // staged request body awaiting HTTP_OPEN
     trace: null,                   // strace (0046): { ofdId, pipe, follow, drops, cur }
@@ -2930,16 +2930,16 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
   pcb.page = sab;
   pcb.i32 = new Int32Array(sab);
   pcb.u8 = new Uint8Array(sab);
-  // Advertise the vsync source (todos/0100) before the worker exists —
+  // Advertise the vsync source (docs/archive/0100) before the worker exists —
   // host.js reads the flag once at SDL-backend construction.
   if (self._vsync) Atomics.store(pcb.i32, KP_VSYNC_EN, 1);
-  // Spawn-while-parked (todos/0169, the KP_VSYNC_EN precedent): stamp the
+  // Spawn-while-parked (docs/archive/0169, the KP_VSYNC_EN precedent): stamp the
   // parked flag so the new process's first present/vsync-arm rings the
   // doorbell instead of trusting a page word that was never written. Spawn
   // and the compositor's park run on the same worker thread, so the stamp
   // can't race a park loop mid-iteration.
   if (self._compParked) Atomics.store(pcb.i32, KP_COMP_PARKED, 1);
-  // vDSO block (todos/0179): publish before the worker exists so the first
+  // vDSO block (docs/archive/0179): publish before the worker exists so the first
   // process-side read never sees the zero-filled page.
   self._vdsoPublish(pcb);
 
@@ -2960,13 +2960,13 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
       std.out.refs++; pcb.fds.set(1, std.out.id);
       std.err.refs++; pcb.fds.set(2, std.err.id);
     }
-    // strace (todos/0046): spec.trace names a pipe WRITE end in the PARENT's
+    // strace (docs/archive/0046): spec.trace names a pipe WRITE end in the PARENT's
     // fd table (host.js only forwards it under spawn flags bit1, so old
     // binaries with the 32-byte spec can't set it by accident). The kernel
     // takes its own ref — the tracer's read end sees EOF exactly at tracee
     // teardown. flags bit2 = follow: descendants inherit the same pipe and
     // every line gets a [pid N] prefix. Attached BEFORE the fd-actions run
-    // (todos/0181): an action-close can shrink a pipe end to single-holder
+    // (docs/archive/0181): an action-close can shrink a pipe end to single-holder
     // and fire the SPSC promotion check — the kernel pseudo-holder ref must
     // already be there so a traced pipe never even transiently promotes.
     if (typeof spec.trace === 'number' && spec.trace >= 0) {
@@ -3008,7 +3008,7 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
           // other — record the path and the truncate/create dirty bit so
           // the close settles (same rules as the FS_OPEN arm).
           var no = self._makeOfd('file', { bfsFd: bfsFd, path: aAbs,
-                                           accmode: a.arg & 3 });   // todos/0376
+                                           accmode: a.arg & 3 });   // docs/archive/0376
           if ((a.arg & 0x200) || !aExisted) no.dirty = true;
           if (!aExisted) self._watchEmit(aAbs, FSW_CREATE, FSW_CREATE, false);
           no.refs++;
@@ -3033,7 +3033,7 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
       }
       if (fail) {
         pcb.fds.forEach(function (id) { self._ofdUnref(id, pid); });
-        // The trace ref attached above (pre-actions since todos/0181) is
+        // The trace ref attached above (pre-actions since docs/archive/0181) is
         // not in pcb.fds — release it or the kernel's write-end ref leaks.
         if (pcb.trace) { self._ofdUnref(pcb.trace.ofdId, 0); pcb.trace = null; }
         return { errno: fail };
@@ -3054,7 +3054,7 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
 
   self._procs.set(pid, pcb);
   if (parent) parent.children.add(pid);
-  // SPSC pipe rings (todos/0181): every ringed pipe fd in the child's
+  // SPSC pipe rings (docs/archive/0181): every ringed pipe fd in the child's
   // FINAL table (post-actions) ships its ring SAB, whatever the current
   // mode — the PR_MODE word, not process-local knowledge, gates fast ops,
   // so a pipe promoted AFTER this spawn (the parent's closes) just starts
@@ -3084,8 +3084,8 @@ Kernel.prototype._spawnImage = function (parent, spec, image, module) {
     kernelPage: sab,
     ttySab: pcb.tty ? pcb.tty.sab : null,
     brokered: self._brokered,
-    ro: self._roImage,   // process-side read-only volume (todos/0180)
-    pipeRings: pipeRings,   // SPSC pipe rings for inherited fds (todos/0181)
+    ro: self._roImage,   // process-side read-only volume (docs/archive/0180)
+    pipeRings: pipeRings,   // SPSC pipe rings for inherited fds (docs/archive/0181)
   };
   try {
     pcb.worker = self._createWorker(procSpec);
@@ -3120,23 +3120,23 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
       if (pcb.waiter) { this._cancelWaiter(pcb); this._respond(pcb, { errno: 'EINTR' }); }
       break;
     case 'out': this._onOutput(pcb.pid, msg.fd, msg.bytes); break;
-    // WM (todos/WM.md): SABs precede their SURFACE_CREATE on the same FIFO
+    // WM (docs/WM.md): SABs precede their SURFACE_CREATE on the same FIFO
     // channel; gpu-transport frames arrive per-present (browser only).
     case 'wm-sabs':
       if (msg.fb) pcb._wmPendingFb = msg.fb;
       if (msg.ring && !pcb.wmRing) this._wmSetRing(pcb, msg.ring);
       break;
-    // Audio (todos/0017): the source-ring SAB precedes its AUDIO_OPEN on the
+    // Audio (docs/archive/0017): the source-ring SAB precedes its AUDIO_OPEN on the
     // same FIFO channel — the wm-sabs handshake, verbatim.
     case 'audio-sab':
       if (msg.sab) pcb._audioPendingSab = msg.sab;
       break;
-    // SPSC pipe ring (todos/0181): precedes its PIPE_CREATE, same handshake.
+    // SPSC pipe ring (docs/archive/0181): precedes its PIPE_CREATE, same handshake.
     case 'pipe-sab':
       if (msg.sab) pcb._pipePendingSab = msg.sab;
       break;
     case 'wm-frame': this._wmFrame(pcb, msg.sid | 0, msg.bmp, msg.serial); break;
-    // On-demand compositor doorbells (todos/0169): want-frame = this pcb
+    // On-demand compositor doorbells (docs/archive/0169): want-frame = this pcb
     // presented / armed a vsync wait while the compositor was parked —
     // pin it awake (hard state, never heuristic) and wake it; frame-idle =
     // host.js's pumpWait entry, the app is back to waiting on events.
@@ -3158,7 +3158,7 @@ Kernel.prototype._onWorkerMessage = function (pcb, msg) {
   }
 };
 
-/* ---- strace (todos/0046): per-pid syscall-RPC trace ----
+/* ---- strace (docs/archive/0046): per-pid syscall-RPC trace ----
  * pcb.trace = { ofdId, pipe, follow, drops, cur } — attached at spawn from
  * spec.trace (a pipe WRITE end in the parent's fd table; the kernel holds
  * its own ref until exit, so the tracer reading the other end sees EOF
@@ -3294,7 +3294,7 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       this._respond(pcb, pnm !== undefined ? { name: pnm } : { errno: 'ENODEV' });
       break;
     }
-    // Interval timers (todos/0044): pure kernel-side bookkeeping over the
+    // Interval timers (docs/archive/0044): pure kernel-side bookkeeping over the
     // existing SIGPEND delivery machinery.
     case OP.SETITIMER:
       this._respond(pcb, this._setitimer(pcb, req.which | 0, req.valueMs | 0, req.intervalMs | 0));
@@ -3341,7 +3341,7 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       break;
     }
     case OP.PTY_CREATE: {
-      // Ptys (todos/0020): the slave is a FULL Tty — line discipline,
+      // Ptys (docs/archive/0020): the slave is a FULL Tty — line discipline,
       // termios, control-char signal routing, and the deferred-read
       // machinery are reused verbatim; only the byte endpoints differ
       // (the master fd stands where the UI bridge does for the system
@@ -3381,7 +3381,7 @@ Kernel.prototype._dispatchRpc = function (pcb) {
         buf: [], cap: PIPE_CAP, rOpen: true, wOpen: true,
         readWaiters: [], writeWaiters: [],   // pids with a deferred RPC, FIFO
       };
-      // SPSC ring (todos/0181): the creator posts the ring SAB immediately
+      // SPSC ring (docs/archive/0181): the creator posts the ring SAB immediately
       // before this RPC ({type:'pipe-sab'} — the audio-sab handshake; the
       // kernel can't hand an SAB to a parked worker). A ringed pipe keeps
       // its bytes in the ring in every mode; no SAB (fake workers, old
@@ -3404,7 +3404,7 @@ Kernel.prototype._dispatchRpc = function (pcb) {
       break;
     }
     case OP.PIPE_KICK: {
-      // The SPSC doorbell (todos/0181): a fast end committed a ring op
+      // The SPSC doorbell (docs/archive/0181): a fast end committed a ring op
       // while the peer's parked flag was up — re-serve parked waiters and
       // rescan selects. {epipe:1} = the caller hit PRF_RGONE locally and
       // wants its own SIGPIPE (deliver BEFORE responding so the pending
@@ -3526,7 +3526,7 @@ Kernel.prototype._clipServe = function (pcb, gfmt, goff) {
   this._respondRaw(pcb, gresp);
 };
 
-/* ---- Egress (todos/0398): the OP.EGRESS materializer + store-only zip ----
+/* ---- Egress (docs/archive/0398): the OP.EGRESS materializer + store-only zip ----
  * The wire carries paths; bytes exist only on the kernel->embedder leg. The
  * whole flow is synchronous inside one dispatch turn (OPFS SyncAccessHandle
  * reads are sync in the kernel worker; EGRESS_MAX bounds the blocked time),
@@ -3538,7 +3538,7 @@ var EGRESS_MAX = 256 * 1024 * 1024;   // lstat-summed refusal cap, decided
                                       // of a seeded game dir plausibly tops
                                       // 128 MB. If mobile memory pressure
                                       // ever bites, this constant moves — no
-                                      // wire change (todos/0398 design).
+                                      // wire change (docs/archive/0398 design).
 var EG_REQ_MAX = 8192 + 16;           // os/egress.h EG_MAX path-list cap plus
                                       // the disposition header word (E2BIG)
 var EG_ZIP_MAX_ENTRIES = 65535;       // the pre-zip64 EOCD u16 entry count —
@@ -3593,7 +3593,7 @@ function egDosStamp(sec) {
  * its target (the Info-ZIP convention: Unix mode in the central directory's
  * external attributes, S_IFLNK marks the entry — macOS and Linux unzip both
  * restore it as a link). Deflate would be an INTERNAL upgrade here — the
- * wire and the onEgress hook shape would not change (todos/0398 design). */
+ * wire and the onEgress hook shape would not change (docs/archive/0398 design). */
 function zipStore(entries) {
   var locParts = [], cenParts = [], offset = 0;
   for (var i = 0; i < entries.length; i++) {
@@ -3821,7 +3821,7 @@ Kernel.prototype._respondRaw = function (pcb, bytes) {
  * BlockFS fd of the kernel instance — its position IS the shared offset, so
  * dup/inheritance get POSIX open-file-description semantics for free, and
  * BlockFS's tested unlink-while-open refcounts become system-global. */
-/* One page of directory entries under the payload cap (todos/0241).
+/* One page of directory entries under the payload cap (docs/archive/0241).
  * FS_OPENDIR reads the first page; when the NEXT entry would push the
  * measured JSON bytes past KP_DIR_PAGE, the open backend handle parks in
  * pcb.dirRpc behind a cursor id (reply `more`) with that entry carried as
@@ -3891,7 +3891,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       if (this._watches.size && (req.flags & 0x40)) oExisted = fs.stat(oAbs) !== null;
       var bfsFd = fs.open(oAbs, req.flags | 0, req.mode | 0);
       if (bfsFd === null) { this._respond(pcb, eFs()); return; }
-      // accmode (todos/0376): the OFD carries flags & O_ACCMODE; FS_READ/
+      // accmode (docs/archive/0376): the OFD carries flags & O_ACCMODE; FS_READ/
       // FS_WRITE enforce it. FS_DUP/FS_DUP2/spawn DUP2 share the OFD, so
       // the mode rides every duplicate (POSIX open-file-description rule).
       var o = this._makeOfd('file', { bfsFd: bfsFd, path: oAbs,
@@ -3917,7 +3917,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       if (!o1) { this._respond(pcb, { errno: 'EBADF' }); return; }
       var count = Math.min(req.count | 0, KP_PAYLOAD_CAP);
       if (o1.kind === 'file') {
-        // Access mode (todos/0376): O_WRONLY can't read. Belt-and-braces
+        // Access mode (docs/archive/0376): O_WRONLY can't read. Belt-and-braces
         // with the same check in BlockFS — the kernel OFD is the layer a
         // non-BlockFS embedder fs would rely on.
         if (o1.accmode === 1) { this._respond(pcb, { errno: 'EBADF' }); return; }
@@ -3939,7 +3939,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         return;
       }
       if (o1.kind === 'http') {
-        // HTTP body drain (todos/0417): bytes when queued, 0 at clean EOF,
+        // HTTP body drain (docs/archive/0417): bytes when queued, 0 at clean EOF,
         // the error when failed, EAGAIN when dry — NEVER a park. http fds
         // are inherently non-blocking like watch fds: __wait doesn't name
         // the ready fd, so a woken caller finds the ready transfer by
@@ -3978,7 +3978,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
         // parking (0253) — and before the job-control check, since a
         // zero-length read moves no bytes (the simple conforming choice).
         if (count === 0) { this._respondRaw(pcb, new Uint8Array(0)); return; }
-        // Job control (todos/0003): a background pgroup reading the tty gets
+        // Job control (docs/archive/0003): a background pgroup reading the tty gets
         // SIGTTIN (stop class); if it's ignored or blocked, POSIX says the
         // read fails with EIO instead. The read itself returns EINTR — after
         // SIGCONT the libc caller retries, now (typically) in the foreground.
@@ -4010,7 +4010,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       var o2 = ofdOf(wfd);
       if (!o2) { this._respond(pcb, { errno: 'EBADF' }); return; }
       if (o2.kind === 'file') {
-        // Access mode (todos/0376): O_RDONLY can't write — the corruption
+        // Access mode (docs/archive/0376): O_RDONLY can't write — the corruption
         // half; a read-only fd used to silently mutate the file.
         if (o2.accmode === 0) { this._respond(pcb, { errno: 'EBADF' }); return; }
         var wn = fs.write(o2.bfsFd, data, data.length);
@@ -4138,7 +4138,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
     case OP.FS_FTRUNCATE: {
       var o5 = ofdOf(req.fd);
       if (!o5 || o5.kind !== 'file') { this._respond(pcb, { errno: 'EBADF' }); return; }
-      // POSIX: ftruncate needs a fd open for writing (todos/0376).
+      // POSIX: ftruncate needs a fd open for writing (docs/archive/0376).
       if (o5.accmode === 0) { this._respond(pcb, { errno: 'EINVAL' }); return; }
       r = fs.ftruncate(o5.bfsFd, req.size | 0);
       if (r !== null) {
@@ -4235,7 +4235,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
     }
     case OP.FS_REALPATH: {
       // PHYSICAL realpath — every symlink component resolved against the real
-      // kernel-side fs (todos/0263). Chattiness is nil: the walk's lstat/
+      // kernel-side fs (docs/archive/0263). Chattiness is nil: the walk's lstat/
       // readlink hops stay kernel-local, so a brokered realpath is ONE RPC.
       var rp;
       try { rp = fs.realpathPhysical(P(req.path)); } catch (e) { rp = null; }
@@ -4248,7 +4248,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       return;
     }
     case OP.FS_SELECT: {
-      // Flag-BEFORE-scan (todos/0181): raise the ring parked-peer flags,
+      // Flag-BEFORE-scan (docs/archive/0181): raise the ring parked-peer flags,
       // THEN scan. A fast commit that the scan missed loads the flag after
       // its commit (SC order) and kicks — the orders cross, so the wake is
       // never lost. An immediate answer drops the flags via _clearFlags.
@@ -4272,7 +4272,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
       return;
     }
     case OP.FS_WAIT: {
-      // Unified wait (todos/0178): FS_SELECT readiness over req.r/req.w,
+      // Unified wait (docs/archive/0178): FS_SELECT readiness over req.r/req.w,
       // PLUS the process's input ring as a wake source (req.ring). Response
       // { why } — 0 timeout, 1 fd (r/w lists attached), 2 ring; a posted
       // signal completes the park as EINTR through the ordinary
@@ -4350,7 +4350,7 @@ Kernel.prototype._fsRpc = function (pcb, op, req) {
  *
  * Canonicalization is LEXICAL (cwd-join + dot-collapse — fs._resolvePath):
  * the fs surface has no physical resolver (realpath is lexical-only in
- * this flavor, todos/0263), so a write through a symlink alias attributes
+ * this flavor, docs/archive/0263), so a write through a symlink alias attributes
  * to the alias's path — the documented residual twin of inotify's
  * hardlink-alias case, harmless to path-consistent consumers. When 0263
  * lands a physical resolver, _watchCanon is the ONE seam to upgrade. */
@@ -4525,7 +4525,7 @@ Kernel.prototype._watchDrain = function (w, cap) {
   return out;
 };
 
-/* ---- AF_UNIX sockets (0x05xx; todos/0008) ----
+/* ---- AF_UNIX sockets (0x05xx; docs/archive/0008) ----
  * Stream sockets over the pipe machinery: a connection is a pair of
  * pipe-shaped directions (client tx == server rx and vice versa); bind is a
  * real S_IFSOCK node in BlockFS plus an entry in the kernel's rendezvous
@@ -4601,7 +4601,7 @@ Kernel.prototype._sockRpc = function (pcb, op, req) {
       var cst = cres ? fs.stat(cres) : null;
       if (!cst) { this._respond(pcb, { errno: fs._lastError || 'ENOENT' }); return; }
       if ((cst.mode & 0xF000) !== S_IFSOCK_MODE) { this._respond(pcb, { errno: 'ECONNREFUSED' }); return; }
-      // Kernel-owned endpoints (sockServe, todos/0014) rendezvous first: the
+      // Kernel-owned endpoints (sockServe, docs/archive/0014) rendezvous first: the
       // kernel holds the server half of the crossed pair natively — bytes
       // drain to the handler via the _pipeNotify drain hook, no PCB involved.
       var ksrv = this._kernelSockServers.get(cres);
@@ -4681,7 +4681,7 @@ Kernel.prototype._sockRpc = function (pcb, op, req) {
   }
 };
 
-/* ---- kernel-owned AF_UNIX endpoints (todos/0014) ----
+/* ---- kernel-owned AF_UNIX endpoints (docs/archive/0014) ----
  * The kernel as a native socket peer: sockServe(path, onConnect) plants a
  * S_IFSOCK inode and registers the path; a process connect() then yields a
  * `peer` object on the kernel side instead of queueing on a listener.
@@ -4721,7 +4721,7 @@ Kernel.prototype._kernelPeer = function (recvDir, sendDir, clientPcb) {
     send: function (bytes) {
       if (!sendDir.rOpen || !sendDir.wOpen) return false;
       // A client parked in a kernel fd-waiter (unified WAIT / select,
-      // todos/0178) is woken by the _pipeNotify below — its RPC completion
+      // docs/archive/0178) is woken by the _pipeNotify below — its RPC completion
       // IS the wake, atomically. Only the raw ring-futex tier
       // (__sdl_pump_wait — SDL_WaitEvent) still needs the ring kick, so
       // capture the waiter kind BEFORE notifying and skip the kick when
@@ -4731,7 +4731,7 @@ Kernel.prototype._kernelPeer = function (recvDir, sendDir, clientPcb) {
         (clientPcb.waiter.op === 'uwait' || clientPcb.waiter.op === 'select');
       for (var i = 0; i < bytes.length; i++) sendDir.buf.push(bytes[i]);
       self._pipeNotify(sendDir);                  // serve the client's park
-      // Kernel-socket→input-ring wake (todos/0168, IDLE-POWER piece W):
+      // Kernel-socket→input-ring wake (docs/archive/0168, IDLE-POWER piece W):
       // a client parked on its input ring (__sdl_pump_wait — SDL_WaitEvent)
       // must wake when kernel-peer data lands, or a WMP event
       // (EV_CREATED, EV_SNAP_EDGE, EV_SCREEN, R_IDLE…) sits until the
@@ -4755,7 +4755,7 @@ Kernel.prototype._kernelPeer = function (recvDir, sendDir, clientPcb) {
  * read is ready on data or writer-gone EOF, a pipe write on free space or
  * reader-gone (the write then surfaces EPIPE). */
 /* ============================================================
- * WM surfaces (todos/WM.md; todos/0007 design, spikes todos/0012).
+ * WM surfaces (docs/WM.md; docs/archive/0007 design, spikes docs/archive/0012).
  *
  * The kernel owns the scene — registry, z-order, focus, input routing —
  * and, in v1, the window-management POLICY too (kernel-chrome: title-bar
@@ -4797,7 +4797,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       var cgen = Atomics.load(i32, SH_GEN);
       if (cgen === 0) Atomics.store(i32, SH_GEN, 1);
       else if (cgen !== 1) { this._respond(pcb, { errno: 'EINVAL' }); break; }
-      // Anchored child surface (todos/0256, menu arch §3.1): creation-flag
+      // Anchored child surface (docs/archive/0256, menu arch §3.1): creation-flag
       // bit 6 pins the new surface to a same-process parent at a fixed
       // (dx, dy) offset from the parent's client origin. parentSid forms an
       // arbitrary-depth TREE (amendment A1 — a popup may parent another
@@ -4814,14 +4814,14 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       }
       var sid = this._nextSid++;
       // Cascade placement (kernel default; a connected /bin/wm re-places on
-      // EV_CREATED — until that lands the surface is unmapped, todos/0069);
+      // EV_CREATED — until that lands the surface is unmapped, docs/archive/0069);
       // the client rect is (x,y,w,h) with the title bar above it, so y
       // starts below the bar.
       var n = sid - 1;
       var surf = {
         sid: sid, pid: pcb.pid, sab: fb, i32: i32, u8: new Uint8Array(fb),
         w: w, h: h,
-        dstW: w, dstH: h,         // on-screen viewport (todos/0024); wmSetDst
+        dstW: w, dstH: h,         // on-screen viewport (docs/archive/0024); wmSetDst
                                   // scales fixed-size surfaces, buffer untouched
         title: typeof req.title === 'string' ? req.title.slice(0, 128) : '',
         x: 8 + ((n * 24) % Math.max(64, this._wmScreen.w >> 2)),
@@ -4834,18 +4834,18 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         relativeMouse: !!((req.flags | 0) & 2),   // bit1: wants pointer lock (0018)
         resizable: !!((req.flags | 0) & 4),       // bit2: SDL_WINDOW_RESIZABLE (0021)
         hasAlpha: !!((req.flags | 0) & 8),        // bit3: SDL_WINDOW_TRANSPARENT
-                                                  // (todos/0063): per-pixel alpha,
+                                                  // (docs/archive/0063): per-pixel alpha,
                                                   // composited src-over
         transient: !!((req.flags | 0) & 16),      // bit4: SDL_WINDOW_UTILITY
-                                                  // (todos/0281): owned/modal —
+                                                  // (docs/archive/0281): owned/modal —
                                                   // no taskbar button, skipped by
                                                   // window cycling (create-only,
                                                   // never toggled via SET_FLAGS)
-        cursor: 0,                // per-surface client cursor shape (todos/0105,
+        cursor: 0,                // per-surface client cursor shape (docs/archive/0105,
                                   // SDL_SystemCursor; -1 hidden). SDL_SetCursor
                                   // via SURFACE_SET_CURSOR; chrome cursors
                                   // overlay in _wmCursorAt.
-        layer: 0,                 // z layer (todos/0038): -1 bottom / 0 / +1 top;
+        layer: 0,                 // z layer (docs/archive/0038): -1 bottom / 0 / +1 top;
                                   // set post-create via SET_LAYER / wmSetLayer
         pendingConfigure: null,   // { w, h, serial } resize asked, ack not yet
                                   // in (0019) — always the NEWEST issued
@@ -4854,12 +4854,12 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         committedSerial: 1,       // serial of the geometry on screen (#790)
         issued: [],               // still-valid issued configures, oldest
                                   // first, <= WM_CFG_OUTSTANDING (#790)
-        mapped: true,             // in the composite + hit test (todos/0069);
+        mapped: true,             // in the composite + hit test (docs/archive/0069);
                                   // see the map-on-placement decision below
         mapTimer: null,           // the unmapped-surface backstop timeout
         closeWd: null,            // hung-app watchdog (#486): armed by
                                   // wmCloseRequest, disarmed on consumption
-        parentSid: 0,             // anchored child (todos/0256): the parent
+        parentSid: 0,             // anchored child (docs/archive/0256): the parent
                                   // surface this one is pinned to (0 = a
                                   // top-level); forms a tree (A1)
         dx: 0, dy: 0,             // the anchor offset, in PARENT BUFFER
@@ -4888,7 +4888,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         // read a plain per-surface rect and stay anchor-blind.
         this._wmAnchorApply(surf, parent);
       }
-      // Map-on-placement (todos/0069): with a WM subscribed, the surface is
+      // Map-on-placement (docs/archive/0069): with a WM subscribed, the surface is
       // created UNMAPPED — the compositor and hit test skip it until the
       // WM's first geometry/stacking op on the sid lands (wm.c MOVEs every
       // window it manages on EV_CREATED, so that MOVE doubles as the map
@@ -4900,7 +4900,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       // taskbar-class, owner-positioned — but parks its OWN furniture, the
       // start menu being the worst teleport case); and a WM_MAP_TIMEOUT_MS
       // backstop maps anything a wedged WM never places. Anchored children
-      // are exempt (todos/0282): their placement is materialized from the
+      // are exempt (docs/archive/0282): their placement is materialized from the
       // parent at create (_wmAnchorApply above) — placement IS decided —
       // and no map ack could ever land anyway (every WM geometry/stacking
       // op refuses children with EPERM), so gating a subscriber-owned one
@@ -4986,7 +4986,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       }
       break;
     }
-    // Update the surface flag word (todos/0018): bit0 borderless, bit1
+    // Update the surface flag word (docs/archive/0018): bit0 borderless, bit1
     // relative-mouse, bit2 resizable (0021), bit3 has-alpha (0063). The
     // pointer-lock sync below round-trips a wanted-state change to the UI
     // bridge.
@@ -4994,13 +4994,13 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       var sf = this._surfaces.get(req.sid | 0);
       if (!sf || sf.pid !== pcb.pid) { this._respond(pcb, { errno: 'EINVAL' }); break; }
       var fl = req.flags | 0;
-      // Anchored children stay chrome-free invariantly (todos/0256, §3.1):
+      // Anchored children stay chrome-free invariantly (docs/archive/0256, §3.1):
       // a flag update can never grow a popup a title bar.
       sf.borderless = sf.parentSid ? true : !!(fl & 1);
       sf.relativeMouse = !!(fl & 2);
       sf.resizable = !!(fl & 4);
       sf.hasAlpha = !!(fl & 8);
-      // Resizable and scaled are exclusive modes (todos/0024): granting
+      // Resizable and scaled are exclusive modes (docs/archive/0024): granting
       // bit2 snaps the viewport back to the buffer (resizable => dst == w/h).
       if (sf.resizable && (sf.dstW !== sf.w || sf.dstH !== sf.h)) {
         sf.dstW = sf.w; sf.dstH = sf.h;
@@ -5011,7 +5011,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       this._wmSyncPointerLock();
       break;
     }
-    // Per-surface cursor (todos/0105): SDL_SetCursor's shape. Stored only —
+    // Per-surface cursor (docs/archive/0105): SDL_SetCursor's shape. Stored only —
     // the effective cursor is derived on the next pointer move (chrome
     // overlay in _wmCursorAt); a stationary pointer over this surface's
     // client updates on the next move (Win95-ish, and it keeps this RPC
@@ -5024,7 +5024,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       this._respond(pcb, {});
       break;
     }
-    // Owner-initiated resize (todos/0068): the surface's own process asks
+    // Owner-initiated resize (docs/archive/0068): the surface's own process asks
     // for a new buffer size. No resizable gate (see the OP table comment);
     // the client completes via the usual WINDOW_RESIZED -> SURFACE_CONFIGURE
     // renegotiation, so geometry only changes at the tear-free ack.
@@ -5034,7 +5034,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       var rw = req.w | 0, rh = req.h | 0;
       // WM_MIN_SIZE keeps a framed window's title reachable; an anchored
       // child is chrome-free and owner-managed, and menu-bar-class strips
-      // are legitimately thinner (todos/0256) — only >0 applies there.
+      // are legitimately thinner (docs/archive/0256) — only >0 applies there.
       var srMin = sr.parentSid ? 1 : WM_MIN_SIZE;
       if (rw < srMin || rh < srMin || rw > 8192 || rh > 8192) {
         this._respond(pcb, { errno: 'EINVAL' }); break;
@@ -5065,7 +5065,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       this._wmEmit(WMP.EV_TITLE, [st.sid], st.title);
       break;
     }
-    // The resize ack (todos/0019; identities #790). Only valid while a
+    // The resize ack (docs/archive/0019; identities #790). Only valid while a
     // configure is pending (resize is kernel-initiated; there is no
     // client-initiated resize). The ack NAMES the serial it answers; the
     // new SAB's front buffer already holds a frame at that size and its
@@ -5126,7 +5126,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
       sc.committedSerial = cser;
       sc.issued = sc.issued.filter(function (c) { return c.serial > cser; });
       if (sc.parentSid) {
-        // Anchored child (todos/0256, A5/A11): dst is INHERITED — re-derive
+        // Anchored child (docs/archive/0256, A5/A11): dst is INHERITED — re-derive
         // position + scale from the parent instead of resetting dst to the
         // buffer, so an owner-resized strip child keeps riding the parent's
         // scale and anchor.
@@ -5134,7 +5134,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
         if (cpar) this._wmAnchorApply(sc, cpar);
       } else {
         sc.dstW = cw; sc.dstH = ch; // configure implies resizable: dst tracks
-                                    // the buffer (never scaled, todos/0024)
+                                    // the buffer (never scaled, docs/archive/0024)
       }
       if (sc.children.length) this._wmAnchorLayout(sc);  // subtree follows the
                                                          // new geometry (A1)
@@ -5166,7 +5166,7 @@ Kernel.prototype._wmRpc = function (pcb, op, req) {
   }
 };
 
-/* ---- map-on-placement (todos/0069) ----
+/* ---- map-on-placement (docs/archive/0069) ----
  * An unmapped surface exists (listed, focusable, injectable, single-surface
  * screenshots work) but is not composited and not hit-tested — the classic
  * X11/Wayland rule: a WM-managed window isn't shown until the WM placed it.
@@ -5194,7 +5194,7 @@ Kernel.prototype._wmRestoreGrabs = function (s) {
 
 /* ---- the ancestor walk (#794) ----
  * A surface inherits effective visibility from TWO kinds of ancestor: its
- * anchor parent (an anchored popup, todos/0256) and its owner (an owned
+ * anchor parent (an anchored popup, docs/archive/0256) and its owner (an owned
  * top-level, SURFACE_SET_OWNER). _wmUp steps to whichever one a surface has
  * (a surface never has both — SET_OWNER refuses anchored surfaces and
  * anchored creation refuses owners); every predicate below walks it. */
@@ -5286,7 +5286,7 @@ Kernel.prototype._wmSubDrop = function (conn) {
 Kernel.prototype._wmDestroySurface = function (sid) {
   var s = this._surfaces.get(sid);
   if (!s) return;
-  // Destroy-cascade (todos/0256, A1): anchored children die first,
+  // Destroy-cascade (docs/archive/0256, A1): anchored children die first,
   // recursively — a popup never outlives its anchor. Each child's own
   // destroy unlinks it from s.children, so the loop drains the list.
   // Owned top-levels cascade the same way (#794): owner destruction
@@ -5310,7 +5310,7 @@ Kernel.prototype._wmDestroySurface = function (sid) {
   }
   if (s.mapTimer) { clearTimeout(s.mapTimer); s.mapTimer = null; }
   this._wmCloseWdClear(s);      // #486: no watchdog outlives its surface
-  this._wmAnims.delete(sid);    // no animating a dead surface (todos/0063)
+  this._wmAnims.delete(sid);    // no animating a dead surface (docs/archive/0063)
   this._surfaces.delete(sid);
   var zi = this._zOrder.indexOf(sid);
   if (zi >= 0) this._zOrder.splice(zi, 1);
@@ -5325,7 +5325,7 @@ Kernel.prototype._wmDestroySurface = function (sid) {
   this._wmSyncPointerLock();
 };
 
-/* The focus fall (todos/0039): when the focused surface goes away
+/* The focus fall (docs/archive/0039): when the focused surface goes away
  * (destroy, minimize), prefer the topmost non-minimized NORMAL-layer
  * window — after 0038 the top of raw z is ALWAYS pinned furniture (the
  * taskbar), which must not swallow keyboard focus. Furniture only takes
@@ -5344,7 +5344,7 @@ Kernel.prototype._wmFocusFall = function () {
   this._wmSetFocus(fall);
 };
 
-/* ---- the focus funnel (todos/0256, menu arch A9) ----
+/* ---- the focus funnel (docs/archive/0256, menu arch A9) ----
  * The ONE writer of _focusSid. Every focus TRANSITION — the surface-create
  * steal, wmFocus, and the destroy/minimize focus fall — lands here, so the
  * owner focus pair (WMEV.FOCUS_LOST to the old owner, FOCUS_GAINED to the
@@ -5374,12 +5374,12 @@ Kernel.prototype._wmSetFocus = function (sid) {
   this._bumpWm();
 };
 
-/* ---- anchored-child geometry (todos/0256, menu arch §3.1/A1/A11) ---- */
+/* ---- anchored-child geometry (docs/archive/0256, menu arch §3.1/A1/A11) ---- */
 
 /* Materialize an anchored child's on-screen rect from its parent: position
  * = the parent origin + the (dx, dy) anchor offset scaled by the parent's
  * dst/buffer ratio; size = the child's own buffer scaled the same way —
- * scale INHERITS down the tree, so a dst-scaled fixed-size window (todos/
+ * scale INHERITS down the tree, so a dst-scaled fixed-size window (docs/
  * 0024) carries its popups exactly like its client pixels. Runs at every
  * MUTATION site (create, parent move/drag/screen-clamp, wmSetDst, either
  * side's configure) and STORES the result (A11), so the scene walk, the
@@ -5439,7 +5439,7 @@ Kernel.prototype._wmAnchorHidden = function (s) {
   // hidden while its owner is minimized or hidden. An unmapped owner does
   // not hide its owned windows (mapping is per-surface placement state —
   // the owned window has its own placement); an unmapped anchor parent
-  // still does (todos/0256, the child's placement IS the parent's).
+  // still does (docs/archive/0256, the child's placement IS the parent's).
   var viaAnchor = !!s.parentSid;
   for (var p = this._wmUp(s); p; viaAnchor = !!p.parentSid, p = this._wmUp(p)) {
     if (p.minimized || p.requestedVisible === false) return true;
@@ -5527,7 +5527,7 @@ Kernel.prototype._wmAnchorRoot = function (s) {
   return s;
 };
 
-/* ---- the grab (todos/0256, menu arch A2) ----
+/* ---- the grab (docs/archive/0256, menu arch A2) ----
  * Called on every pointer PRESS while a grab is active, with the hit-test
  * result (target surface or null for the desktop, and whether the press
  * landed in its client area). A press in the client area of any surface in
@@ -5569,7 +5569,7 @@ Kernel.prototype._wmGrabConsume = function (target, isClient) {
   return 'grab-dismiss';
 };
 
-/* ---- pointer lock (todos/0018) ----
+/* ---- pointer lock (docs/archive/0018) ----
  * WANTED = the focused surface requested relative mouse (and is on screen).
  * The kernel tells the UI bridge on every wanted-state CHANGE (onPointerLock);
  * the bridge does the Pointer Lock API dance (the lock needs a user gesture,
@@ -5595,7 +5595,7 @@ Kernel.prototype.wmPointerLockChanged = function (active) {
 };
 
 /* ============================================================
- * Audio mixer (todos/0017; design: WM.md "Audio mixing — the kernel sound
+ * Audio mixer (docs/archive/0017; design: WM.md "Audio mixing — the kernel sound
  * server"). Control plane: AUDIO_OPEN/AUDIO_CLOSE below. Data plane: the
  * pump — pure math over SABs, no timers here (the embedder schedules it;
  * tests call it with an explicit frame budget).
@@ -5661,7 +5661,7 @@ Kernel.prototype._audioRpc = function (pcb, op, req) {
       break;
     }
     case OP.AUDIO_GAIN: {
-      // Master output gain (todos/0048): percent, clamped 0..200 (unity
+      // Master output gain (docs/archive/0048): percent, clamped 0..200 (unity
       // 100). A negative request queries. Deliberately NOT per-process —
       // the volume slider is a system control, like the physical knob.
       var g = req.gain | 0;
@@ -5684,7 +5684,7 @@ Kernel.prototype._audioMarkDying = function (s) {
   }
 };
 
-/* Vsync broadcast (todos/0100): the embedder calls this from its real frame
+/* Vsync broadcast (docs/archive/0100): the embedder calls this from its real frame
  * clock — the browser compositor's rAF, right where it samples the scene.
  * One bump + notify per live process; KernelClient.vsyncWait parks on the
  * word and host.js's surface backend paces SDL frame loops off it. No clock,
@@ -5699,11 +5699,11 @@ Kernel.prototype.vsyncTick = function () {
     Atomics.notify(pcb.i32, KP_VSYNC_SEQ);
     n++;
   });
-  this._vsyncNotifies += n;   // app-worker-wake probe (todos/0169)
+  this._vsyncNotifies += n;   // app-worker-wake probe (docs/archive/0169)
 };
 
 /* Cumulative count of per-pcb vsync notifies — the test/measurement probe
- * for "app workers stop waking when the compositor parks" (todos/0169). */
+ * for "app workers stop waking when the compositor parks" (docs/archive/0169). */
 Kernel.prototype.vsyncNotifyCount = function () {
   return this._vsyncNotifies;
 };
@@ -5715,7 +5715,7 @@ Kernel.prototype.wmFrameCount = function () {
   return this._wmFrameN | 0;
 };
 
-/* ---- on-demand compositor park protocol (todos/0169; IDLE-POWER piece B).
+/* ---- on-demand compositor park protocol (docs/archive/0169; IDLE-POWER piece B).
  * The compositor shares this worker: when its scene goes clean it parks the
  * rAF (no ticks, no submits) and these are the kernel half of the handshake.
  * Wake paths back in are (a) _bumpWm — every WM state change, (b) _wmFrame —
@@ -5845,7 +5845,7 @@ Kernel.prototype.audioPump = function (maxFrames) {
       // non-integer resample ratio the fractional cursor strands the last
       // source frame(s) forever (floor((srcFrames - frac)/ratio) hits 0
       // with queued > 0), so waiting for queued == 0 would leak the
-      // stream — one-shot clips (PlaySound, todos/0094) hit this on
+      // stream — one-shot clips (PlaySound, docs/archive/0094) hit this on
       // every play. Live streams keep the tail: the producer's next push
       // makes it mixable again.
       if (s.dying) (spent = spent || []).push(s.aid);
@@ -5946,7 +5946,7 @@ Kernel.prototype._wmFrame = function (pcb, sid, bmp, serial) {
   s.bitmap = bmp;
   this._wmFrameN = (this._wmFrameN | 0) + 1;   // gpu-ship counter (#551 clamp probe)
   Atomics.add(s.i32, SH_SEQ, 1);   // frameSeq accounting rides the header either way
-  // On-demand compositor (todos/0169): every gpu present already messages
+  // On-demand compositor (docs/archive/0169): every gpu present already messages
   // this worker, so the message IS the doorbell — arm unconditionally
   // (free insurance; a no-op while armed).
   if (this._onWmDamage) this._onWmDamage();
@@ -5954,7 +5954,7 @@ Kernel.prototype._wmFrame = function (pcb, sid, bmp, serial) {
 
 /* ---- input ring (kernel = single producer) ---- */
 
-/* Socket→ring wake (todos/0168; race closed in the 0169 gate): wake a
+/* Socket→ring wake (docs/archive/0168; race closed in the 0169 gate): wake a
  * client parked on its input ring because kernel-peer socket data landed.
  * This was a bare Atomics.notify(IR_WPOS), but a notify on an unchanged
  * word wakes nobody — one landing between the client's last ring check and
@@ -5984,7 +5984,7 @@ Kernel.prototype._wmKick = function (pcb) {
   this._waitRingWake(pcb);      // a WAIT park counts the ring as a source
 };
 
-/* Ring readiness / ring wake for the unified WAIT (todos/0178). The parked
+/* Ring readiness / ring wake for the unified WAIT (docs/archive/0178). The parked
  * process cannot move RPOS (it is inside the RPC), so an entry scan that
  * sees an empty ring stays true until a push lands — and every push calls
  * back here. That pairing is what makes check-and-park atomic. */
@@ -6014,7 +6014,7 @@ Kernel.prototype._wmPushEvent = function (pcb, words) {
   for (var k = 0; k < IR_RECORD_WORDS; k++) ring.i32[base + k] = words[k] | 0;
   Atomics.store(ring.i32, IR_WPOS, (wpos + 1) % cap2);
   // Wake a host parked ON THE RING (host.js __sdl_pump_wait — user32's
-  // blocking GetMessage, todos/0058) and the doorbell parks alike.
+  // blocking GetMessage, docs/archive/0058) and the doorbell parks alike.
   Atomics.notify(ring.i32, IR_WPOS);
   this._ring(pcb);                                          // wake SDL_WaitEvent parks
   this._waitRingWake(pcb);                                  // complete a unified WAIT (0178)
@@ -6026,7 +6026,7 @@ var _wmI32Scratch = new Int32Array(_wmF32Scratch.buffer);
 function f32bits(v) { _wmF32Scratch[0] = v; return _wmI32Scratch[0]; }
 
 /* Deliver one event to a surface's owner. Returns 0, or the errno NAME for
- * the real failure (todos/0242): EINVAL unknown sid, ESRCH the owning
+ * the real failure (docs/archive/0242): EINVAL unknown sid, ESRCH the owning
  * process is gone, EAGAIN no ring / ring full (delivery would drop). */
 Kernel.prototype._wmEventTo = function (sid, words) {
   var s = this._surfaces.get(sid);
@@ -6181,8 +6181,8 @@ Kernel.prototype._wmForceQuit = function (s, pcb) {
  * policy right here. The agent inject API below shares these code paths. */
 
 Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
-  this._wmLastInput = Date.now();      // idle clock (todos/0096)
-  // Kernel key-grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3): ONE
+  this._wmLastInput = Date.now();      // idle clock (docs/archive/0096)
+  // Kernel key-grab table (docs/KEYBINDING-OVERRIDE-SYSTEM.md §3): ONE
   // data-driven passive-grab table replaces the four historical hardcoded
   // chord blocks (cycle/menu/snap/sysmenu). Evaluated at the TOP of wmKey,
   // BEFORE focus routing, and ONLY with a WM subscribed — the unchanged
@@ -6211,7 +6211,7 @@ Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
         (fold & KM_SHIFT) ? 1 : 0, repeat ? 1 : 0);
     }
   }
-  // Overview active (todos/EXPOSE-MISSION-CONTROL.md): a pure presentation
+  // Overview active (docs/EXPOSE-MISSION-CONTROL.md): a pure presentation
   // override that swallows ALL input so apps never see half-gestures. The
   // toggle chord already fired above (the grab table reaches its intercept
   // first — that is how Ctrl+Alt+E exits). Esc DOWN dismisses via a PICK{0};
@@ -6228,7 +6228,7 @@ Kernel.prototype.wmKey = function (down, scancode, keysym, mod, repeat) {
     [down ? WMEV.KEYDOWN : WMEV.KEYUP, 0, scancode | 0, keysym | 0, mod | 0, repeat ? 1 : 0, 0, 0]) === 0;
 };
 
-/* A key-grab entry matched (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3). The
+/* A key-grab entry matched (docs/KEYBINDING-OVERRIDE-SYSTEM.md §3). The
  * matching keydown emits an event; both edges are swallowed (apps never see
  * half a chord). Returns wmKey's action string. RESERVED tokens (high bit)
  * belong to WM_DEFAULT_GRABS and emit the LEGACY event with its historical
@@ -6278,7 +6278,7 @@ Kernel.prototype.wmGrabSet = function (conn, dv, plen) {
   return 0;
 };
 
-/* ---- window overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md) ----
+/* ---- window overview / Exposé (docs/EXPOSE-MISSION-CONTROL.md) ----
  * The kernel mechanism: it renders and routes; wm.c decides. OVERVIEW_SET
  * hands us the miniature cell rects (WM policy), we store them as a pure
  * presentation override and composite live seq-gated miniatures + route
@@ -6313,7 +6313,7 @@ Kernel.prototype.wmOverviewSet = function (conn, dv, plen) {
   for (var h = 0; h < cells.length; h++) if (cells[h].sid === prevHover) keep = prevHover;
   var entering = !this._wmOverview;
   this._wmOverview = { cells: cells, hoverSid: keep };
-  // Enter/exit fly (todos/0063 shape): only on the first SET (entering) — a
+  // Enter/exit fly (docs/archive/0063 shape): only on the first SET (entering) — a
   // relayout while up must not re-fly. Browser-visual only; the headless
   // composite ignores it, so goldens are unaffected.
   if (entering) this._wmOverviewFlies(cells, false);
@@ -6365,13 +6365,13 @@ Kernel.prototype.wmOverview = function () {
   return 0;
 };
 
-/* ---- cursor shapes (todos/0105) ----
+/* ---- cursor shapes (docs/archive/0105) ----
  * SDL_SystemCursor wire values; the CSS-name map lives host-side (CURSOR_CSS
  * in host.js + os.html). Chrome resize cursors use the AXIS-PAIR shapes so a
  * side frame reads ew-/ns-resize and the corner the matching diagonal. */
 var CUR_DEFAULT = 0, CUR_NWSE = 5, CUR_EW = 7, CUR_NS = 8;
 
-/* The effective cursor at a SCREEN point (todos/0105): pointer-lock hides it
+/* The effective cursor at a SCREEN point (docs/archive/0105): pointer-lock hides it
  * (-1), an in-flight resize drag shows its edge cursor, a title drag the
  * arrow, a frame edge the matching resize cursor, a client area the surface's
  * OWN cursor (SDL_SetCursor), else the arrow. Mirrors wmPointer's hit test
@@ -6387,7 +6387,7 @@ Kernel.prototype._wmCursorAt = function (x, y) {
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
     if (!s || s.minimized || !s.mapped || this._wmRequestedHidden(s)) continue;
-    if ((s.parentSid || s.ownerSid) && this._wmAnchorHidden(s)) continue;   // (todos/0256, #794)
+    if ((s.parentSid || s.ownerSid) && this._wmAnchorHidden(s)) continue;   // (docs/archive/0256, #794)
     var dw = s.dstW, dh = s.dstH;
     var inTitle = !s.borderless &&
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
@@ -6419,7 +6419,7 @@ Kernel.prototype._wmCursorAt = function (x, y) {
   return CUR_DEFAULT;                            // desktop
 };
 
-/* Emit an effective-cursor change to the UI bridge, debounced (todos/0105).
+/* Emit an effective-cursor change to the UI bridge, debounced (docs/archive/0105).
  * Called on every pointer MOVE; browser-only rendering, headless no-ops. */
 Kernel.prototype._wmEmitCursor = function (x, y) {
   var shape = this._wmCursorAt(x, y);
@@ -6431,17 +6431,17 @@ Kernel.prototype._wmEmitCursor = function (x, y) {
 
 /* kind: 'move' | 'down' | 'up' | 'wheel'; opts: { button, buttons, wheelX,
  * wheelY, direction, dx, dy }. Returns what happened (for tests/bridge
- * cursors). While the pointer lock is active (todos/0018) the bridge sends
+ * cursors). While the pointer lock is active (docs/archive/0018) the bridge sends
  * moves with dx/dy deltas instead of coordinates. */
 Kernel.prototype.wmPointer = function (kind, x, y, opts) {
   opts = opts || {};
-  this._wmLastInput = Date.now();      // idle clock (todos/0096) — every real
+  this._wmLastInput = Date.now();      // idle clock (docs/archive/0096) — every real
                                        // pointer path (lock, drags, chrome,
                                        // client) enters here, INJECT_SCREEN
                                        // included; per-window INJECT_POINTER
                                        // deliberately does not (tests can
                                        // poke apps without waking the saver)
-  // Overview active (todos/EXPOSE-MISSION-CONTROL.md): a pure presentation
+  // Overview active (docs/EXPOSE-MISSION-CONTROL.md): a pure presentation
   // override. Pointer input drives hover + pick over the WM's cell rects and
   // is otherwise fully swallowed (no hit test, no chrome, no client delivery).
   // move -> update hoverSid (topmost = last cell in order); down -> PICK{cell
@@ -6461,7 +6461,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     }
     return 'overview';   // swallowed whole (down/up/move/wheel)
   }
-  // Cursor (todos/0105): recompute the effective cursor on every move (chrome
+  // Cursor (docs/archive/0105): recompute the effective cursor on every move (chrome
   // overlay + hovered surface's client cursor), debounced. Before the lock/
   // drag branches so it also updates mid-drag (they early-return); _wmCursorAt
   // reads the same drag/lock state, so the shape is right in every case.
@@ -6486,7 +6486,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       return 'locked';
     }
   }
-  // The release matching a grab-consumed press is consumed too (todos/0256,
+  // The release matching a grab-consumed press is consumed too (docs/archive/0256,
   // A2): a dismissing click is eaten WHOLE — no stray button-up lands on
   // whatever was under it.
   if (this._wmGrabSwallowUp && kind === 'up') {
@@ -6499,14 +6499,14 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     if (!ds) { this._wmDrag = null; }
     else if (kind === 'move') {
       // Keep the title bar reachable: clamp to the screen (on-screen size
-      // is the dst rect, todos/0024). The move funnels through
-      // _wmMoveWithChildren so the anchored subtree follows (todos/0256).
+      // is the dst rect, docs/archive/0024). The move funnels through
+      // _wmMoveWithChildren so the anchored subtree follows (docs/archive/0256).
       var dnx = Math.round(x - d.dx);
       var dny = Math.round(y - d.dy);
       dnx = Math.max(40 - ds.dstW, Math.min(dnx, this._wmScreen.w - 40));
       dny = Math.max(WM_TITLE_H, Math.min(dny, this._wmScreen.h - 8));
       this._wmMoveWithChildren(ds, dnx, dny);
-      // Aero Snap zones (todos/0095): the POINTER (not the window) within
+      // Aero Snap zones (docs/archive/0095): the POINTER (not the window) within
       // WM_SNAP_MARGIN of a screen edge is a snap gesture — mechanism only:
       // the kernel tracks the zone and tells the WM on every change
       // (EV_SNAP_EDGE, edge 0 = left the zone), policy draws the preview
@@ -6535,7 +6535,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       this._wmDrag = null;
       var dsurf = this._surfaces.get(dend.sid);
       if (dsurf) this._wmEmit(WMP.EV_MOVED, [dsurf.sid, dsurf.x, dsurf.y]);
-      // The snap drop (todos/0095): after the EV_MOVED so policy's model
+      // The snap drop (docs/archive/0095): after the EV_MOVED so policy's model
       // holds the drop position. Emitted for every drag that actually
       // MOVED (past WM_SNAP_SLOP) with a subscriber — edge 0 is the
       // drag-off-restore signal for a snapped/maximized window, and a
@@ -6548,7 +6548,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       return 'drag-end';
     }
   }
-  // An in-flight border resize drag captures the pointer too (todos/0019).
+  // An in-flight border resize drag captures the pointer too (docs/archive/0019).
   // Win95 outline semantics: the drag only tracks a preview rectangle (the
   // compositor draws it from wmScene().resizeDrag); ONE configure goes to
   // the client at release — no per-motion SAB renegotiation.
@@ -6568,7 +6568,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
         if (rs.resizable) {
           this.wmResize(rdend.sid, rdend.curW, rdend.curH);
         } else if (this._wmSubs.size) {
-          // Scale drag on a fixed-size surface (todos/0024): policy decides
+          // Scale drag on a fixed-size surface (docs/archive/0024): policy decides
           // the dst — /bin/wm answers with an aspect-preserving SET_DST.
           this._wmEmit(WMP.EV_SCALE_REQ, [rdend.sid, rdend.curW, rdend.curH]);
         } else {
@@ -6580,8 +6580,8 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     }
   }
   // Hit test, topmost first, against the ON-SCREEN rect — the dst viewport
-  // (todos/0024; equals the buffer unless scaled): what you click is what
-  // you see. Minimized and unmapped (todos/0069) surfaces aren't on screen;
+  // (docs/archive/0024; equals the buffer unless scaled): what you click is what
+  // you see. Minimized and unmapped (docs/archive/0069) surfaces aren't on screen;
   // borderless ones (taskbar-class) have no title-bar band and no frame.
   for (var i = this._zOrder.length - 1; i >= 0; i--) {
     var s = this._surfaces.get(this._zOrder[i]);
@@ -6592,7 +6592,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     var inTitle = !s.borderless &&
       x >= s.x && x < s.x + dw && y >= s.y - WM_TITLE_H && y < s.y;
     var inClient = x >= s.x && x < s.x + dw && y >= s.y && y < s.y + dh;
-    // The resize frame (todos/0019): a band around title+client, accepting
+    // The resize frame (docs/archive/0019): a band around title+client, accepting
     // presses out to WM_BORDER_HIT past the E/S edges — fatter than the 4px
     // drawn frame (#388); the focus-only N/W edges keep the thin band.
     var inFrame = !s.borderless && !inTitle && !inClient &&
@@ -6604,7 +6604,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     // stays resizable. 'down' only: moves/ups/wheels still reach the app.
     var inGrip = inClient && !s.borderless && s.resizable &&
       x >= s.x + dw - WM_GRIP_IN && y >= s.y + dh - WM_GRIP_IN;
-    // The grab gate (todos/0256, A2): this surface is the topmost hit — with
+    // The grab gate (docs/archive/0256, A2): this surface is the topmost hit — with
     // a grab active, a press anywhere but the client area of the holder's
     // own window tree dismisses the holder and is consumed (chrome included:
     // Win95 eats the title click that closes a menu).
@@ -6616,7 +6616,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     if (inFrame || (inGrip && kind === 'down')) {
       if (kind === 'down') {
         this.wmFocus(s.sid);
-        // Drag zones on E/S/SE edges. Both kinds get them since todos/0024;
+        // Drag zones on E/S/SE edges. Both kinds get them since docs/archive/0024;
         // the release dispatches on the resizable bit — configure (0019) vs
         // scale the dst rect (fixed-res apps like doom stay oblivious).
         var ex = x >= s.x + dw ? 1 : 0;                // right edge -> E
@@ -6645,7 +6645,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
           this.wmCloseRequest(s.sid);
           return 'close';
         }
-        // Title-bar boxes (todos/0030), Win95 order [min][max][close] —
+        // Title-bar boxes (docs/archive/0030), Win95 order [min][max][close] —
         // same metrics, left of the close box. Like close, box clicks
         // never focus and never start a drag or the double-click timer.
         // Each box exists only if it FITS inside the title (a WM_MIN_SIZE
@@ -6668,7 +6668,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
           }
         }
         this.wmFocus(s.sid);
-        // Title double-click (todos/0025): a second down on the SAME title
+        // Title double-click (docs/archive/0025): a second down on the SAME title
         // within WM_DBLCLICK_MS and WM_DBLCLICK_SLOP px is the maximize
         // gesture — EV_TITLE_ACTIVATE to the WM, and NO drag starts (so the
         // gesture never also moves the window). Mechanism only: policy
@@ -6690,7 +6690,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
           return 'title-activate';
         }
         // x0/y0: the pre-drag position — EV_SNAP_DROP carries it so policy
-        // can save the true floating rect for a later restore (todos/0095;
+        // can save the true floating rect for a later restore (docs/archive/0095;
         // the drag-end EV_MOVED has already overwritten the live one).
         this._wmDrag = { sid: s.sid, dx: x - s.x, dy: y - s.y, x0: s.x, y0: s.y };
         return 'drag-start';
@@ -6702,7 +6702,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
       // receive the click but never steal focus: a taskbar click must see
       // the focus state it's acting ON (minimize-toggle), and Win95 agrees.
       // A borderless surface gets focus only via the WM protocol.
-      // An anchored child focuses its top-level ROOT instead (todos/0256,
+      // An anchored child focuses its top-level ROOT instead (docs/archive/0256,
       // §3.1): clicking a background window's popup activates that window,
       // matching Windows — the child itself never takes focus.
       if (kind === 'down') {
@@ -6710,14 +6710,14 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
         else if (!s.borderless) this.wmFocus(s.sid);
       }
       // A client click on the focused relative-mouse surface IS the lock
-      // gesture (todos/0018): re-offer the wanted state so the UI bridge
+      // gesture (docs/archive/0018): re-offer the wanted state so the UI bridge
       // requests the pointer lock inside the click's transient activation.
       // Chrome/title/desktop clicks never re-offer — dragging stays intact.
       if (kind === 'down' && s.relativeMouse && s.sid === this._focusSid &&
           this._wmPtrLockWanted && !this._wmPtrLockActive) {
         this._onPointerLock(true);
       }
-      // Inverse-map through the scale (todos/0024): the client thinks in
+      // Inverse-map through the scale (docs/archive/0024): the client thinks in
       // BUFFER coordinates; screen offsets shrink/grow by w/dstW. Exact
       // identity when unscaled (dst == buffer).
       var lx = (x - s.x) * s.w / dw, ly = (y - s.y) * s.h / dh;
@@ -6734,7 +6734,7 @@ Kernel.prototype.wmPointer = function (kind, x, y, opts) {
     }
   }
   // A press on the bare desktop while a grab is active dismisses + consumes
-  // too (todos/0256, A2) — the classic click-away-closes-the-menu.
+  // too (docs/archive/0256, A2) — the classic click-away-closes-the-menu.
   if (kind === 'down' && this._wmGrabs.length) {
     var gdd = this._wmGrabConsume(null, false);
     if (gdd) return gdd;
@@ -6756,11 +6756,11 @@ Kernel.prototype.wmList = function () {
                title: s.title, z: i, focused: s.sid === this._focusSid,
                minimized: s.minimized, borderless: s.borderless,
                relativeMouse: !!s.relativeMouse, resizable: !!s.resizable,
-               hasAlpha: !!s.hasAlpha,          // per-pixel alpha (todos/0063)
+               hasAlpha: !!s.hasAlpha,          // per-pixel alpha (docs/archive/0063)
                layer: s.layer | 0,
                requestedVisible: s.requestedVisible !== false,
-               mapped: !!s.mapped,              // map-on-placement (todos/0069)
-               parent: s.parentSid | 0,         // anchored child (todos/0256)
+               mapped: !!s.mapped,              // map-on-placement (docs/archive/0069)
+               parent: s.parentSid | 0,         // anchored child (docs/archive/0256)
                owner: s.ownerSid | 0,           // owner top-level (#794)
                viewable: this._wmViewable(s),   // effective visibility (#794)
                configurePending: !!s.pendingConfigure,
@@ -6773,7 +6773,7 @@ Kernel.prototype.wmList = function () {
   return out;
 };
 
-/* Re-sort _zOrder by z layer (todos/0038). Array.prototype.sort is stable
+/* Re-sort _zOrder by z layer (docs/archive/0038). Array.prototype.sort is stable
  * (ES2019), so within a layer the existing order — including the raise/
  * lower/create that just happened — is preserved; the sort only pushes a
  * surface back inside its layer's band. Called after EVERY z mutation:
@@ -6786,7 +6786,7 @@ Kernel.prototype._wmZNormalize = function () {
     var sa = self._surfaces.get(a), sb = self._surfaces.get(b);
     return (sa ? sa.layer : 0) - (sb ? sb.layer : 0);
   });
-  // Anchored-child post-pass (todos/0256, A1): re-slot each child subtree
+  // Anchored-child post-pass (docs/archive/0256, A1): re-slot each child subtree
   // immediately above its parent, creation-ordered depth-first, so children
   // can never interleave with foreign windows in ANY rendering — z-order
   // leaves the kernel already correct and the compositor / headless
@@ -6833,13 +6833,13 @@ Kernel.prototype._wmZNormalize = function () {
   this._zOrder = out;
 };
 
-/* Pin a surface to a z layer (todos/0038): -1 below normal windows (the
+/* Pin a surface to a z layer (docs/archive/0038): -1 below normal windows (the
  * desktop layer), 0 normal, +1 above (the taskbar). Mechanism only — which
  * surfaces are furniture is WM policy (/bin/wm pins its own windows); the
  * no-WM fallback never sets layers, so kernel-chrome behavior is untouched.
  * No event: the window record carries the layer (word 11). */
 /* The wm* command methods return 0 on success or an errno NAME on failure
- * (todos/0242) — see WMP_ERRNO and the R_ERR payload contract above. */
+ * (docs/archive/0242) — see WMP_ERRNO and the R_ERR payload contract above. */
 Kernel.prototype.wmSetLayer = function (sid, layer) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
@@ -6851,7 +6851,7 @@ Kernel.prototype.wmSetLayer = function (sid, layer) {
     return 0;
   }
   s.layer = layer;
-  this._wmMap(s.sid);           // stacking maps (todos/0069)
+  this._wmMap(s.sid);           // stacking maps (docs/archive/0069)
   this._wmZNormalize();
   this._bumpWm();
   return 0;
@@ -6863,7 +6863,7 @@ Kernel.prototype.wmFocus = function (sid, expectedVisibility) {
   if (!s) return 'EINVAL';
   if (this._wmRequestedHidden(s)) return 'EACCES';
   if (expectedVisibility !== undefined && s.visibilitySerial !== (expectedVisibility >>> 0)) return 'EAGAIN';
-  // Anchored children never take focus (todos/0256, §3.1) — focusing one
+  // Anchored children never take focus (docs/archive/0256, §3.1) — focusing one
   // focuses (and raises, restores) its top-level root instead, the same
   // policy as a client click on the child.
   if (s.parentSid) s = this._wmAnchorRoot(s);
@@ -6879,7 +6879,7 @@ Kernel.prototype.wmFocus = function (sid, expectedVisibility) {
     var csnap = this._wmOwnedEffSnapshot(cs);
     cs.minimized = false;
     this._wmRestoreGrabs(cs);
-    this._wmAnimPush(cs, 'restore');   // compositor animation (todos/0063)
+    this._wmAnimPush(cs, 'restore');   // compositor animation (docs/archive/0063)
     this._bumpWm();
     this._wmEmit(WMP.EV_MINIMIZED, [cs.sid, 0]);
     this._wmOwnedEffNotify(csnap);
@@ -6891,7 +6891,7 @@ Kernel.prototype.wmFocus = function (sid, expectedVisibility) {
     this._zOrder.push(zroot.sid);
     this._wmZNormalize();                       // raise stays within the layer
                                                 // (subtree re-slots with it)
-    this._bumpWm();      // z changed even if focus doesn't below (todos/0165)
+    this._bumpWm();      // z changed even if focus doesn't below (docs/archive/0165)
   }
   this._wmSetFocus(s.sid);          // the A9 funnel: owner pair + EV_FOCUS
   this._wmSyncPointerLock();
@@ -6901,26 +6901,26 @@ Kernel.prototype.wmFocus = function (sid, expectedVisibility) {
 Kernel.prototype.wmMove = function (sid, x, y) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
-  // Anchored geometry derives from the parent (todos/0256, A11): the
+  // Anchored geometry derives from the parent (docs/archive/0256, A11): the
   // materializer would clobber a direct move on the next relayout, so the
   // op refuses loud instead of lying. Same rule for the other WM geometry/
   // stacking/minimize ops below — the WM never manages children (§3.1).
   if (s.parentSid) return 'EPERM';
   this._wmMoveWithChildren(s, x | 0, y | 0);   // subtree follows (A1)
-  this._wmMap(s.sid);           // placement maps (todos/0069)
+  this._wmMap(s.sid);           // placement maps (docs/archive/0069)
   this._bumpWm();
   this._wmEmit(WMP.EV_MOVED, [s.sid, s.x, s.y]);
   return 0;
 };
 
-/* Ask the client to resize (todos/0019). Geometry does NOT change here —
+/* Ask the client to resize (docs/archive/0019). Geometry does NOT change here —
  * the surface keeps its old buffer and size until the SURFACE_CONFIGURE
  * ack lands (so a slow client shows its last frame, never a torn one).
  * Latest wins: a new request while one is pending replaces it, and the ack
  * path re-issues the configure if the client acked a stale size. Fails with
  * the delivery errno (ESRCH dead process, EAGAIN full ring) when the request
  * can't reach the client: nothing would ever ack, so no pending state is
- * left behind. Non-resizable surfaces (no SDL_WINDOW_RESIZABLE, todos/0021)
+ * left behind. Non-resizable surfaces (no SDL_WINDOW_RESIZABLE, docs/archive/0021)
  * refuse outright with EPERM — same no-pending-state rule: the app would
  * never renegotiate. */
 Kernel.prototype.wmResize = function (sid, w, h) {
@@ -6991,12 +6991,12 @@ Kernel.prototype._shmRelease = function (i32) {
   Atomics.notify(i32, SH_LOCK);
 };
 
-/* Set the on-screen dst viewport of a FIXED-SIZE surface (todos/0024 —
+/* Set the on-screen dst viewport of a FIXED-SIZE surface (docs/archive/0024 —
  * the wp_viewport / DWM-DPI-virtualization shape): the buffer keeps its
  * size, the compositor maps it to dstW x dstH (nearest-neighbor), input
  * inverse-maps, and the app never knows. Resizable surfaces refuse — they
- * configure (todos/0019/0021); the two modes are exclusive by design, and
- * maximize (todos/0025) dispatches on the same bit. Echoes EV_SCALED. */
+ * configure (docs/archive/0019/0021); the two modes are exclusive by design, and
+ * maximize (docs/archive/0025) dispatches on the same bit. Echoes EV_SCALED. */
 Kernel.prototype.wmSetDst = function (sid, w, h) {
   var s = this._surfaces.get(sid | 0);
   if (!s) return 'EINVAL';
@@ -7011,7 +7011,7 @@ Kernel.prototype.wmSetDst = function (sid, w, h) {
   s.dstW = w; s.dstH = h;
   if (s.children.length) this._wmAnchorLayout(s);  // scale inheritance (A11):
                                                    // popups ride the new dst
-  this._wmMap(s.sid);           // placement maps (todos/0069)
+  this._wmMap(s.sid);           // placement maps (docs/archive/0069)
   this._bumpWm();
   this._wmEmit(WMP.EV_SCALED, [s.sid, w, h]);
   return 0;
@@ -7019,7 +7019,7 @@ Kernel.prototype.wmSetDst = function (sid, w, h) {
 
 /* Fire the title-activate (maximize) gesture for a surface — the same
  * EV_TITLE_ACTIVATE the title-bar double-click emits, so wmctl max and the
- * mouse share ONE policy path in /bin/wm (todos/0025). Mechanism only: the
+ * mouse share ONE policy path in /bin/wm (docs/archive/0025). Mechanism only: the
  * kernel keeps no maximize state; policy dispatches configure-vs-scale on
  * the resizable bit and holds the saved geometry. Refuses without a
  * subscriber (maximize IS policy — nothing would ever answer) and on
@@ -7033,7 +7033,7 @@ Kernel.prototype.wmTitleActivate = function (sid) {
   return 0;
 };
 
-/* Fire the window-cycling gesture (todos/0032) — the same EV_CYCLE the
+/* Fire the window-cycling gesture (docs/archive/0032) — the same EV_CYCLE the
  * Alt+Tab-family chord emits, so wmctl cycle and the keyboard share ONE
  * policy path in /bin/wm. Mechanism only: the kernel keeps no cycle
  * state; policy picks the next window and sends FOCUS. Refuses without a
@@ -7044,7 +7044,7 @@ Kernel.prototype.wmCycle = function (dir) {
   return 0;
 };
 
-/* Fire the Start-menu gesture (todos/0078) — the same EV_MENU the
+/* Fire the Start-menu gesture (docs/archive/0078) — the same EV_MENU the
  * Ctrl+Esc chord emits, so wmctl menu and the keyboard share ONE policy
  * path in /bin/wm (the menu toggle). Mechanism only: the kernel keeps no
  * menu state; policy owns the columns. Refuses without a subscriber (the
@@ -7055,7 +7055,7 @@ Kernel.prototype.wmMenu = function () {
   return 0;
 };
 
-/* Fire the Aero Snap gesture (todos/0095) — the same EV_SNAP_KEY the
+/* Fire the Aero Snap gesture (docs/archive/0095) — the same EV_SNAP_KEY the
  * Win+arrow chord emits, so wmctl snap and the keyboard share ONE policy
  * path in /bin/wm. Mechanism only: the kernel keeps no snap state; policy
  * holds the per-window snap edge and the saved floating rect. Refuses
@@ -7066,7 +7066,7 @@ Kernel.prototype.wmSnap = function (dir) {
   return 0;
 };
 
-/* Ms since the last real user input (todos/0096) — the screensaver policy's
+/* Ms since the last real user input (docs/archive/0096) — the screensaver policy's
  * idle clock. Mechanism only: the kernel keeps NO timeout and NO saver
  * state; /bin/wm polls this over GET_IDLE and applies its configured
  * timeout. Clamped into an i32 for the wire. */
@@ -7074,7 +7074,7 @@ Kernel.prototype.wmIdleMs = function () {
   return Math.min(0x7fffffff, Math.max(0, Date.now() - this._wmLastInput));
 };
 
-/* Fire the screensaver gesture (todos/0096) — wmctl saver and the Control
+/* Fire the screensaver gesture (docs/archive/0096) — wmctl saver and the Control
  * Panel Preview button ride this into EV_SAVER, the wmMenu pattern. Policy
  * raises the configured saver immediately. Refuses without a subscriber
  * (the saver IS policy — nothing would ever answer). */
@@ -7084,7 +7084,7 @@ Kernel.prototype.wmSaver = function () {
   return 0;
 };
 
-/* Fire the window system-menu gesture (todos/0102) — the same EV_SYSMENU the
+/* Fire the window system-menu gesture (docs/archive/0102) — the same EV_SYSMENU the
  * Alt+Space chord emits, so wmctl sysmenu and the keyboard share ONE policy
  * path in /bin/wm (Restore/Move/Size/Minimize/Maximize/Close). Carries the
  * currently-focused sid; policy raises the menu on it (ignores sid 0).
@@ -7097,7 +7097,7 @@ Kernel.prototype.wmSysMenu = function () {
 };
 
 /* Minimize: off screen + out of hit-testing, still listed. Focus falls via
- * _wmFocusFall (topmost normal-layer window first — todos/0039). Restore =
+ * _wmFocusFall (topmost normal-layer window first — docs/archive/0039). Restore =
  * wmFocus (which un-minimizes). */
 Kernel.prototype.wmMinimize = function (sid) {
   var s = this._surfaces.get(sid | 0);
@@ -7106,7 +7106,7 @@ Kernel.prototype.wmMinimize = function (sid) {
   if (s.minimized) return 0;
   var msnap = this._wmOwnedEffSnapshot(s);          // owned hide with it (#794)
   s.minimized = true;
-  this._wmAnimPush(s, 'min');   // transient compositor animation (todos/0063)
+  this._wmAnimPush(s, 'min');   // transient compositor animation (docs/archive/0063)
   this._wmEmit(WMP.EV_MINIMIZED, [s.sid, 1]);
   var mself = this;
   this._wmGrabs = this._wmGrabs.filter(function (sid) {   // owned popups' grabs
@@ -7123,7 +7123,7 @@ Kernel.prototype.wmMinimize = function (sid) {
 };
 
 /* place: 0 = raise to top (without stealing focus), 1 = lower to bottom —
- * of the surface's own z LAYER (todos/0038): the normalize below pushes it
+ * of the surface's own z LAYER (docs/archive/0038): the normalize below pushes it
  * back inside its band, so a lower never sinks under a pinned desktop and
  * a raise never covers a pinned taskbar. */
 Kernel.prototype.wmRestack = function (sid, place) {
@@ -7135,7 +7135,7 @@ Kernel.prototype.wmRestack = function (sid, place) {
   this._zOrder.splice(zi, 1);
   if ((place | 0) === 1) this._zOrder.unshift(s.sid);
   else this._zOrder.push(s.sid);
-  this._wmMap(s.sid);           // stacking maps (todos/0069)
+  this._wmMap(s.sid);           // stacking maps (docs/archive/0069)
   this._wmZNormalize();
   this._bumpWm();
   return 0;
@@ -7160,7 +7160,7 @@ Kernel.prototype.wmInjectPointer = function (sid, kind, lx, ly, opts) {
   if (kind === 'move') {
     return this._wmEventTo(target, [WMEV.MOUSEMOTION, 0, f32bits(lx), f32bits(ly), opts.buttons | 0, 0, 0, 0]);
   }
-  // Relative motion (todos/0018): lx/ly are dx/dy deltas. Injection is
+  // Relative motion (docs/archive/0018): lx/ly are dx/dy deltas. Injection is
   // post-hit-test by design, so no pointer-lock state is required.
   if (kind === 'rel') {
     return this._wmEventTo(target, [WMEV.MOUSEMOTION, 0, f32bits(lx), f32bits(ly), opts.buttons | 0, 1, 0, 0]);
@@ -7408,7 +7408,7 @@ Kernel.prototype.wmCapture = async function (type, sid, maxW, maxH) {
     : snap.wmScreenshot(sid, pixels);
 };
 
-/* Label text into an RGBA composite (todos/0275): render via the ksvc blob
+/* Label text into an RGBA composite (docs/archive/0275): render via the ksvc blob
  * at WM_LABEL_PX and src-over the straight-alpha bytes with the exact 0063
  * integer formula, clipped to W*H. Geometry contract with compositor.js
  * (the two composites MUST place text identically): x is the left edge
@@ -7441,14 +7441,14 @@ Kernel.prototype._blitLabel = function (out, W, H, x, y, text, maxW, rgba, opts)
 
 /* Screenshot the screen: CPU composite of the scene in z-order — desktop
  * fill, then each surface's front buffer + its kernel chrome. Since
- * todos/0275 label TEXT is part of the deterministic composite too: title
+ * docs/archive/0275 label TEXT is part of the deterministic composite too: title
  * captions, the close-box 'x' and Exposé captions render via the kernel's
  * ksvc text service (the SAME blob the browser compositor uses — same
  * bytes, same rasterizer, same geometry, so the two composites agree on
  * text everywhere; browser-only affordances left are furniture: AA
  * shadows, rounded corners, glass). Row blits when unscaled; a
  * nearest-neighbor loop maps the buffer into the dst viewport when scaled
- * (todos/0024). */
+ * (docs/archive/0024). */
 Kernel.prototype.wmScreenshotScreen = function (pixels) {
   var W = this._wmScreen.w, H = this._wmScreen.h;
   var out = new Uint8Array(W * H * 4);
@@ -7464,13 +7464,13 @@ Kernel.prototype.wmScreenshotScreen = function (pixels) {
     }
   };
   fill(0, 0, W, H, WM_COLORS.desktop);
-  // Overview / Exposé (todos/EXPOSE-MISSION-CONTROL.md): the SAME presentation
+  // Overview / Exposé (docs/EXPOSE-MISSION-CONTROL.md): the SAME presentation
   // the browser compositor draws, minus the browser-only furniture (shadows +
   // rounded corners). Per cell in order: a border frame (navy when hovered,
   // face gray otherwise — hover follows the injected pointer, so it is
   // deterministic) then the window's LIVE front buffer NN scale-blitted into
   // the cell rect, then the caption centered under the cell (ksvc text,
-  // todos/0275 — the same blob and geometry as compositor.js drawOverview).
+  // docs/archive/0275 — the same blob and geometry as compositor.js drawOverview).
   // Minimized windows composite their still-live buffers like any other.
   // Goldens stay bit-exact and `wmctl shot` sees the overview — which is
   // what makes the e2e honest.
@@ -7508,10 +7508,10 @@ Kernel.prototype.wmScreenshotScreen = function (pixels) {
   }
   for (var i = 0; i < this._zOrder.length; i++) {
     var s = this._surfaces.get(this._zOrder[i]);
-    if (!s || s.minimized || !s.mapped || this._wmRequestedHidden(s)) continue;   // unmapped: todos/0069
+    if (!s || s.minimized || !s.mapped || this._wmRequestedHidden(s)) continue;   // unmapped: docs/archive/0069
     if ((s.parentSid || s.ownerSid) && this._wmAnchorHidden(s)) continue;   // hides with its
                                                             // parent/owner (0256, #794)
-    var dw = s.dstW, dh = s.dstH;      // on-screen rect (todos/0024)
+    var dw = s.dstW, dh = s.dstH;      // on-screen rect (docs/archive/0024)
     // Chrome: resize frame under title bar + close box (borderless surfaces
     // draw bare). The frame is one outer fill; title + client cover its
     // middle — cheap, and exactly the hit-test geometry.
@@ -7520,16 +7520,16 @@ Kernel.prototype.wmScreenshotScreen = function (pixels) {
         dw + 2 * WM_BORDER, WM_TITLE_H + dh + 2 * WM_BORDER, WM_COLORS.border);
       fill(s.x, s.y - WM_TITLE_H, dw, WM_TITLE_H,
         s.sid === this._focusSid ? WM_COLORS.titleFocused : WM_COLORS.titleBlurred);
-      // Title text (todos/0275): the SAME string + maxW arithmetic + center
+      // Title text (docs/archive/0275): the SAME string + maxW arithmetic + center
       // formula as compositor.js's title labelFor call — the two composites'
       // text contract.
       this._blitLabel(out, W, H, s.x + 6, s.y - WM_TITLE_H / 2,
         s.title || ('pid ' + s.pid),
         Math.max(8, dw - 3 * (WM_CLOSE_W + WM_BOX_GAP) - 16), 0xFFFFFFFF);
-      // Title-bar boxes, Win95 order [min][max][close] (todos/0030) — the
+      // Title-bar boxes, Win95 order [min][max][close] (docs/archive/0030) — the
       // same offsets and fit-gating the hit test uses. Glyphs are
       // deterministic flat rects (bar / hollow box) plus the ksvc-rasterized
-      // close 'x' (todos/0275).
+      // close 'x' (docs/archive/0275).
       var bx = s.x + dw - WM_CLOSE_W - WM_CLOSE_PAD;
       var by = s.y - WM_TITLE_H + WM_CLOSE_PAD;
       var mxx = bx - WM_CLOSE_W - WM_BOX_GAP;
@@ -7556,7 +7556,7 @@ Kernel.prototype.wmScreenshotScreen = function (pixels) {
     var sx0 = Math.max(0, -s.x), sy0 = Math.max(0, -s.y);
     var sx1 = Math.min(dw, W - s.x), sy1 = Math.min(dh, H - s.y);
     if (s.hasAlpha) {
-      // Per-pixel src-over (todos/0063), deterministic integer math:
+      // Per-pixel src-over (docs/archive/0063), deterministic integer math:
       // out = floor((src*a + dst*(255-a) + 127) / 255) — i.e. src/255
       // rounded to nearest. Uses the scaled path's nearest dst->src
       // mapping, which is the identity when unscaled.
@@ -7581,7 +7581,7 @@ Kernel.prototype.wmScreenshotScreen = function (pixels) {
         out.set(srcPixels.subarray(src, src + (sx1 - sx0) * 4), dst);
       }
     } else {
-      // Scaled (todos/0024): nearest-neighbor — src = floor(dst * buf/dst),
+      // Scaled (docs/archive/0024): nearest-neighbor — src = floor(dst * buf/dst),
       // which at an integer scale k is exact pixel replication (what pixel-
       // art wants, and what the goldens assert).
       for (var dy = sy0; dy < sy1; dy++) {
@@ -7599,7 +7599,7 @@ Kernel.prototype.wmScreenshotScreen = function (pixels) {
   return { w: W, h: H, rgba: out };
 };
 
-/* Set the screen resolution (re-callable — dynamic resolution, todos/0023;
+/* Set the screen resolution (re-callable — dynamic resolution, docs/archive/0023;
  * RandR / wl_output shape: the display owner sets the mode, everyone else
  * gets an event). Subscribers get EV_SCREEN, then a one-shot position clamp
  * (the drag-clamp bounds) keeps every title bar reachable after a shrink —
@@ -7611,7 +7611,7 @@ Kernel.prototype.wmSetScreen = function (w, h) {
   if (w <= 0 || h <= 0) return;
   if (w === this._wmScreen.w && h === this._wmScreen.h) return;
   this._wmScreen.w = w; this._wmScreen.h = h;
-  // Fan the new dims out to every live page (todos/0179) — per-process cost
+  // Fan the new dims out to every live page (docs/archive/0179) — per-process cost
   // is a handful of atomic stores, and resizes are human-rate.
   var self = this;
   this._procs.forEach(function (p) {
@@ -7629,7 +7629,7 @@ Kernel.prototype.wmSetScreen = function (w, h) {
     this._wmEmit(WMP.EV_MOVED, [s.sid, s.x, s.y]);
   }
   // Re-materialize every anchored subtree against the NEW screen bounds
-  // (todos/0256): the child's into-the-screen clamp depends on the screen
+  // (docs/archive/0256): the child's into-the-screen clamp depends on the screen
   // dims even when its top-level didn't move (borderless roots are skipped
   // by the loop above but their popups must still slide back on-screen).
   if (this._wmAnchoredN) {
@@ -7640,7 +7640,7 @@ Kernel.prototype.wmSetScreen = function (w, h) {
   }
 };
 
-/* Downscaled front-buffer thumbnail (todos/0063, Aero Peek): the surface's
+/* Downscaled front-buffer thumbnail (docs/archive/0063, Aero Peek): the surface's
  * pixels box-filtered to fit maxW x maxH, aspect preserved, never
  * upscaled. Deterministic (integer accumulate, floor divide) over shm or
  * compositor readback. Serving it kernel-side keeps the WMP payload small — the
@@ -7655,7 +7655,7 @@ Kernel.prototype.wmThumbnail = function (sid, maxW, maxH, pixels) {
   var th = Math.max(1, Math.round(s.h * scale));
   var source = this.wmScreenshot(s.sid, pixels).rgba;
   var base = 0;
-  // Anchored children composite INTO the thumbnail (todos/0256, menu arch
+  // Anchored children composite INTO the thumbnail (docs/archive/0256, menu arch
   // A10): a window's thumbnail is the window as composited — the parent's
   // buffer plus its mapped anchored subtree at anchor positions, clipped to
   // the parent rect. Without this, a persistent child (the M1 menu bar)
@@ -7713,7 +7713,7 @@ Kernel.prototype.wmThumbnail = function (sid, maxW, maxH, pixels) {
   return { w: tw, h: th, rgba: out };
 };
 
-/* Aero glass tier toggle (todos/0063): browser-compositor-only backdrop
+/* Aero glass tier toggle (docs/archive/0063): browser-compositor-only backdrop
  * blur behind window chrome. Kernel state so wmctl/tests can flip it, but
  * the headless composite NEVER reads it — goldens stay bit-exact. */
 Kernel.prototype.wmGlass = function (on) {
@@ -7722,7 +7722,7 @@ Kernel.prototype.wmGlass = function (on) {
   return 0;                     // no failure mode: a pure state toggle
 };
 
-/* Record a transient minimize/restore animation (todos/0063): geometry AT
+/* Record a transient minimize/restore animation (docs/archive/0063): geometry AT
  * the transition + a wall-clock stamp. The browser compositor interpolates
  * from it; wmScene() prunes expired records, so headless kernels just
  * accumulate-and-drop tiny objects. */
@@ -7736,11 +7736,11 @@ Kernel.prototype._wmAnimPush = function (s, kind) {
  * returned surface objects and read their SABs/bitmaps directly). */
 Kernel.prototype.wmScene = function () {
   var self = this;
-  var now = Date.now();                 // prune expired animations (todos/0063)
+  var now = Date.now();                 // prune expired animations (docs/archive/0063)
   this._wmAnims.forEach(function (a, sid) {
     if (now - a.t0 > WM_ANIM_MS) self._wmAnims.delete(sid);
   });
-  // Overview enter/exit flies (todos/EXPOSE): prune past WM_ANIM_MS so a
+  // Overview enter/exit flies (docs/EXPOSE): prune past WM_ANIM_MS so a
   // settled overview (or a settled exit) stops churning the compositor.
   if (this._wmOverviewAnims.length &&
       now - this._wmOverviewAnims[0].t0 > WM_ANIM_MS) this._wmOverviewAnims = [];
@@ -7748,17 +7748,17 @@ Kernel.prototype.wmScene = function () {
     version: this._wmVersion,
     screen: { w: this._wmScreen.w, h: this._wmScreen.h },
     focusSid: this._focusSid,
-    pointerLockWanted: this._wmPtrLockWanted,   // relative mouse (todos/0018)
-    resizeDrag: this._wmResizeDrag,   // rubber-band preview (todos/0019)
-    glass: this._wmGlassOn,           // Aero glass tier (todos/0063)
-    overview: this._wmOverview,       // window overview / Exposé (todos/EXPOSE):
+    pointerLockWanted: this._wmPtrLockWanted,   // relative mouse (docs/archive/0018)
+    resizeDrag: this._wmResizeDrag,   // rubber-band preview (docs/archive/0019)
+    glass: this._wmGlassOn,           // Aero glass tier (docs/archive/0063)
+    overview: this._wmOverview,       // window overview / Exposé (docs/EXPOSE):
                                       // null or { cells:[{sid,x,y,w,h}], hoverSid }
     overviewAnims: this._wmOverviewAnims,   // enter/exit flies (browser-only)
-    anims: Array.from(this._wmAnims.values()),  // minimize/restore (todos/0063)
+    anims: Array.from(this._wmAnims.values()),  // minimize/restore (docs/archive/0063)
     surfaces: this._zOrder.map(function (sid) { return self._surfaces.get(sid); })
       .filter(function (s) {
         // Anchored children hidden by an ancestor leave the scene entirely
-        // (todos/0256) — the browser compositor stays anchor-blind, with
+        // (docs/archive/0256) — the browser compositor stays anchor-blind, with
         // ONE sanctioned exception: the group fly (0256 menu arch). While
         // the child's ROOT has a live minimize/restore animation, the
         // whole anchored subtree must ride the fly as a rigid group (pre-
@@ -7783,7 +7783,7 @@ Kernel.prototype.wmScene = function () {
   };
 };
 
-/* ---- the WM protocol server (todos/0014; framing spec at WMP above) ----
+/* ---- the WM protocol server (docs/archive/0014; framing spec at WMP above) ----
  * wmServe() plants the kernel-owned endpoint; /bin/wm subscribes and gets
  * events + a snapshot, /bin/wmctl connects per-invocation for one command.
  * Policy stays OUT of the kernel: this server only translates frames onto
@@ -7821,7 +7821,7 @@ Kernel.prototype._wmpRecord = function (s) {
   var flags = (s.sid === this._focusSid ? 1 : 0) | (s.minimized ? 2 : 0) |
               (s.borderless ? 4 : 0) | (s.relativeMouse ? 8 : 0) |
               (s.resizable ? 16 : 0) | (s.hasAlpha ? 32 : 0) |
-              (s.parentSid ? 64 : 0) |    // WMP_F_ANCHORED (todos/0256)
+              (s.parentSid ? 64 : 0) |    // WMP_F_ANCHORED (docs/archive/0256)
               (s.transient ? 128 : 0) | (s.requestedVisible === false ? 256 : 0) |
               (this._wmViewable(s) ? 512 : 0) |     // WMP_F_VIEWABLE
               (s.ownerSid ? 1024 : 0);              // WMP_F_OWNED (#794)
@@ -7847,7 +7847,7 @@ Kernel.prototype.wmServe = function (path) {
   var self = this;
   this.sockServe(path || WM_SOCK_PATH, function (peer, pcb) {
     // conn.pid: the connecting process — the map-on-placement borderless
-    // exception (todos/0069) needs to know which surfaces a subscriber owns.
+    // exception (docs/archive/0069) needs to know which surfaces a subscriber owns.
     var conn = { peer: peer, acc: [], pid: pcb ? pcb.pid : 0 };
     peer.onData = function (chunk) {
       for (var i = 0; i < chunk.length; i++) conn.acc.push(chunk[i]);
@@ -7875,7 +7875,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
   var g = function (i) { return (i + 1) * 4 <= plen ? dv.getInt32(8 + i * 4, true) : 0; };
   var gf = function (i) { return (i + 1) * 4 <= plen ? dv.getFloat32(8 + i * 4, true) : 0; };
   // e: 0 = R_OK; an errno NAME (a wm* method's return) = R_ERR carrying the
-  // real cause as its distinct i32 (todos/0242; see the WMP_ERRNO table).
+  // real cause as its distinct i32 (docs/archive/0242; see the WMP_ERRNO table).
   var ok = function (e) {
     conn.peer.send(e ? self._wmpFrame(WMP.R_ERR, [WMP_ERRNO[e] || WMP_ERRNO.EINVAL])
                      : self._wmpFrame(WMP.R_OK, []));
@@ -7946,7 +7946,7 @@ Kernel.prototype._wmpDispatch = function (conn, type, dv, plen) {
       break;
     }
     case WMP.INJECT_SCREEN: {
-      // Screen-coordinate injection (todos/0095): the raw wmPointer path —
+      // Screen-coordinate injection (docs/archive/0095): the raw wmPointer path —
       // hit test, chrome, title drags, snap zones — exactly what the UI
       // bridge feeds it. wmPointer always reports what happened, so this
       // never fails; R_OK doubles as the sequencing barrier.
@@ -8029,7 +8029,7 @@ Kernel.prototype._selectScan = function (pcb, rfds, wfds) {
       if (o.queue.length > 0 || o.overflowed) r.push(fd);
     }
     else if (o.kind === 'http') {
-      // HTTP transfer (todos/0417): readable iff at least one CONSUMABLE
+      // HTTP transfer (docs/archive/0417): readable iff at least one CONSUMABLE
       // is pending — an UNCONSUMED status, queued body bytes, clean EOF,
       // or the error. Mandatory branch, the watch rule above. The status
       // leg is gated on statusConsumed because headers-arrived is a
@@ -8104,7 +8104,7 @@ Kernel.prototype._ttyNotify = function (tty) {
 };
 
 /* Re-scan every deferred select — and the fd side of every unified WAIT
- * (todos/0178) — after any readiness change (tty bytes, pipe data/space,
+ * (docs/archive/0178) — after any readiness change (tty bytes, pipe data/space,
  * pipe end closed, a connection queued on a listener). */
 Kernel.prototype._recheckSelects = function () {
   var self = this;
@@ -8173,7 +8173,7 @@ Kernel.prototype._ptySlaveWrite = function (pcb, pty, data) {
   dir.writeWaiters.push(pcb.pid);
 };
 
-/* Pipe storage accessors (todos/0181): a ringed pipe keeps its bytes in
+/* Pipe storage accessors (docs/archive/0181): a ringed pipe keeps its bytes in
  * the shared ring IN EVERY MODE (see the PR_* block); everything else
  * (sockets, ptys, ring-less pipes — fake-worker tests) keeps the JS buf.
  * Every kernel touch point goes through these so the two storages can't
@@ -8370,7 +8370,7 @@ Kernel.prototype._pipeNotify = function (pipe) {
   this._recheckSelects();
 };
 
-/* ---- HTTP transport (0x06xx; todos/0172, fd-shaped since todos/0417) ----
+/* ---- HTTP transport (0x06xx; docs/archive/0172, fd-shaped since docs/archive/0417) ----
  * Fetch-backed HTTP for processes. The kernel owns the fetch; the process
  * drives it through three ops plus the ordinary fd layer. A transfer is
  * fetch-shaped: request (method, url, headers, optional whole body) ->
@@ -8454,7 +8454,7 @@ Kernel.prototype._httpRpc = function (pcb, op, req) {
       if (xs.status !== null) {
         // Spend the status leg of readability. Without this bit,
         // headers-arrived is permanent and a caller waiting for the first
-        // body byte would find the fd readable forever (todos/0417).
+        // body byte would find the fd readable forever (docs/archive/0417).
         xs.statusConsumed = true;
         this._respond(pcb, { status: xs.status, headers: xs.headers || '' }); break;
       }
@@ -8677,7 +8677,7 @@ Kernel.prototype._httpDestroy = function (xfer) {
   }
 };
 
-/* ---- vDSO block (todos/0179) ----
+/* ---- vDSO block (docs/archive/0179) ----
  * Publish the kernel-written, process-read words on a pcb's page under the
  * seqlock (odd = write in progress). The kernel event loop is the single
  * writer by construction, so two Atomics.add bumps are the whole protocol;
@@ -8703,7 +8703,7 @@ Kernel.prototype._vdsoPublish = function (pcb) {
  * POSIX scoping kept simple for one user: the target must be the caller or
  * one of its children, in the same session. (Latent since Phase 1 — the
  * dispatch existed but nothing defined this until the shell port's libc
- * wrappers landed, todos/0005.) */
+ * wrappers landed, docs/archive/0005.) */
 Kernel.prototype._setpgid = function (pcb, pid, pgid) {
   var t = (pid === 0) ? pcb : this._procs.get(pid);
   if (!t || t.state === STATE_ZOMBIE) return { errno: 'ESRCH' };
@@ -8739,7 +8739,7 @@ Kernel.prototype._wait = function (pcb, sel, options) {
       return;
     }
   }
-  // Job control (todos/0003): unreported stop/continue transitions satisfy a
+  // Job control (docs/archive/0003): unreported stop/continue transitions satisfy a
   // wait that asked for them; each transition is reported exactly once.
   for (var j = 0; j < candidates.length; j++) {
     var c = candidates[j];
@@ -8766,7 +8766,7 @@ Kernel.prototype._cancelWaiter = function (pcb) {
   pcb.waiter = null;
   if (!w) return;
   if (w.timer) clearTimeout(w.timer);
-  // SPSC rings (todos/0181): drop the parked-peer flags this wait raised.
+  // SPSC rings (docs/archive/0181): drop the parked-peer flags this wait raised.
   // Every wake path funnels here (serve, EINTR, timeout, exit), so a flag
   // can't outlive its waiter; a fast peer that already read it just sends
   // one redundant PIPE_KICK.
@@ -8807,7 +8807,7 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   var self0 = this;
   pcb.fds.forEach(function (ofdId) { self0._ofdUnref(ofdId, pcb.pid); });
   pcb.fds.clear();
-  // Parked readdir cursors (todos/0241): a client that died mid-pagination
+  // Parked readdir cursors (docs/archive/0241): a client that died mid-pagination
   // must not leak the backend dir handle — same discipline as fds.
   if (pcb.dirRpc !== null) {
     pcb.dirRpc.forEach(function (d) { self0._fs.closedir(d.dh); });
@@ -8821,7 +8821,7 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   pcb.wmRing = null;
   pcb._wmPendingFb = null;
   pcb.wantFrame = false;   // a dead app must not pin the compositor (0169)
-  // Audio streams (todos/0017): same discipline — mark dying; the pump
+  // Audio streams (docs/archive/0017): same discipline — mark dying; the pump
   // drains queued tails then reclaims (paused/no-output drop immediately).
   if (pcb.audios.size) {
     Array.from(pcb.audios).forEach(function (aid) {
@@ -8831,7 +8831,7 @@ Kernel.prototype._exitProcess = function (pcb, status) {
   }
   pcb.audios.clear();
   pcb._audioPendingSab = null;
-  // HTTP transfers are fds (todos/0417): the fd sweep above already
+  // HTTP transfers are fds (docs/archive/0417): the fd sweep above already
   // aborted every live fetch — no dedicated transfer sweep exists.
   pcb._httpStage = null;
 
@@ -8842,7 +8842,7 @@ Kernel.prototype._exitProcess = function (pcb, status) {
     var c = self._procs.get(cpid);
     if (!c) return;
     c.ppid = 1;
-    self._vdsoPublish(c);        // getppid tracks the reparent (todos/0179)
+    self._vdsoPublish(c);        // getppid tracks the reparent (docs/archive/0179)
     if (init && init !== pcb) {
       init.children.add(cpid);
       // A reparented zombie may satisfy init's pending wait immediately.
@@ -8890,7 +8890,7 @@ Kernel.prototype._exitProcess = function (pcb, status) {
 };
 
 /* ---- kill ----
- * Routing per todos/KERNEL.md: pid > 0 exact; pid 0 = sender's pgroup;
+ * Routing per docs/KERNEL.md: pid > 0 exact; pid 0 = sender's pgroup;
  * pid < -1 = pgroup -pid; pid -1 unsupported (EPERM) — no "everyone" in v1.
  * Action = disposition mirror: HANDLER -> post SIGPEND bit (delivery is
  * Phase 2; the bit + doorbell are already correct); IGN -> drop; DFL ->
@@ -8975,7 +8975,7 @@ Kernel.prototype._deliver = function (pcb, sig) {
   }
 };
 
-/* ---- interval timers (todos/0044) ----
+/* ---- interval timers (docs/archive/0044) ----
  * One kernel-side ITIMER_REAL per process; expiry posts SIGALRM through
  * _deliver (so disposition, blocking, and the DFL-terminate action all
  * behave exactly like any other signal — the acceptance "no handler
@@ -9029,7 +9029,7 @@ Kernel.prototype._itimerClear = function (pcb) {
   pcb.itimer = null;
 };
 
-/* ---- job control (todos/0003) ----
+/* ---- job control (docs/archive/0003) ----
  * Stop is cooperative, like signal delivery: the kernel sets KP_FLAGS.STOP
  * and rings; the process parks inside KernelClient.sigpoll at its next safe
  * point (so a pure-compute loop stops only at its next env import — same
@@ -9100,7 +9100,7 @@ Kernel.prototype._jobNotifyParent = function (pcb, kind) {
  * toWasmEnv versions consult in-process state that doesn't exist here);
  * everything else flows through these methods as RPCs.
  *
- * Process-side read-only volume (todos/0180): with opts.roFs (a LOCAL
+ * Process-side read-only volume (docs/archive/0180): with opts.roFs (a LOCAL
  * BlockFS over the kernel-shipped system-image SAB, createV4 readonly) +
  * opts.roPrefix, absolute paths that lexically resolve under the prefix
  * are served IN-PROCESS — zero RPCs for the chattiest startup traffic
@@ -9111,7 +9111,7 @@ Kernel.prototype._jobNotifyParent = function (pcb, kind) {
  *   inside the sealed volume. Local errors otherwise are FINAL (the sealed
  *   volume is complete: ENOENT under /usr is real).
  * - Write-intent opens and all path mutators stay brokered: the kernel's
- *   walk owns the EROFS-after-walk rule (todos/0040).
+ *   walk owns the EROFS-after-walk rule (docs/archive/0040).
  * - Relative paths stay brokered (the kernel owns the cwd).
  * - Local fds live at RO_FD_BASE+ so they can't collide with kernel fds;
  *   the kernel never sees them. The two places one must become
@@ -9151,11 +9151,11 @@ function RemoteFS(client, opts) {
   this._dirs = [];              // opendir snapshots: {entries, pos}
   // Read (as an always-null guard) by toWasmEnv's tty imports over this
   // object (__tcsetattr, isatty pre-override) — stdin flows via FS_READ
-  // RPCs, so no ring path may ever engage (todos/0011).
+  // RPCs, so no ring path may ever engage (docs/archive/0011).
   this._stdinSab = null;
   this._stdinCtrl = null;       // winsize words only (TIOCGWINSZ)
-  this._pipes = new Map();      // fd -> ring views {i32,u8,cap,sab,end} (todos/0181)
-  // The read-only fast path (todos/0180; header comment above).
+  this._pipes = new Map();      // fd -> ring views {i32,u8,cap,sab,end} (docs/archive/0181)
+  // The read-only fast path (docs/archive/0180; header comment above).
   this._ro = null;
   var hasRoDev = opts && Object.prototype.hasOwnProperty.call(opts, 'roDev');
   if (hasRoDev) {
@@ -9177,7 +9177,7 @@ function RemoteFS(client, opts) {
       if (full.lastIndexOf(prefix + '/', 0) === 0) return full.slice(prefix.length);
       return null;
     };
-    // Mount hooks (the MountFS wiring, todos/0026): in-volume symlink
+    // Mount hooks (the MountFS wiring, docs/archive/0026): in-volume symlink
     // targets resolve in the FULL namespace; foreign ones throw
     // __mountEscape, which _roLocal turns into the brokered fallback.
     roFs._mountPrefix = prefix;
@@ -9296,10 +9296,10 @@ RemoteFS.prototype.setStdinSab = function (sab) {
 };
 
 RemoteFS.prototype.open = function (path, flags, mode) {
-  // RO fast path (todos/0180): read-only opens of paths under the sealed
+  // RO fast path (docs/archive/0180): read-only opens of paths under the sealed
   // volume open locally. Write intent — access mode, O_CREAT|O_TRUNC|
   // O_APPEND (0x640) — stays brokered: the kernel's walk owns the
-  // EROFS-after-walk rule and the /usr/local escape (todos/0040).
+  // EROFS-after-walk rule and the /usr/local escape (docs/archive/0040).
   var rel = this._roRel(path);
   if (rel !== null && (flags & 3) === 0 && (flags & 0x640) === 0) {
     var self = this;
@@ -9341,7 +9341,7 @@ RemoteFS.prototype.read = function (fd, buf, count) {
     if (n0 === null) return this._setErr(this._ro.fs._lastError || 'EIO');
     return n0;
   }
-  // SPSC fast path (todos/0181): consume the shared ring locally while the
+  // SPSC fast path (docs/archive/0181): consume the shared ring locally while the
   // kernel says FAST. Drain-before-EOF (POSIX); empty parks in FS_WAIT.
   var pr = this._pipes.get(fd);
   if (pr && pr.end === 'read') {
@@ -9372,7 +9372,7 @@ RemoteFS.prototype.read = function (fd, buf, count) {
   if (!r.raw) return this._setErr('EIO');
   buf.set(r.raw);
   var got = r.raw.length;
-  // Regular-file fill (todos/0140): a single guest read() of a regular file
+  // Regular-file fill (docs/archive/0140): a single guest read() of a regular file
   // must return min(count, bytes-to-EOF) in ONE call — matching native/Node's
   // fs.readSync and the RO-volume fast path above — NOT one KP_FS_CHUNK-capped
   // chunk. Each FS_READ reply is bounded by the transport payload, so a
@@ -9399,7 +9399,7 @@ RemoteFS.prototype.read = function (fd, buf, count) {
   }
   return got;
 };
-/* Regular-file test for read-fill scoping (todos/0140): fstat the fd and
+/* Regular-file test for read-fill scoping (docs/archive/0140): fstat the fd and
  * check S_IFREG. Every path-opened brokered fd is a 'file' OFD kernel-side,
  * but inherited/dup'd fds carry no process-side kind, so we ask the kernel. */
 RemoteFS.prototype._isRegularFd = function (fd) {
@@ -9413,7 +9413,7 @@ RemoteFS.prototype.write = function (fd, buf, count) {
     if (lw === null) return this._setErr(this._ro.fs._lastError || 'EIO');
     return lw;
   }
-  // SPSC fast path (todos/0181): produce into the shared ring while FAST.
+  // SPSC fast path (docs/archive/0181): produce into the shared ring while FAST.
   // Whole-or-block for PIPE_ATOMIC-small writes (POSIX PIPE_BUF), partial
   // landings above it — the brokered _streamWrite rules, verbatim.
   var pw = this._pipes.get(fd);
@@ -9551,7 +9551,7 @@ RemoteFS.prototype.dup = function (fd) {
   if (r === null) return null;
   this._fdTable[r.fd] = { type: 'remote' };
   var dupRing = this._pipes.get(fd);
-  if (dupRing) this._pipes.set(r.fd, dupRing);   // same end, same ring (todos/0181)
+  if (dupRing) this._pipes.set(r.fd, dupRing);   // same end, same ring (docs/archive/0181)
   return r.fd;
 };
 RemoteFS.prototype.dup2 = function (oldfd, newfd) {
@@ -9573,7 +9573,7 @@ RemoteFS.prototype.dup2 = function (oldfd, newfd) {
     delete this._fdTable[k];
     if (pr === null) return null;
     this._fdTable[pr.fd] = { type: 'remote' };
-    this._pipes.delete(newfd);   // newfd is the promoted file now (todos/0181)
+    this._pipes.delete(newfd);   // newfd is the promoted file now (docs/archive/0181)
     return pr.fd;
   }
   if (this._roFd(newfd)) {   // remote source lands on a local number
@@ -9582,7 +9582,7 @@ RemoteFS.prototype.dup2 = function (oldfd, newfd) {
   var r = this._ok(this._c.call(OP.FS_DUP2, { fd: oldfd, newfd: newfd }));
   if (r === null) return null;
   this._fdTable[r.fd] = { type: 'remote' };
-  // Pipe-ring bookkeeping (todos/0181): newfd now names oldfd's OFD.
+  // Pipe-ring bookkeeping (docs/archive/0181): newfd now names oldfd's OFD.
   if (oldfd !== newfd) {
     var d2Ring = this._pipes.get(oldfd);
     if (d2Ring) this._pipes.set(newfd, d2Ring);
@@ -9602,7 +9602,7 @@ RemoteFS.prototype.fcntl_dupfd = function (fd, min) {
   if (r === null) return null;
   this._fdTable[r.fd] = { type: 'remote' };
   var fdRing = this._pipes.get(fd);
-  if (fdRing) this._pipes.set(r.fd, fdRing);     // same end, same ring (todos/0181)
+  if (fdRing) this._pipes.set(r.fd, fdRing);     // same end, same ring (docs/archive/0181)
   return r.fd;
 };
 RemoteFS.prototype.opendir = function (p) {
@@ -9622,7 +9622,7 @@ RemoteFS.prototype._opendirBrokered = function (p) {
   var r = this._ok(this._c.call(OP.FS_OPENDIR, { path: p }));
   if (r === null) return null;
   var entries = r.entries;
-  // Big-dir pagination (todos/0241): a `more` cursor means the kernel
+  // Big-dir pagination (docs/archive/0241): a `more` cursor means the kernel
   // parked the open handle — drain it page by page before snapshotting,
   // so readdir/closedir/pos semantics are unchanged for every caller.
   while (r.more !== undefined) {
@@ -9648,7 +9648,7 @@ RemoteFS.prototype._resolvePath = function (p) {
   return r.errno ? p : r.path;   // best effort, like the lexical resolver
 };
 /* realpath(3) — the FS_REALPATH RPC now resolves symlinks PHYSICALLY
- * kernel-side (todos/0263). Unlike _resolvePath above (best-effort, swallows
+ * kernel-side (docs/archive/0263). Unlike _resolvePath above (best-effort, swallows
  * errors for lexical callers), this surfaces the failure: null + _lastError so
  * the toWasmEnv realpath import can return NULL like glibc/the standalone
  * flavor. One RPC — the per-component walk stays inside the kernel. */
@@ -9661,7 +9661,7 @@ RemoteFS.prototype.isatty = function (fd) {
   var r = this._c.call(OP.FS_ISATTY, { fd: fd });
   return r.errno ? 0 : r.tty;
 };
-/* SPSC pipe fast path (todos/0181) — the process side.
+/* SPSC pipe fast path (docs/archive/0181) — the process side.
  *
  * pipe() allocates the ring SAB and posts it ahead of PIPE_CREATE (the
  * audio-sab handshake); inherited fds arrive pre-registered via
@@ -9695,7 +9695,7 @@ RemoteFS.prototype.pipe = function () {
   }
   return [r.rfd, r.wfd];
 };
-/* Ptys (todos/0020): kernel pty pair -> [masterFd, slaveFd]; the terminal
+/* Ptys (docs/archive/0020): kernel pty pair -> [masterFd, slaveFd]; the terminal
  * app resizes the pair through the master (TIOCSWINSZ -> SIGWINCH). */
 RemoteFS.prototype.openpty = function () {
   var r = this._ok(this._c.call(OP.PTY_CREATE, {}));
@@ -9707,7 +9707,7 @@ RemoteFS.prototype.openpty = function () {
 RemoteFS.prototype.setWinsize = function (fd, rows, cols) {
   return this._ok(this._c.call(OP.TIOCSWINSZ, { fd: fd, rows: rows, cols: cols })) && 0;
 };
-/* AF_UNIX sockets (todos/0008). Data flows through read/write above; only
+/* AF_UNIX sockets (docs/archive/0008). Data flows through read/write above; only
  * the control plane needs methods. accept is interruptible (it parks
  * kernel-side until a connect arrives — EINTR per POSIX). */
 RemoteFS.prototype.sockSocket = function () {
@@ -9822,14 +9822,14 @@ var BOOT_SOURCE = [
   "if (wd.brokered) {",
   "  // The brokered filesystem: the kernel serves every fs syscall; the env",
   "  // is toWasmEnv REUSED over a RemoteFS (same method surface), with the",
-  "  // two in-process-state entries overridden. wd.ro (todos/0180) is the",
+  "  // two in-process-state entries overridden. wd.ro (docs/archive/0180) is the",
   "  // sealed system image as an SAB — mounted locally so reads under its",
   "  // prefix never RPC.",
   "  var roFs = wd.ro",
   "    ? BLOCK_FS.createV4(new BLOCK_FS.SabByteStore(wd.ro.sab), { readonly: true })",
   "    : null;",
   "  rfs = new K.RemoteFS(client, roFs ? { roFs: roFs, roPrefix: wd.ro.prefix, roDev: wd.ro.dev, roLeaf: wd.ro.leaf } : null);",
-  "  // SPSC pipe rings for inherited fds (todos/0181): fast ops gate on the",
+  "  // SPSC pipe rings for inherited fds (docs/archive/0181): fast ops gate on the",
   "  // ring's PR_MODE word, so registering a still-brokered ring is free.",
   "  (wd.pipeRings || []).forEach(function (p) { rfs.registerPipeRing(p.fd, p.end, p.sab); });",
   "  fsFactory = function (ctx) {",
@@ -9854,7 +9854,7 @@ var BOOT_SOURCE = [
   "runModule({",
   "  onReady: function () { instantiated = true; },",
   "  bytes: wd.image || undefined,",
-  "  module: wd.module || undefined,   // pre-compiled Module (todos/0037)",
+  "  module: wd.module || undefined,   // pre-compiled Module (docs/archive/0037)",
   "  args: wd.argv,",
   "  env: envObj(wd.envp),",
   "  stdinSab: wd.ttySab || undefined,",
@@ -9862,11 +9862,11 @@ var BOOT_SOURCE = [
   "  writeOut: ship(1),",
   "  writeErr: ship(2),",
   "  // rfs wraps spawn() so DUP2 file-actions naming local /usr fds promote",
-  "  // to kernel twins (todos/0180); identity when the RO volume is off.",
+  "  // to kernel twins (docs/archive/0180); identity when the RO volume is off.",
   "  spawnHooks: rfs ? rfs.wrapSpawnHooks(client.spawnHooks()) : client.spawnHooks(),",
   "  pid: wd.pid,",
   "  ppid: wd.ppid,",
-  "  // Live ppid off the vDSO page (todos/0179): tracks reparent-to-init.",
+  "  // Live ppid off the vDSO page (docs/archive/0179): tracks reparent-to-init.",
   "  getppid: function () { return client.getppid(); },",
   "}).then(function (code) {",
   "  wt.parentPort.postMessage({ type: 'exited', code: code });",
@@ -9889,7 +9889,7 @@ function nodeCreateWorker(config) {
   return function createWorker(procSpec) {
     // The image crosses as a plain ArrayBuffer clone (images are re-spawnable;
     // never transfer). The kernel page crosses as the SAB it is. On a module-
-    // cache hit (todos/0037) the image is null and the compiled Module
+    // cache hit (docs/archive/0037) the image is null and the compiled Module
     // structured-clones instead — sharing the engine's compiled code.
     var image = procSpec.image;
     var imageBuf = image == null ? null
@@ -9909,9 +9909,9 @@ function nodeCreateWorker(config) {
         kernelPage: procSpec.kernelPage,
         ttySab: procSpec.ttySab || null,
         brokered: !!procSpec.brokered,
-        // Read-only volume (todos/0180): { prefix, sab } — the SAB shares.
+        // Read-only volume (docs/archive/0180): { prefix, sab } — the SAB shares.
         ro: procSpec.ro || null,
-        // SPSC pipe rings (todos/0181): [{fd, end, sab}] — the SABs share.
+        // SPSC pipe rings (docs/archive/0181): [{fd, end, sab}] — the SABs share.
         pipeRings: procSpec.pipeRings || null,
       },
       // Program stdout/stderr flow through {type:'out'} messages (writeOut/
@@ -9928,7 +9928,7 @@ function nodeCreateWorker(config) {
 }
 
 /* ============================================================
- * ProcFS (todos/0043) — a synthetic /proc volume.
+ * ProcFS (docs/archive/0043) — a synthetic /proc volume.
  *
  * Implements exactly the fs-op surface MountFS routes to (open/read/stat/
  * readdir/…), generating Linux-format content from the LIVE kernel process
@@ -10008,7 +10008,7 @@ ProcFS.prototype._lookup = function (path) {
 
 ProcFS.prototype._comm = function (pcb) {
   var a0 = (pcb.argv && pcb.argv[0]) || pcb.path || '?';
-  // A leading '-' is the login-shell argv[0] convention (todos/0174 spawns
+  // A leading '-' is the login-shell argv[0] convention (docs/archive/0174 spawns
   // pid 1 / term shells as "-sh"), not part of the name: Linux comm comes
   // from the exec'd FILE, so a login sh still reads "sh" (and pgrep/pkill
   // by name keep matching).
@@ -10360,15 +10360,15 @@ var KERNEL_EXPORTS = {
   KP_VSYNC_ARMED: KP_VSYNC_ARMED,
   KP_COMP_PARKED: KP_COMP_PARKED,
   KP_PAYLOAD_CAP: KP_PAYLOAD_CAP,
-  KP_FS_CHUNK: KP_FS_CHUNK,       // bulk-lane chunks, derived (todos/0235)
+  KP_FS_CHUNK: KP_FS_CHUNK,       // bulk-lane chunks, derived (docs/archive/0235)
   KP_HOOK_CHUNK: KP_HOOK_CHUNK,
-  // vDSO block (todos/0179) — seqlock-published kernel state.
+  // vDSO block (docs/archive/0179) — seqlock-published kernel state.
   KP_VD_SEQ: KP_VD_SEQ, KP_VD_PID: KP_VD_PID, KP_VD_PPID: KP_VD_PPID,
   KP_VD_PGID: KP_VD_PGID, KP_VD_SID: KP_VD_SID,
   KP_VD_BOOT_LO: KP_VD_BOOT_LO, KP_VD_BOOT_HI: KP_VD_BOOT_HI,
   KP_VD_SCREEN_W: KP_VD_SCREEN_W, KP_VD_SCREEN_H: KP_VD_SCREEN_H,
-  RO_FD_BASE: RO_FD_BASE,   // process-served read-only fd space (todos/0180)
-  // SPSC pipe rings (todos/0181) — header layout + mode ladder for tests.
+  RO_FD_BASE: RO_FD_BASE,   // process-served read-only fd space (docs/archive/0180)
+  // SPSC pipe rings (docs/archive/0181) — header layout + mode ladder for tests.
   PIPE_RING_HDR: PIPE_RING_HDR, PIPE_RING_BYTES: PIPE_RING_BYTES,
   PR_MODE: PR_MODE, PR_HEAD: PR_HEAD, PR_TAIL: PR_TAIL, PR_FLAGS: PR_FLAGS,
   PR_RWAIT: PR_RWAIT, PR_WWAIT: PR_WWAIT,
@@ -10384,7 +10384,7 @@ var KERNEL_EXPORTS = {
   W_EXITCODE: W_EXITCODE,
   W_TERMSIG: W_TERMSIG,
   W_STOPCODE: W_STOPCODE,
-  // WM surfaces (todos/WM.md) — layout constants MUST MATCH host.js.
+  // WM surfaces (docs/WM.md) — layout constants MUST MATCH host.js.
   SH_MAGIC: SH_MAGIC, SH_W: SH_W, SH_H: SH_H, SH_FORMAT: SH_FORMAT,
   SH_FLIP: SH_FLIP, SH_SEQ: SH_SEQ, SH_GEN: SH_GEN, SH_LOCK: SH_LOCK, SH_PMISS: SH_PMISS,
   WM_CFG_OUTSTANDING: WM_CFG_OUTSTANDING,
@@ -10401,9 +10401,9 @@ var KERNEL_EXPORTS = {
   WM_MAP_TIMEOUT_MS: WM_MAP_TIMEOUT_MS,
   WM_ANIM_MS: WM_ANIM_MS,
   WM_COLORS: WM_COLORS,
-  // The WM protocol (todos/0014) — MUST MATCH os/wm_proto.h.
+  // The WM protocol (docs/archive/0014) — MUST MATCH os/wm_proto.h.
   WMP: WMP, WMP_REC_BYTES: WMP_REC_BYTES, WM_SOCK_PATH: WM_SOCK_PATH,
-  // Key-grab table (todos/KEYBINDING-OVERRIDE-SYSTEM.md §3): the canonical
+  // Key-grab table (docs/KEYBINDING-OVERRIDE-SYSTEM.md §3): the canonical
   // modifier fold + masks (twin of os/keys.h km_from_sdl / KM_*), the reserved
   // default-table tokens, and the built-in default table — exported so the
   // mechanism + km-fold-twin tests can assert against them.
@@ -10412,7 +10412,7 @@ var KERNEL_EXPORTS = {
   WM_TOK_RESERVED: WM_TOK_RESERVED, WM_TOK_CYCLE: WM_TOK_CYCLE,
   WM_TOK_MENU: WM_TOK_MENU, WM_TOK_SNAP: WM_TOK_SNAP,
   WM_TOK_SYSMENU: WM_TOK_SYSMENU, WM_DEFAULT_GRABS: WM_DEFAULT_GRABS,
-  // Audio mixer (todos/0017) — ring layout MUST MATCH host.js
+  // Audio mixer (docs/archive/0017) — ring layout MUST MATCH host.js
   // createSharedAudioBuffer; format words MUST MATCH <SDL3/SDL_audio.h>.
   AU_WPOS: AU_WPOS, AU_QUEUED: AU_QUEUED, AU_PLAYING: AU_PLAYING,
   AU_HDR_BYTES: AU_HDR_BYTES,

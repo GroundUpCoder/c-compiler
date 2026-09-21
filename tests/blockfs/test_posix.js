@@ -350,7 +350,7 @@ test('fcntl-dupfd-pipe', function () {
 });
 
 // ---------------------------------------------------------------
-// 10. socket-node — AF_UNIX rendezvous nodes (todos/0008): mknod with
+// 10. socket-node — AF_UNIX rendezvous nodes (docs/archive/0008): mknod with
 //     S_IFSOCK creates a real socket inode (v4: mknod needs rdev), stat
 //     reports the type, open() refuses it with ENXIO (POSIX), and plain
 //     unlink removes it. No fsck pass: fsck guards on VERSION 3 and this
@@ -379,7 +379,7 @@ test('socket-node', function () {
 });
 
 // ---------------------------------------------------------------
-// 11. create-through-symlink (todos/0375) — open(O_CREAT) whose final
+// 11. create-through-symlink (docs/archive/0375) — open(O_CREAT) whose final
 //     component is a dangling symlink must create the TARGET (POSIX; the
 //     final symlink is followed even when creating). The pre-fix create
 //     branch inserted a SECOND dirent under the link's own lexical name —
@@ -524,7 +524,7 @@ test('mknod over a dangling symlink is EEXIST, never a dup dirent (v4)', functio
 });
 
 // ---------------------------------------------------------------
-// todos/0376 — fds carry their access mode (open()'s flags & O_ACCMODE).
+// docs/archive/0376 — fds carry their access mode (open()'s flags & O_ACCMODE).
 // The defect: no mode was stored on the fd entry at all, so write() on an
 // O_RDONLY fd silently mutated the file (the corruption half — defensive
 // read-only opens protected nothing) and read() on an O_WRONLY fd disclosed

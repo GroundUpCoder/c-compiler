@@ -1,6 +1,6 @@
 /* user32.c — windowing, the HWND tree, the message loop, input routing,
- * the standard controls, and the agent tree (todos/0058, design
- * todos/WIN32.md).
+ * the standard controls, and the agent tree (docs/archive/0058, design
+ * docs/WIN32.md).
  *
  * The Windows 7 split (WIN32.md): user32 owns WINDOWING, gdi32 owns
  * DRAWING. A top-level HWND wraps an SDL window (one kernel surface);
@@ -12,7 +12,7 @@
  * The message loop is the CLASSIC blocking shape — while (GetMessage)
  * { TranslateMessage; DispatchMessage; } — even though main() never
  * returns to the host's frame scheduler: GetMessage parks in the
- * kernel's unified WAIT (__wait, todos/0178) over the input ring, the
+ * kernel's unified WAIT (__wait, docs/archive/0178) over the input ring, the
  * agent listen socket, and the next timer deadline — readiness-check
  * and park atomic kernel-side, wakes drained into the SDL event queue
  * at the import's return. Message priority is Windows': posted messages
@@ -32,7 +32,7 @@
  * at the API boundary), resources (a sidecar `<argv0>.res` pack compiled
  * by tools/win32rc.js — the WRES format there is the MUST-MATCH spec for
  * res_* below; Load{String,Bitmap,Menu,Accelerators}W read it, icons/
- * cursors are stub handles), MENUS (an HMENU item tree; since todos/0257
+ * cursors are stub handles), MENUS (an HMENU item tree; since docs/archive/0257
  * the PIXELS live on kernel anchored-child surfaces — the bar is a
  * persistent full-width strip child over the surface's top MENU_BAR_H
  * pixels (the client area is still offset under it, so window geometry
@@ -63,7 +63,7 @@
  *     (application visibility is separate from WM minimization)
  *   - WM_CLOSE from the kernel (title-bar 'x' / wmctl close) is per-
  *     window when several top-levels are live (SDL_EVENT_WINDOW_
- *     CLOSE_REQUESTED, todos/0089); the only/last window gets the
+ *     CLOSE_REQUESTED, docs/archive/0089); the only/last window gets the
  *     process-wide SDL_EVENT_QUIT routed to the first live top-level
  *   - VK mapping covers letters/digits/named keys; punctuation VKs are
  *     approximate (WM_CHAR carries the real character — SDL3 keysyms
@@ -122,7 +122,7 @@ static void *gucedit_alloc(size_t n) {
  * until the kernel's push notifies. Returns 1 if a ring exists. */
 __import int __sdl_pump_wait(int timeoutMs);
 
-/* The unified multi-source wait (kernel FS_WAIT via host.js, todos/0178):
+/* The unified multi-source wait (kernel FS_WAIT via host.js, docs/archive/0178):
  * park until an fd in rfds is readable (1), the input ring has records —
  * already drained into the SDL queue at return (2), timeout_ms elapses
  * (0; < 0 waits forever), or a signal was posted (-1). -2 = no kernel
@@ -331,13 +331,13 @@ struct __HWND {
     struct __HWND *focus;       /* top-level only: the keyboard-focus HWND */
     HMENU menu;                 /* top-level only: the menu bar (0068) */
     SDL_Window *barWin;         /* top-level only: the persistent bar strip
-                                   child surface (todos/0257), or NULL */
+                                   child surface (docs/archive/0257), or NULL */
     int isW;                    /* class registered via the W API */
     int visible, enabled;
     int needPaint;
     int inDestroy;
     LONG_PTR userdata;
-    HFONT hfont;                /* WM_SETFONT font (todos/0223), app-owned;
+    HFONT hfont;                /* WM_SETFONT font (docs/archive/0223), app-owned;
                                    NULL = the stock DC default */
     void *ctl;                  /* control state (edit/listbox/scrollbar/dialog) */
 };
@@ -364,7 +364,7 @@ static int nc_edge(HWND h) { return (h->exStyle & WS_EX_CLIENTEDGE) ? 2 : 0; }
 static int cli_w(HWND h) { return h->w - 2 * nc_edge(h); }
 static int cli_h(HWND h) { return h->h - 2 * nc_edge(h); }
 
-/* CS_OWNCLIENT (todos/0258, menu-arch §3.7/A6): the app presents its own
+/* CS_OWNCLIENT (docs/archive/0258, menu-arch §3.7/A6): the app presents its own
  * client plane — user32 must never synthesize WM_PAINT for the window and
  * never touch its window surface (a GetWindowSurface/UpdateWindowSurface
  * present would fight the app's transport). Everything above the client —
@@ -437,7 +437,7 @@ static const char *text_get(HWND h) { return h->text ? h->text : ""; }
 
 static uint32_t g_scratchPx[1];  /* degenerate rects draw here, discarded */
 
-/* WM_SETFONT (todos/0223) rides the DC seam: GetDC is the ONE place every
+/* WM_SETFONT (docs/archive/0223) rides the DC seam: GetDC is the ONE place every
  * control draw AND measure obtains its DC, so selecting the per-HWND font
  * here keeps glyphs and metrics (edit_line_h/edit_rows/caret x, button and
  * listbox extents) in agreement by construction. The scratch path selects
@@ -485,7 +485,7 @@ HDC GetDC(HWND h) {
 
 int ReleaseDC(HWND h, HDC dc) {
     if (!h || !dc) return 0;
-    /* Menu pixels live on their own child surfaces (todos/0257): an app
+    /* Menu pixels live on their own child surfaces (docs/archive/0257): an app
      * present never touches them and vice versa — the every-present
      * overlay draw (coupling #1) is gone, not disabled. CS_OWNCLIENT:
      * never present the window surface (the app owns the client plane;
@@ -1141,7 +1141,7 @@ HICON LoadIconW(HINSTANCE inst, LPCWSTR name) {
     return (HICON)&g_iconStub;
 }
 
-/* System cursor shapes (todos/0105): an HCURSOR token carries its
+/* System cursor shapes (docs/archive/0105): an HCURSOR token carries its
  * SDL_SystemCursor shape so SetCursor can push it to the surface via the SDL
  * cursor path (the kernel then shows it over this window's client, and
  * overlays chrome resize cursors on the frame itself). System shapes only —
@@ -1195,7 +1195,7 @@ HCURSOR SetCursor(HCURSOR cur) {
     HCURSOR old = g_curCursor;
     if (cur == g_curCursor) return old;         /* debounce redundant sets */
     g_curCursor = cur;
-    /* Route to the surface (todos/0105). A cursor token is &g_cursorShape[shape]
+    /* Route to the surface (docs/archive/0105). A cursor token is &g_cursorShape[shape]
      * (system cursors) — read the shape back and push the cached SDL cursor;
      * NULL hides (Win32 SetCursor(NULL)). Foreign tokens fall to the arrow. */
     if (!cur) { SDL_HideCursor(); return old; }
@@ -1263,7 +1263,7 @@ int TranslateAcceleratorW(HWND hwnd, HACCEL acc, MSG *msg) {
     if (!hwnd || !acc || !msg || msg->message != WM_KEYDOWN) return 0;
     AccelTbl *t = (AccelTbl *)acc;
     int shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-    /* THE scheme choke (todos/0149): under the macos keymap FCONTROL means
+    /* THE scheme choke (docs/archive/0149): under the macos keymap FCONTROL means
      * the ⌘/GUI modifier — every accelerator table in the corpus (fileman's
      * runtime table, the .rc-compiled ones) swaps with zero per-app work,
      * and Ctrl is freed for the EDIT readline rows. g_mod is the raw SDL
@@ -1285,7 +1285,7 @@ int TranslateAcceleratorW(HWND hwnd, HACCEL acc, MSG *msg) {
 
 /* ============================================================ menus
  * The menu ENGINE (model + geometry + tracking + raster) lives in
- * menucore.c since M4 (todos/0259, arch A13) — this section is the win32
+ * menucore.c since M4 (docs/archive/0259, arch A13) — this section is the win32
  * FRONT-END over the menucore.h seam: the HMENU API surface, the
  * persistent bar strip furniture, the WndProc notification ops,
  * TrackPopupMenu's modal pump and the agent protocol. Pixels live on
@@ -1514,7 +1514,7 @@ BOOL DrawMenuBar(HWND h) {
 
 /* Per-item horizontal padding. Classic is 16 (8 a side), but a window too
  * narrow for its titles at that spread (beginner winmine's "Options"+"Info"
- * after the 20px font, todos/0280) tightens evenly — floor 6 — so the last
+ * after the 20px font, docs/archive/0280) tightens evenly — floor 6 — so the last
  * title still renders complete; bars that fit are untouched. */
 static int menu_bar_pad(HWND top) {
     MenuTbl *m = MENU_T(top->menu);
@@ -1805,7 +1805,7 @@ static void timer_purge(HWND hwnd) {
 }
 
 /* Milliseconds until the next armed timer is due (0 = due now), or -1 if
- * none — GetMessage's unified-WAIT deadline (todos/0178). MUST apply the
+ * none — GetMessage's unified-WAIT deadline (docs/archive/0178). MUST apply the
  * same hwnd/range eligibility as timer_scan below: a due-but-filtered
  * timer would otherwise pin the deadline at 0 and spin the park. */
 static int timer_next_ms(HWND hf, UINT mn, UINT mx) {
@@ -1911,7 +1911,7 @@ static WPARAM mk_of_state(Uint32 sdlState) {
     return mk;
 }
 
-/* Per-surface cursor on hover (todos/0105): the EDIT client wants the I-beam,
+/* Per-surface cursor on hover (docs/archive/0105): the EDIT client wants the I-beam,
  * every other class the arrow. Only the client area speaks here — the kernel
  * overlays chrome resize cursors on the frame. SetCursor debounces, so the
  * per-move calls only reach the kernel on an actual shape change. */
@@ -2126,7 +2126,7 @@ void __u32_feed_sdl_event(SDL_Event e) {
                 if (__mc.open) mc_close();
                 break;
             }
-            /* Per-window close (todos/0089): with several top-levels live
+            /* Per-window close (docs/archive/0089): with several top-levels live
              * the kernel's close request names the window — WM_CLOSE goes
              * to exactly that one (an applet closes, the hub survives). */
             HWND top = top_by_windowid(e.window.windowID);
@@ -2378,7 +2378,7 @@ static void tree_dump(HWND h, int depth, StrBuf *sb) {
              hwnd_shown(h), hwnd_able(h),
              (h->top->focus == h) ? " focus" : "", shown);
     sb_add(sb, line);
-    /* AQM seam (todos/0370): an item-bearing control splices its items as
+    /* AQM seam (docs/archive/0370): an item-bearing control splices its items as
      * pre-indented lines under its win line — the menu_dump shape, cut at
      * the user32<->any-control boundary (win32_internal.h). The 160-byte
      * text field above cannot carry a whole catalog; these lines can. */
@@ -2457,7 +2457,7 @@ static HWND agent_find_ex(const char *label, int wantEnabled) {
 
 static HWND agent_find(const char *label) { return agent_find_ex(label, 0); }
 
-/* AQM row resolution (todos/0370): offered AFTER window text and menu
+/* AQM row resolution (docs/archive/0370): offered AFTER window text and menu
  * items both miss — an item-bearing control (LISTBOX, SysListView32,
  * SysHeader32, a future treeview) matches the label against its own items
  * (win32_internal.h AqmFind contract). act=1 performs click semantics and
@@ -2695,7 +2695,7 @@ BOOL GetMessage(MSG *out, HWND hf, UINT mn, UINT mx) {
             g_quitPosted = 0;
             return FALSE;
         }
-        /* Unified park (todos/0178): ONE kernel WAIT over the agent listen
+        /* Unified park (docs/archive/0178): ONE kernel WAIT over the agent listen
          * socket ⊕ the input ring ⊕ registered wake fds (ticket #75) ⊕
          * the next eligible timer deadline — the 25ms chunk poll is gone,
          * an idle app parks until something real happens. Signals complete
@@ -2746,7 +2746,7 @@ BOOL TranslateMessage(const MSG *m) {
     int sym = g_lastSym, ch = 0;
     if (g_mod & 0x0C00) return FALSE;            /* GUI is never a text modifier:
                                                     a ⌘chord must not type its
-                                                    letter (todos/0149) */
+                                                    letter (docs/archive/0149) */
     if (g_mod & 0x00C0) {                        /* Ctrl+letter -> control char */
         if (sym >= 'a' && sym <= 'z') ch = sym - 96;
         else if (sym >= 'A' && sym <= 'Z') ch = sym - 64;
@@ -2913,7 +2913,7 @@ static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowNam
         static int sdlInited;
         if (!sdlInited) { SDL_Init(SDL_INIT_VIDEO); sdlInited = 1; }
         hw->top = hw;
-        /* The taskbar/window-cycle classification (todos/0281, corrected by
+        /* The taskbar/window-cycle classification (docs/archive/0281, corrected by
          * #740). SDL_WINDOW_UTILITY -> kernel surface flag bit4 ->
          * WMP_F_TRANSIENT, which /bin/wm reads as "keep out of wins[]": no
          * taskbar button, and skipped by cycle/cascade/tile/minimize-all.
@@ -3889,7 +3889,7 @@ typedef struct {
     int *tabs;                  /* EM_SETTABSTOPS stops in dialog units, or
                                    NULL for the default 8-char grid (0274) */
     int ntabs;                  /* count of tabs[] */
-    /* Single-level undo record (todos/0135) — the Win95 plain-EDIT model:
+    /* Single-level undo record (docs/archive/0135) — the Win95 plain-EDIT model:
      * ONE record holding the inverse of the last user edit, deliberately
      * not a stack. Applying it replaces [undoPos, undoPos+undoDel) with
      * undoText[0..undoIns) and restores the recorded selection; EM_UNDO
@@ -3924,7 +3924,7 @@ static int edit_hsb(HWND h) {                    /* built-in hscroll (0211) */
 
 static void sb_tri(HDC dc, int cx, int cy, int dir);   /* scrollbar section */
 
-/* gucOS is POSIX — the EDIT buffer is pure LF (todos/0210). Every text-in
+/* gucOS is POSIX — the EDIT buffer is pure LF (docs/archive/0210). Every text-in
  * path normalizes CRLF and lone CR to '\n': the text path has no 0x0D glyph
  * (a stray \r rendered "?"), and WM_GETTEXT/EM_GETHANDLE hand the buffer
  * back out, so the win32 layer never re-imposes CRLF on the filesystem.
@@ -4290,7 +4290,7 @@ static void edit_insert(HWND h, EditState *st, const char *s, int n) {
     (void)h;
 }
 
-/* ---- single-level undo (todos/0135) ---- */
+/* ---- single-level undo (docs/archive/0135) ---- */
 
 static void edit_undo_clear(EditState *st) {
     free(st->undoText);
@@ -4562,7 +4562,7 @@ static int edit_hit(HWND h, EditState *st, int px, int py) {
     return pos;
 }
 
-/* ---- the keymap verbs (todos/0149/0150, os/keys.h) ----
+/* ---- the keymap verbs (docs/archive/0149/0150, os/keys.h) ----
  * ONE dispatcher for every chord-bound EDIT action; the WM_KEYDOWN handler
  * resolves the chord through key_action() and lands here — no per-key
  * special cases anywhere else. Word boundaries are whitespace-delimited
@@ -4890,7 +4890,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CHAR: {
         int ch = (int)wp;
         /* chords don't live here anymore: WM_KEYDOWN resolves them through
-         * key_action (todos/0149) — a control char that still arrives via
+         * key_action (docs/archive/0149) — a control char that still arrives via
          * the TranslateMessage Ctrl fold is an UNBOUND chord and drops in
          * the else arm below */
         if (edit_ro(h)) return 0;
@@ -4956,7 +4956,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_KEYDOWN: {
         int extend = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-        /* THE chord dispatch (todos/0149/0150): resolve against the
+        /* THE chord dispatch (docs/archive/0149/0150): resolve against the
          * configured scheme; unbound chords fall through to the plain-key
          * handling below (which the mods can't reach: bound rows returned,
          * and the WM_CHAR fold owns typing). */
@@ -5186,7 +5186,7 @@ static LRESULT edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (!edit_ro(h)) edit_paste(h, st);
         return 0;
     case WM_CONTEXTMENU: {
-        /* The standard EDIT right-click menu (todos/0091), built fresh per
+        /* The standard EDIT right-click menu (docs/archive/0091), built fresh per
          * popup over the 0068 primitive (TPM_RETURNCMD keeps it
          * self-contained; the items are agent targets for free — wmctl
          * tree/click). Undo gates on EM_CANUNDO (live since 0135: grayed
@@ -5496,7 +5496,7 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int page = lb_rows(h);                   /* PageUp/Down step (0104) */
         if (page < 1) page = 1;
         /* select-all (extended mode, 0106) — Explorer's chord, resolved
-         * through the scheme table (^A / ⌘A, todos/0149) */
+         * through the scheme table (^A / ⌘A, docs/archive/0149) */
         if (st->multi &&
             key_action(KCTX_LIST, km_from_sdl(g_mod),
                        kk_from_vk((int)wp)) == KA_SELECT_ALL) {
@@ -5724,7 +5724,7 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return n;
     }
     case AQM_DUMPCHILDREN: {
-        /* AQM seam (todos/0370): rows as their own `wmctl tree` lines —
+        /* AQM seam (docs/archive/0370): rows as their own `wmctl tree` lines —
          * the WM_GETTEXT join above is truncated to 160 bytes by
          * tree_dump's text field, so a long listing was invisible there. */
         AqmDump *d = (AqmDump *)lp;
@@ -5752,7 +5752,7 @@ static LRESULT lb_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return out != NULL;
     }
     case AQM_FINDLABEL: {
-        /* AQM seam (todos/0370): a row is a click/label target by its item
+        /* AQM seam (docs/archive/0370): a row is a click/label target by its item
          * text — before this, `wmctl click <row>` had no path to a LISTBOX
          * row and e2es drove selection by HOME + N*VK_DOWN ordinals. */
         AqmFind *f = (AqmFind *)lp;
@@ -6353,7 +6353,7 @@ static void ensure_dialog_class(void) {
         class_add("#32770", dlg_proc_32770, 0, (HBRUSH)(COLOR_BTNFACE + 1));
 }
 
-/* MessageBeep (todos/0094): the event-sound scheme via winmm's PlaySound
+/* MessageBeep (docs/archive/0094): the event-sound scheme via winmm's PlaySound
  * (same lib — os/win32/lib.json links winmm.c into every user32 app).
  * SND_NODEFAULT: an unknown/absent alias stays silent rather than dinging
  * with the default — MessageBeep IS the default-sound surface. */
@@ -6372,7 +6372,7 @@ BOOL MessageBeep(UINT type) {
 
 int MessageBox(HWND owner, LPCSTR text, LPCSTR caption, UINT type) {
     ensure_dialog_class();
-    MessageBeep(type);                           /* icon sound (todos/0094) */
+    MessageBeep(type);                           /* icon sound (docs/archive/0094) */
 
     /* Measure the TRUE text extent on a memory DC (the same image font the
      * STATIC below paints with). DT_CALCRECT with NO width cap and NO

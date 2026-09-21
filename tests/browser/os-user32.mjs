@@ -1,4 +1,4 @@
-// user32 browser acceptance (todos/0058, design todos/WIN32.md): boot the
+// user32 browser acceptance (docs/archive/0058, design docs/WIN32.md): boot the
 // reference OS page in headless Chromium, launch the seeded /bin/ctldemo
 // from the shell, and drive the Win32 controls through the REAL input
 // path — page mouse clicks and keyboard — plus the agent tree (`wmctl
@@ -101,7 +101,7 @@ try {
   // Button raised edge: Add's top-left pixel is BTNHIGHLIGHT white.
   check('button raised 3D edge', near(await sample(...at(268, 10)), WHITE), await sample(...at(268, 10)));
 
-  // Cursor shapes (todos/0105): user32's EDIT claims the I-beam on hover, so a
+  // Cursor shapes (docs/archive/0105): user32's EDIT claims the I-beam on hover, so a
   // real mouse move over the Name EDIT flips canvas.style.cursor to 'text';
   // over the Add button it falls back to 'default'. The kernel per-surface
   // cursor rides the SetCursor -> SDL -> RPC path; a short settle lets the app

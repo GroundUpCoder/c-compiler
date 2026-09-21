@@ -1,4 +1,4 @@
-/* term.c — the wasm terminal (todos/0020): an SDL surface app that owns a
+/* term.c — the wasm terminal (docs/archive/0020): an SDL surface app that owns a
  * kernel pty master and renders a character grid with freetype.
  *
  *   term [cmd args...]     defaults to /bin/sh (hush, interactive on the pty)
@@ -6,7 +6,7 @@
  * Shape:
  *   - openpty() -> posix_spawnp the session leader on the slave (fd 0/1/2,
  *     own pgroup; the kernel claims it as the pty's foreground).
- *   - Event-driven loop (unified WAIT on {master, input ring}, todos/0178;
+ *   - Event-driven loop (unified WAIT on {master, input ring}, docs/archive/0178;
  *     an idle term wakes zero times a second): SDL key events -> bytes ->
  *     master; master bytes -> escape-sequence state machine -> cell grid ->
  *     freetype glyph blits -> SDL_UpdateWindowSurface (shm present;
@@ -16,17 +16,17 @@
  *     ECH, SU/SD, DECSTBM, SGR (16/256-color, bold, reverse), alt screen
  *     (?1049), cursor show/hide (?25), autowrap (?7), DECCKM (?1),
  *     DSR-6/DA replies. Not full vt100 — grow it when a program needs it.
- *   - WINDOW_RESIZED (todos/0019) -> grid realloc + TIOCSWINSZ (SIGWINCH
+ *   - WINDOW_RESIZED (docs/archive/0019) -> grid realloc + TIOCSWINSZ (SIGWINCH
  *     reflows vi); closing the window (or the child exiting) ends the
  *     session — the kernel HUPs the pty's foreground pgroup at master
  *     close, so a plain exit(0) is a clean teardown.
- *   - A macOS-Terminal-style menu bar (todos/0273c): a "menubar" strip
+ *   - A macOS-Terminal-style menu bar (docs/archive/0273c): a "menubar" strip
  *     child window over the top MENU_BAR_H px (the kernel anchored-child
- *     primitive, todos/0256) whose dropdowns ride the ONE menu engine
+ *     primitive, docs/archive/0256) whose dropdowns ride the ONE menu engine
  *     (os/win32/menucore.h — term is customer #3 after user32 and wm.c)
  *     as real POPUP_MENU anchored children titled "#32768". The grid
  *     renders below the bar (GRID_Y offset).
- *   - Shell > Settings… (todos/0273d) opens a hand-drawn settings window
+ *   - Shell > Settings… (docs/archive/0273d) opens a hand-drawn settings window
  *     (font size / theme / scrollback / cursor / bell); config lives in
  *     the cfgstore.h three-layer overlay `~/.config/term > /etc/term >
  *     /usr/share/term`, loads at startup, applies live, and live-reloads
@@ -47,26 +47,26 @@
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <sys/wait.h>
-#include "../keys.h"     /* the system keyboard scheme (todos/0149) */
+#include "../keys.h"     /* the system keyboard scheme (docs/archive/0149) */
 #include "../launch.h"   /* LAUNCH_ENV_PATH/HOME — the canonical env strings */
 #include "../cfgstore.h" /* the three-layer per-key config overlay (CS3) —
-                          * term's settings store (todos/0273d) */
+                          * term's settings store (docs/archive/0273d) */
 #include "../sounds.h"   /* the 0094 event-sound scheme: the audible bell */
 #include "../fswatch.h"  /* FS_WATCH (#75): live settings reload across
                           * processes — term is consumer #3 after mgp and
-                          * fileman (todos/0273d) */
-#include "../fontcore.h"  /* the shared glyph pipeline (todos/0277) — pulls
+                          * fileman (docs/archive/0273d) */
+#include "../fontcore.h"  /* the shared glyph pipeline (docs/archive/0277) — pulls
                            * freetype, fontchain.h (fallback list) and
                            * wcwidth.h (double-width; MUST MATCH kernel.js) */
 #include <SDL_popup.h>    /* the kernel anchored-child popup primitive (0256) */
 #include "../win32/menucore.h"        /* the ONE menu engine (0259 A13): term
                                        * is customer #3 — the wm.c pattern,
                                        * menucore.json only, no user32/
-                                       * kernel32 (todos/0273c) */
+                                       * kernel32 (docs/archive/0273c) */
 #include "../win32/win32_internal.h"  /* __gdi_dc_wrap: engine raster over an
                                        * SDL surface's pixels */
 
-/* User-override font first, then the baked vendor default (todos/0040 —
+/* User-override font first, then the baked vendor default (docs/archive/0040 —
  * systemd-style /etc: an empty /etc must boot). */
 #define FONT_PATH      "/etc/fonts/mono.ttf"
 #define FONT_FALLBACK  "/usr/share/fonts/mono.ttf"
@@ -100,7 +100,7 @@ typedef struct {
 #define DEF_BG    17
 
 /* Slots 16/17 (default fg/bg) are the THEME pair — the one mutable part
- * of the palette (todos/0273d): a theme swaps the default pair only, the
+ * of the palette (docs/archive/0273d): a theme swaps the default pair only, the
  * 16 ANSI colors stay fixed, so SGR-colored output keeps its colors on
  * any theme (Terminal profiles behave the same). */
 static uint8_t PAL[18][3] = {
@@ -125,7 +125,7 @@ static int appcursor;              /* DECCKM: arrows send ESC O x */
 static unsigned char cur_fg = DEF_FG, cur_bg = DEF_BG, cur_attr = 0;
 static int dirty = 1;
 
-/* ---- configuration (todos/0273d) ----
+/* ---- configuration (docs/archive/0273d) ----
  * The store is `term` in the cfgstore.h three-layer per-key overlay
  * (arch CS3): ~/.config/term (what the settings window's cfg_set writes,
  * one key per change) > /etc/term > baked /usr/share/term. Keys — the
@@ -229,7 +229,7 @@ static void tc_load(TermCfg *c) {
                                 strcmp(val, "0") == 0 ? 0 : 1);
 }
 
-/* ---- scrollback history ring (todos/0273a) ----
+/* ---- scrollback history ring (docs/archive/0273a) ----
  * Lines that scroll off the TOP of the main screen (a real terminal scroll:
  * a linefeed at the bottom with the scroll region anchored at row 0) are
  * pushed here instead of discarded, so the user can scroll UP into output
@@ -250,10 +250,10 @@ static void tc_load(TermCfg *c) {
  * of view_off; rendering and the selection anchors (#355) map through the
  * offset. New output or any non-
  * scroll keypress snaps back to live (Terminal behaviour). The ring's
- * capacity is the `scrollback` config key (todos/0273d, default 2000):
+ * capacity is the `scrollback` config key (docs/archive/0273d, default 2000):
  * a heap array of sb_max slots, re-sized live by sb_set_max. */
 typedef struct { Cell *cells; int len; } HistLine;
-static HistLine *hist;              /* ring, sb_max slots (todos/0273d) */
+static HistLine *hist;              /* ring, sb_max slots (docs/archive/0273d) */
 static int sb_max;                  /* configured capacity; 0 = disabled */
 static int hist_count;              /* valid lines, <= sb_max */
 static int hist_head;               /* ring index of the oldest line */
@@ -264,7 +264,7 @@ static float wheel_acc;             /* fractional wheel carry, in lines (#347) *
 static int mfd = -1;
 static pid_t child = -1;
 
-/* The unified multi-source wait (kernel FS_WAIT via host.js, todos/0178):
+/* The unified multi-source wait (kernel FS_WAIT via host.js, docs/archive/0178):
  * park until an fd in rfds is readable (1), the input ring has records —
  * already drained into the SDL queue at return (2), timeout_ms elapses
  * (0; < 0 waits forever), or a signal was posted (-1). term's two event
@@ -272,7 +272,7 @@ static pid_t child = -1;
  * ZERO times a second instead of polling the master at 60Hz. */
 __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
 
-/* ---- selection / clipboard (todos/0090; virtual rows since #355) ----
+/* ---- selection / clipboard (docs/archive/0090; virtual rows since #355) ----
    Mouse drag selects a linear (row-major, xterm-style) cell range;
    Ctrl+Shift+C copies it to the system clipboard (SDL_SetClipboardText ->
    the kernel's one slot), Ctrl+Shift+V pastes the slot into the pty
@@ -298,7 +298,7 @@ static FT_Library ft_lib;
 static FT_Face face;
 static int cell_w, cell_h, ascent;
 
-/* Two-tier glyph cache (fontcore FcCache, todos/0277): ASCII in a flat
+/* Two-tier glyph cache (fontcore FcCache, docs/archive/0277): ASCII in a flat
  * array rendered eagerly at startup, everything else in a lazily-grown
  * linear-scan side cache. A code point the face lacks renders as a
  * synthesized tofu box — a LOUD gap marker, never a '?' that reads as
@@ -395,7 +395,7 @@ static void snap_live(void) {
     if (view_off != 0) { view_off = 0; dirty = 1; }
 }
 
-/* Re-size the ring to the configured capacity (todos/0273d): keep the
+/* Re-size the ring to the configured capacity (docs/archive/0273d): keep the
  * NEWEST min(count, n) lines, free the rest, compact to index 0. Also
  * the startup allocator (sb_max starts 0). */
 static void sb_set_max(int n) {
@@ -418,7 +418,7 @@ static void sb_set_max(int n) {
     dirty = 1;
 }
 
-/* ---- side scrollbar (todos/0273b) ----
+/* ---- side scrollbar (docs/archive/0273b) ----
  * A macOS-style OVERLAY bar at the surface's right edge — a pure view +
  * controller over the (a) model above: hist_count/view_off are the ONLY
  * position state (wheel, keys and bar can never disagree). Overlay, not
@@ -878,7 +878,7 @@ static void term_putc(unsigned char b) {
 }
 
 /* ============================================================ selection
- * / clipboard (todos/0090) */
+ * / clipboard (docs/archive/0090) */
 
 /* Encode cp as UTF-8 into u (>= 4 bytes); returns the byte count. Cells
  * and keysyms are already validated, so > U+10FFFF cannot occur. */
@@ -999,7 +999,7 @@ static void handle_key(const SDL_KeyboardEvent *k) {
     int sym = (int)k->key;
     int mod = (int)k->mod;
     char b;
-    /* Scrollback navigation (todos/0273a): plain PageUp/PageDown page through
+    /* Scrollback navigation (docs/archive/0273a): plain PageUp/PageDown page through
      * history on the MAIN screen — alt-screen apps (vi/less, no scrollback)
      * keep the keys for themselves. These deliberately do NOT snap to live;
      * scrolling into history is the point. */
@@ -1011,7 +1011,7 @@ static void handle_key(const SDL_KeyboardEvent *k) {
        chord must not yank a scrolled view back to live (#355). */
     if (sym >= SDLK_LCTRL && sym <= SDLK_RGUI) return;
     /* The terminal's copy/paste chords resolve through the scheme table
-       (todos/0149, os/keys.h): Ctrl+Shift+C/V under the windows keymap,
+       (docs/archive/0149, os/keys.h): Ctrl+Shift+C/V under the windows keymap,
        ⌘C/V under macos — plain Ctrl+C stays the tty's SIGINT byte either
        way. Keysyms are modifier-applied, so the shifted letter usually
        arrives uppercase (key_action case-folds). Copy resolves BEFORE the
@@ -1057,11 +1057,11 @@ static void handle_key(const SDL_KeyboardEvent *k) {
 }
 
 /* ============================================================ menu bar
- * (todos/0273c) — a macOS-Terminal-style top menu riding the OS's ONE
+ * (docs/archive/0273c) — a macOS-Terminal-style top menu riding the OS's ONE
  * menu facility at both layers: the strip and every dropdown are kernel
- * anchored-child popup surfaces (SDL_CreatePopupWindow, todos/0256), and
+ * anchored-child popup surfaces (SDL_CreatePopupWindow, docs/archive/0256), and
  * the dropdown model/geometry/tracking/raster are the menucore engine
- * (todos/0259 A13) — term is the engine's customer #3 after user32 and
+ * (docs/archive/0259 A13) — term is the engine's customer #3 after user32 and
  * wm.c, linking win32/menucore.json (menucore.c + gdi32.c) WITHOUT
  * user32/kernel32, exactly the wm.c pattern. The bar strip itself is
  * front-end furniture (as in user32): painted through a __gdi_dc_wrap DC
@@ -1142,7 +1142,7 @@ static void tmc_post_command(void *owner, int id) {
     (void)owner;                       /* one window; the ids say it all */
     switch (id) {
     case CM_NEWWIN:   spawn_sibling_term(); break;
-    case CM_SETTINGS: settings_open(); break;      /* todos/0273d */
+    case CM_SETTINGS: settings_open(); break;      /* docs/archive/0273d */
     case CM_CLOSEWIN: exit(0); break;  /* master close HUPs the session (0020) */
     case CM_COPY:     copy_selection(); break;
     case CM_PASTE:    paste_clipboard(); break;
@@ -1435,7 +1435,7 @@ static FcGlyph *cp_glyph(uint32_t cp) {
 }
 
 /* ============================================================ settings
- * runtime (todos/0273d) — the live-apply paths shared by the settings
+ * runtime (docs/archive/0273d) — the live-apply paths shared by the settings
  * window below, the startup load and the FS_WATCH reload. Each is
  * idempotent (same value = no work), so "reload everything and apply"
  * is safe from any of the three callers. */
@@ -1448,7 +1448,7 @@ static void set_metrics(void) {
     ascent = (int)(face->size->metrics.ascender >> 6);
     if (cell_h < font_size) cell_h = font_size + 3;
     /* Monospace: every advance matches 'M' (fc_load_flags so the cell
-     * pitch agrees with the hinted render path, todos/0279). */
+     * pitch agrees with the hinted render path, docs/archive/0279). */
     FT_UInt mi = FT_Get_Char_Index(face, 'M');
     cell_w = 0;
     if (!FT_Load_Glyph(face, mi, fc_load_flags(face)))
@@ -1852,7 +1852,7 @@ static void cell_colors(const Cell *cell, int live_r, int virt_r, int c,
     if (cell->attr & A_REVERSE) { uint32_t t = fgp; fgp = bgp; bgp = t; }
     if (sel_has(virt_r, c)) { uint32_t t = fgp; fgp = bgp; bgp = t; } /* 0090/#355 */
     /* The block cursor is the classic cell inversion; under/bar draw an
-     * overlay strip after the glyph pass instead (todos/0273d). */
+     * overlay strip after the glyph pass instead (docs/archive/0273d). */
     if (cursor_style == CUR_BLOCK && cursor_visible && live_r >= 0 &&
         live_r == cy && c == cx) { uint32_t t = fgp; fgp = bgp; bgp = t; }
     *fgo = fgp;
@@ -2132,7 +2132,7 @@ static void frame_cb(void) {
                    e.window.windowID == SDL_GetWindowID(win)) {
             /* With the bar strip child alive term is a MULTI-window app,
              * so the close box arrives as a per-window close request
-             * (todos/0089), never the single-window QUIT. Menu levels'
+             * (docs/archive/0089), never the single-window QUIT. Menu levels'
              * close requests were consumed in menu_event; the main
              * window's ends the session (0273c). */
             exit(0);
@@ -2201,7 +2201,7 @@ static int load_glyphs(void) {
 
 int main(int argc, char **argv) {
     /* Config BEFORE metrics/ring: fontsize feeds load_glyphs, scrollback
-     * sizes the ring, the rest assign directly (todos/0273d). */
+     * sizes the ring, the rest assign directly (docs/archive/0273d). */
     TermCfg cfg;
     tc_load(&cfg);
     font_size = cfg.fontsize;
@@ -2287,7 +2287,7 @@ int main(int argc, char **argv) {
     bar_paint();
     render();
     SDL_UpdateWindowSurface(win);
-    /* Event-driven main loop (todos/0178): term was a frame-callback app —
+    /* Event-driven main loop (docs/archive/0178): term was a frame-callback app —
      * 60 wakes/s polling the master even when nothing moved. Each
      * iteration handles whatever woke it (frame_cb drains the SDL queue,
      * the master, and reaps the child), then parks in the kernel's

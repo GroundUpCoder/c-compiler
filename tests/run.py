@@ -101,7 +101,7 @@ FAKEGIT_TEST_DIR = os.path.join(SCRIPT_DIR, "fakegit")
 
 CAIRO_DIR = os.path.join(VENDOR_DIR, "cairo")
 
-ALL_CATEGORIES = ["ast", "blockfs", "unit", "extra", "ext", "projects", "zlib", "lua", "freetype", "libpng", "libjpeg", "cairo", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz", "fakegit"]
+ALL_CATEGORIES = ["ast", "blockfs", "unit", "extra", "projects", "zlib", "lua", "freetype", "libpng", "libjpeg", "cairo", "micropython", "micropython-upstream", "sqlite", "disw", "sourcemap", "tcc", "libc", "fuzz", "fakegit"]
 DEFAULT_CATEGORIES = ["unit"]
 
 
@@ -607,7 +607,7 @@ def run_projects(results, filter_str=None):
         else:
             results.record(test_name, True)
 
-    # todos/0079: diamond dep dedup — base.json reached directly, via
+    # docs/archive/0079: diamond dep dedup — base.json reached directly, via
     # mid.json's dep, and via a symlinked path must compile ONCE (pre-fix:
     # duplicate definition of base_value at link, twice).
     test_name = "projects/diamond-dedup"
@@ -846,7 +846,7 @@ def run_freetype_tests(results, filter_str=None):
         shutil.rmtree(work, ignore_errors=True)
 
 
-# --- cairo tests (todos/0061) ---
+# --- cairo tests (docs/archive/0061) ---
 #
 # Three binaries under vendor/cairo/:
 #   bin.json           — smoke test: analytic pixel asserts (gradients, AA,
@@ -1126,7 +1126,7 @@ def run_micropython_tests(results, filter_str=None):
 #   - Compare against our compiled MicroPython's output (\r\n normalized).
 #
 # stderr is MERGED into stdout, matching upstream's own run-tests.py
-# (stderr=subprocess.STDOUT). Since todos/0117 R1 the port routes uncaught
+# (stderr=subprocess.STDOUT). Since docs/archive/0117 R1 the port routes uncaught
 # tracebacks and mp_warning() to stderr like upstream's unix port does
 # (MICROPY_ERROR_PRINTER), and upstream's .exp goldens — e.g.
 # basics/bytes_compare3.py.exp's "Warning: Comparison between bytes and str"
@@ -1148,13 +1148,13 @@ MICROPYTHON_UPSTREAM_SKIP = {
     "/struct_",      # `struct` module not enabled in minimal port
     "float2int_",    # imports `struct` to probe float width (module not built)
     "/uctypes",      # uctypes module not enabled
-    "/array",        # array module not enabled (todos/0117 R2)
-    "/gc",           # gc module not enabled (todos/0117 R2)
+    "/array",        # array module not enabled (docs/archive/0117 R2)
+    "/gc",           # gc module not enabled (docs/archive/0117 R2)
     "math_domain_special",    # has minor float-precision differences
-    "import_star_nonmodule",  # needs MICROPY_PY_SYS_MODULES (todos/0117 R2)
-    "memoryview_gc",          # needs the gc module (todos/0117 R2; not caught by /gc)
-    "float_format_ints",      # needs the array module (todos/0117 R2; not caught by /array)
-    # todos/0117 R1 enabled MICROPY_PY_IO / SYS_STDFILES / SYS_EXIT / FUNCTION_ATTRS
+    "import_star_nonmodule",  # needs MICROPY_PY_SYS_MODULES (docs/archive/0117 R2)
+    "memoryview_gc",          # needs the gc module (docs/archive/0117 R2; not caught by /gc)
+    "float_format_ints",      # needs the array module (docs/archive/0117 R2; not caught by /array)
+    # docs/archive/0117 R1 enabled MICROPY_PY_IO / SYS_STDFILES / SYS_EXIT / FUNCTION_ATTRS
     # and lifted the "can't regenerate the QSTR pool" ceiling (tools/mkmpgenhdr.js),
     # so the whole "/io_" and "/sys_" families AND builtin_compile came OFF this
     # table (+15 green). The stragglers inside those families — sys_getsizeof,
@@ -1593,19 +1593,19 @@ LIBC_TEST_SKIP = {
     "ipc_msg": "no SysV IPC", "ipc_sem": "no SysV IPC", "ipc_shm": "no SysV IPC",
     "socket": "no sockets", "inet_pton": "no networking",
     # Library features not implemented. Every entry here MUST cite the todos
-    # item that funds it (todos/0298) — a bare "TODO" is a hole the suite
+    # item that funds it (docs/archive/0298) — a bare "TODO" is a hole the suite
     # reports green over, which is how fnmatch/fdopen/utime sat skipped for
     # months after they started passing.
     # Not a libc gap: the test writes the bare-assignment form `r = setjmp(jb);`
     # (vendor/libc-test/src/functional/setjmp.c:23), which compiler.js rejects
     # by design — it is UB per C11 7.13.1.1p4. sigsetjmp/siglongjmp DO exist.
-    # This entry is PERMANENT. The todos/0311 citation is historical: ticket
+    # This entry is PERMANENT. The docs/archive/0311 citation is historical: ticket
     # #117 SHIPPED the p4-required contexts (switch / while / else-if /
     # expression statement, pinned by the sj_*_ctrl conformance tests) and,
     # as predicted there, this test stays skipped — line 23 is the UB form,
     # pinned rejected by diag_setjmp_assign_stmt.
     "setjmp": "test uses the C11-UB bare-assignment setjmp form, rejected by "
-              "design — permanent (todos/0311 shipped as ticket #117; the "
+              "design — permanent (docs/archive/0311 shipped as ticket #117; the "
               "p4-required contexts are accepted, line 23 remains UB)",
     "sscanf_long": "needs setrlimit",
     # Locale machinery
@@ -1665,7 +1665,7 @@ def run_libc_tests(results, filter_str=None):
 # Tier 2 (optional): if a csmith generator binary is found, also
 # generate a few fresh seeds and differential-test them against clang.
 #
-# ORACLE SOUNDNESS (todos/0404): the native oracle is host clang, LP64
+# ORACLE SOUNDNESS (docs/archive/0404): the native oracle is host clang, LP64
 # (long = 64-bit); compiler.js targets wasm32, ILP32 (long = 32-bit).
 # An L-suffixed literal in (INT32_MAX, UINT32_MAX] is a SIGNED 64-bit
 # long natively but an UNSIGNED 32-bit long under ILP32 (C11 6.4.4.1p5),
@@ -1891,24 +1891,6 @@ def run_ast_tests(results, filter_str=None):
 
 # --- blockfs (JS-level unit tests for the BLOCK_FS filesystem) ---
 
-def run_ext_tests(results, filter_str=None):
-    """Run tests/ext/run.js — verifies the optional libc-ext.js contract:
-    the compiler works without it (graceful), and picks up regex/fnmatch/glob
-    with it. The script's exit code is the pass/fail signal."""
-    test_name = "ext/optional-libc-ext"
-    if filter_str and filter_str not in test_name:
-        return
-    script = os.path.join(SCRIPT_DIR, "ext", "run.js")
-    if not os.path.isfile(script):
-        return
-    r = subprocess.run(["node", script], capture_output=True, text=True,
-                       timeout=120, cwd=ROOT_DIR)
-    if r.returncode == 0:
-        results.record(test_name, True)
-    else:
-        msg = (r.stdout.strip() or r.stderr.strip())
-        results.record(test_name, False, msg)
-
 
 def run_blockfs_tests(results, filter_str=None):
     """Run tests/blockfs/*.js — JS-level tests for the BLOCK_FS allocator,
@@ -1946,7 +1928,7 @@ def run_blockfs_tests(results, filter_str=None):
 # --- fakegit tests ---
 #
 # Builds os/git/bin.json once, materializes the deterministic fixture repo
-# (tests/fakegit/make-fixture.sh — todos/0183), then runs each
+# (tests/fakegit/make-fixture.sh — docs/archive/0183), then runs each
 # tests/fakegit/<name>/ test against it. Each directory contains:
 #   args.txt     — one argument per line. `-C <fixture>` is prepended, so the
 #                  test names only the command and its own arguments.
@@ -2094,7 +2076,7 @@ def run_fakegit_tests(results, filter_str=None):
         return
 
     # The repo to test against: a deterministic fixture materialized fresh
-    # each run (todos/0183 — goldens against the live checkout pinned one
+    # each run (docs/archive/0183 — goldens against the live checkout pinned one
     # HEAD and were permanently red). make-fixture.sh fixes author/
     # committer/date/tz and masks host git config, so the hashes in the
     # goldens reproduce on any machine at any HEAD.
@@ -2257,9 +2239,6 @@ def main():
             results.section("extra")
             run_unit_or_extra(EXTRA_DIR, COMPILER_CMD, results, filter_str=args.filter)
 
-        elif cat == "ext":
-            results.section("ext")
-            run_ext_tests(results, filter_str=args.filter)
 
         elif cat == "projects":
             results.section("projects")

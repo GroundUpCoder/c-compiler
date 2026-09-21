@@ -1,10 +1,10 @@
-/* clip.c — the shell's clipboard bridge (todos/0090): Windows' clip.exe
+/* clip.c — the shell's clipboard bridge (docs/archive/0090): Windows' clip.exe
  * shape plus a read flag.
  *
  *   cmd | clip        stdin -> the system clipboard
  *   clip -o           clipboard -> stdout (exit 1 if empty)
  *
- * The two operations live in os/clipio.h (todos/0397), shared verbatim
+ * The two operations live in os/clipio.h (docs/archive/0397), shared verbatim
  * with /bin/pbcopy and /bin/pbpaste — the macOS-named front-ends onto the
  * same one kernel slot. The contract here is unchanged; see clipio.h for
  * the slot's semantics and its text-only limit.

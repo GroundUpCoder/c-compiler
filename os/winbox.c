@@ -1,4 +1,4 @@
-/* winbox.c — the seeded windowed demo (todos/WM.md): a real SDL program
+/* winbox.c — the seeded windowed demo (docs/WM.md): a real SDL program
  * whose window is a kernel surface. Run it from the shell:  winbox &
  *
  * Visuals are deliberately deterministic for the browser test
@@ -8,22 +8,22 @@
  *   - MOUSE_BUTTON_DOWN paints a black 8x8 square at the click point
  *   - SDL_EVENT_QUIT (the title-bar close box) exits 0
  *   - SDL_EVENT_WINDOW_RESIZED re-fetches the surface and redraws at the
- *     new size (the todos/0019 client-resize acceptance app)
+ *     new size (the docs/archive/0019 client-resize acceptance app)
  *
  * `winbox fixed` creates the window WITHOUT SDL_WINDOW_RESIZABLE, titled
  * "fixbox" — the fixed-size acceptance app for viewport scaling
- * (todos/0024): frame drags scale its dst rect instead of configuring,
+ * (docs/archive/0024): frame drags scale its dst rect instead of configuring,
  * and the app never knows.
  *
  * `winbox alpha` creates the window with SDL_WINDOW_TRANSPARENT, titled
- * "alphabox" — the per-pixel-alpha acceptance app (todos/0063): the fill
+ * "alphabox" — the per-pixel-alpha acceptance app (docs/archive/0063): the fill
  * is 50%-alpha blue (green when toggled), so whatever is behind shows
  * through at exactly src-over weights; the white border and the black
  * click marks stay opaque.
  *
  * `winbox cursor` sets the I-beam via SDL_SetCursor(SDL_CreateSystemCursor(
  * SDL_SYSTEM_CURSOR_TEXT)), titled "curbox" — the per-surface cursor
- * acceptance app (todos/0105): the kernel reports `text` over its client and
+ * acceptance app (docs/archive/0105): the kernel reports `text` over its client and
  * the chrome resize cursors over its (resizable) frame.
  */
 #include <SDL.h>
@@ -40,7 +40,7 @@ static int green = 0;
 static uint32_t marks[64][2];   /* click points (persistent paint) */
 static int nmarks = 0;
 
-static int alpha = 0;           /* `winbox alpha` (todos/0063) */
+static int alpha = 0;           /* `winbox alpha` (docs/archive/0063) */
 
 static uint32_t rgb(int r, int g, int b) {
     return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xFF000000u;
@@ -85,7 +85,7 @@ int main(int argc, char **argv) {
     int fixed = argc > 1 && strcmp(argv[1], "fixed") == 0;
     alpha = argc > 1 && strcmp(argv[1], "alpha") == 0;
     int cursor = argc > 1 && strcmp(argv[1], "cursor") == 0;
-    /* `winbox title <utf8>`: arbitrary window title (todos/0275 — the ksvc
+    /* `winbox title <utf8>`: arbitrary window title (docs/archive/0275 — the ksvc
      * label-text acceptance hook: overlong titles ellipsize, CJK titles
      * exercise the fallback chain). Window otherwise a stock winbox. */
     const char *title = alpha ? "alphabox" : fixed ? "fixbox"
@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
                                  : fixed ? 0 : SDL_WINDOW_RESIZABLE);
     if (!win) return 3;
     surf = SDL_GetWindowSurface(win);
-    /* Per-surface cursor (todos/0105): claim the I-beam for the client area.
+    /* Per-surface cursor (docs/archive/0105): claim the I-beam for the client area.
        The kernel overlays chrome resize cursors on the frame automatically. */
     if (cursor) SDL_SetCursor(SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_TEXT));
     __setAnimationFrameFunc(frame_cb);

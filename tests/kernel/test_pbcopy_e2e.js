@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 0397 acceptance, headless: /bin/pbcopy and /bin/pbpaste — the macOS-named
 // front-ends over the kernel's ONE clipboard slot, sharing os/clipio.h with
-// the pre-existing /bin/clip (todos/0090). The point of the ticket is that
+// the pre-existing /bin/clip (docs/archive/0090). The point of the ticket is that
 // all THREE programs are on the SAME slot, so the interop is asserted in
 // both directions rather than assumed. Covers:
 //   - pbcopy -> pbpaste round trip, cross-process (the writer has exited)
@@ -35,7 +35,7 @@ function section(out, name) {
   return (out.split('==' + name + '\n')[1] || '').split('==')[0];
 }
 
-// Bounded condition poll (todos/0154 — not a fixed sync sleep): wait for a
+// Bounded condition poll (docs/archive/0154 — not a fixed sync sleep): wait for a
 // substring to land in the kernel clip slot. Deliberately reads through
 // pbpaste, so the poll itself is a same-slot assertion.
 const waitClipHas = (s) =>

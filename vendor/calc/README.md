@@ -1,4 +1,4 @@
-# calc — ReactOS Calculator (todos/0060 Win32 port corpus)
+# calc — ReactOS Calculator (docs/archive/0060 Win32 port corpus)
 
 Upstream: https://github.com/reactos/reactos `base/applications/calc`
 at commit `1a706d759e9ee057408004e22eedc58e2eecca49` (2026-07-09). **GPL-2.0**
@@ -18,7 +18,7 @@ committed sidecar pack `calc.res`, seeded next to the binary as
 suffixes; the MSVC arms use `UI64`, which this compiler doesn't lex); the
 `_tWinMain` entry rides `os/win32/wwinmain.c` in bin.json.
 
-Status: fully linked against the veneer since todos/0048 (clipboard,
+Status: fully linked against the veneer since docs/archive/0048 (clipboard,
 keyboard translation, owner-draw keypad, TrackPopupMenu, WRES v2 template
 menus) and seeded into the OS image as `/bin/calc` — usable, with a Start
 menu entry. `tools/win32ports.js` keeps compile-testing it

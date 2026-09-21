@@ -104,7 +104,7 @@ async function run() {
   r = await BLOCK_FS.openWorkspace({ viewLegacy: true });
   eq(r.mode, 'legacy-readonly', 'viewLegacy -> legacy-readonly');
   eq(rfile(r.fs, '/docs/note.txt'), 'legacy v3 content', 'legacy view reads v3 data');
-  // Clean refusal (todos/0040): _readonly makes open() itself return EROFS.
+  // Clean refusal (docs/archive/0040): _readonly makes open() itself return EROFS.
   const wfd = r.fs.open('/x.txt', O_CREAT | O_TRUNC | O_WRONLY, 0o644);
   ok(wfd === null && r.fs._lastError === 'EROFS', 'legacy view rejects writes');
 

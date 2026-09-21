@@ -28,7 +28,7 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-deskicons-');
 
-// The grid model (drive.js, todos/0184/0185): seeded set + this test's
+// The grid model (drive.js, docs/archive/0184/0185): seeded set + this test's
 // five runtime files, column-major with dirs first and the bin pinned last.
 const EXTRAS = ['alauncher', 'blob.dat', 'deck.mgp', 'notes.txt', 'photo.ppm'];
 const LIST = deskEntries(EXTRAS);
@@ -47,7 +47,7 @@ const script = [
   // The desktop re-reads /root/Desktop on the coarse 1s tick and repaints
   // on that same wake; there is no event or marker for it (the
   // openwith-e2e precedent) — a genuine no-marker settle, annotated per
-  // todos/0171.
+  // docs/archive/0171.
   'sleep 2',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
   'wmctl shot $DSID /root/d.png && echo D-SHOT',

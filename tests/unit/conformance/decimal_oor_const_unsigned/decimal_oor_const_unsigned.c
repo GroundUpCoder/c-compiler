@@ -8,7 +8,7 @@
 //      in compiler.js is already correct; only the decimal path is wrong.
 // EXPECT: 18446744073709551615 (UINT64_MAX) compares > 0 as unsigned (cmp=1)
 //      and 18446744073709551615 % 10 == 5. compiler.js: cmp=0, mod wraps.
-// KNOWN-BUG: todos/0192 (pinned xfail; the constant-typing path picks signed
+// KNOWN-BUG: docs/archive/0192 (pinned xfail; the constant-typing path picks signed
 //      long long on int/long overflow without the 6.4.4.1p5 unsigned fallback).
 #include <stdio.h>
 int main(void) {

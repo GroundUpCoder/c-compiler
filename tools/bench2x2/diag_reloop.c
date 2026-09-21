@@ -1,4 +1,4 @@
-// todos/0332 diagnostic — the ~1000x CPython bytecode-dispatch pathology,
+// docs/archive/0332 diagnostic — the ~1000x CPython bytecode-dispatch pathology,
 // reproduced with NO Python involved.
 //
 // Root cause this file exercises: compiler.js chooses `br_table` for a switch

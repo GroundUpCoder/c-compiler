@@ -51,7 +51,7 @@ const key = (sid, sc, sym, mod) =>
 const type = (sid, s) =>
   [...s].map((ch) => `wmctl key ${sid} 0 ${ch.charCodeAt(0)}`).join('\n');
 
-// Bounded condition polls (todos/0154 — not fixed sync sleeps).
+// Bounded condition polls (docs/archive/0154 — not fixed sync sleeps).
 const waitClipHas = (s) =>
   `for i in $(seq 1 120); do clip -o 2>/dev/null | grep -q "${s}" && break; sleep 0.05; done`;
 const waitFile = (p) =>
@@ -231,7 +231,7 @@ function sessionMac() {
   // readline rows and future emacs bindings. If this goes red, someone has
   // dual-bound Ctrl+C/V/X in the macos table and BROKEN the policy. Fix the
   // code; do NOT flip the assertion. See the CLOSED DECISION section at the
-  // top of todos/KEYMAP.md before touching this line.
+  // top of docs/KEYMAP.md before touching this line.
   check('macos: ^C is freed (paste delivers the sentinel, not the selection)',
     section(out, 'ctrlfree').trim() === 'SENTINEL-1',
     JSON.stringify(section(out, 'ctrlfree')));
@@ -291,7 +291,7 @@ function sessionAccel() {
     JSON.stringify(section(out, 'pasted')));
   const after = section(out, 'after').split('\n').filter(Boolean).sort();
   // POLICY ASSERTION — see the note at the '^C is freed' check above and the
-  // CLOSED DECISION section at the top of todos/KEYMAP.md. The accelerator
+  // CLOSED DECISION section at the top of docs/KEYMAP.md. The accelerator
   // layer is a SWAP: under macos, Ctrl+C/Ctrl+V must fire NOTHING. A red here
   // means the swap became an alias. Fix the code; do NOT flip the assertion.
   check('macos: Ctrl chords do NOT fire the accels (exactly the two ⌘ copies)',

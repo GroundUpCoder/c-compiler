@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// libcurl veneer end-to-end (todos/0173): the 0173 differential smoke.
+// libcurl veneer end-to-end (docs/archive/0173): the 0173 differential smoke.
 // ONE C program (os/curl/test/smoke.c) dumps status/headers/body through the
 // three easy-interface callbacks. It builds TWO ways:
 //   - gucOS: os/curl/test/smoke.json (the veneer over __http_* -> kernel
@@ -16,7 +16,7 @@
 // xferinfo-callback abort of an in-flight response (#306,
 // CURLE_ABORTED_BY_CALLBACK), escape/unescape.
 //
-// CLI leg (todos/0182): /bin/curl (os/curl/curl-cli.c, seeded via
+// CLI leg (docs/archive/0182): /bin/curl (os/curl/curl-cli.c, seeded via
 // os/curl/cli.json) driven through a real OS boot — os/boot.js + hush —
 // against the SAME local server: body to stdout, status line to stderr,
 // -s/-o/-X/-H/-d/-f/-L, bundled + attached flag forms, curl-idiom exit
@@ -230,7 +230,7 @@ function normalize(out) {
     console.log('  skip native differential leg (clang not found)');
   }
 
-  // ---- CLI leg (todos/0182): /bin/curl through a real OS boot ----
+  // ---- CLI leg (docs/archive/0182): /bin/curl through a real OS boot ----
   // NB an ASYNC spawn, not lib/drive.js's spawnSync driveBoot: the fake
   // server shares this event loop (the same rule as the native leg above) —
   // a sync spawn would deadlock the in-OS curl against an unresponsive

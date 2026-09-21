@@ -9,7 +9,7 @@
  * instead, which cc-build.sh passes.  Neutralised as a macro here so the
  * shared ccprobe_libc.c needs no #ifdef.
  *
- * RETIRED (todos/0330): pread/pwrite used to be defined here, copied verbatim
+ * RETIRED (docs/archive/0330): pread/pwrite used to be defined here, copied verbatim
  * out of compiler.js's <unistd.h>, because clang-simplified's wasm/libc was a
  * mechanical extraction pinned at c-compiler 2b6bfb7a — 225 commits behind the
  * 1794b618 (NetSurf Lane 1) that added them — so its unistd.h predated them

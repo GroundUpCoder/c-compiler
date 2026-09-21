@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPSC pipe fast path (todos/0181) without wasm: fake workers over a
+// SPSC pipe fast path (docs/archive/0181) without wasm: fake workers over a
 // brokered kernel, the test playing BOTH the process side of the kernel-page
 // protocol AND the fast side of the ring (kernel.js exports the ring
 // helpers, so the test's pipeRingPut/Take are byte-identical to RemoteFS's).

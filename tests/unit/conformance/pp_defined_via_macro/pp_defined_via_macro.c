@@ -8,7 +8,7 @@
 //      rely on it. Filed as a portability trap.
 // EXPECT: branch=true (D expands to defined, defined(FOO) is 1).
 //      compiler.js: branch=false.
-// KNOWN-BUG: todos/0195 (pinned xfail).
+// KNOWN-BUG: docs/archive/0195 (pinned xfail).
 #include <stdio.h>
 #define D defined
 #define FOO 1

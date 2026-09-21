@@ -6,10 +6,10 @@
 // host.js/kernel.js/compiler.js exactly as a developer's `node serve.js .`
 // session would. Asserts: boot reaches the shell over a fresh OPFS image,
 // `ls /` lists the seeded tree, `cc hello.c && ./a.out` compiles and runs
-// in-OS, vi edits a file through the xterm keyboard path (todos/0011 —
+// in-OS, vi edits a file through the xterm keyboard path (docs/archive/0011 —
 // deep edit scenarios live in tests/kernel/test_vi_e2e.js), a reload
 // REUSES the persisted image (a.out survives), and a WebGPU-disabled
-// browser hits the loud boot-nogpu guard (todos/0055 — no fallback).
+// browser hits the loud boot-nogpu guard (docs/archive/0055 — no fallback).
 //
 // Usage: node os-boots.mjs
 import { startServer, launchBrowser, waitForServer, makeCheck, osUrl } from './lib/os-harness.mjs';
@@ -24,7 +24,7 @@ const server = startServer(PORT, { onLog: (d) => process.stderr.write('[serve] '
 // os-boots prints the FAIL `extra` raw (not JSON.stringified) — its extras are
 // already strings (mode lines, VT segments).
 const { check, state } = makeCheck({ stringify: false });
-// WebGPU flags: since todos/0055 the OS boot REQUIRES a worker WebGPU
+// WebGPU flags: since docs/archive/0055 the OS boot REQUIRES a worker WebGPU
 // device (the compositor has no Canvas2D fallback) — same flags as the
 // rest of the os-*.mjs sweep. The no-GPU guard leg below launches its own
 // flag-disabled browser to assert the boot-nogpu screen.
@@ -54,12 +54,12 @@ try {
   check('boots to ready over OPFS', true);
   // 0070: a healthy boot auto-switches to the Desktop tab; the shell legs
   // below type through xterm, so hop back to VT1 first.
-  check('healthy boot lands on the Desktop tab (todos/0070)',
+  check('healthy boot lands on the Desktop tab (docs/archive/0070)',
     await page.evaluate(() => window.__osVt) === 2);
   await page.evaluate(() => window.__osVtSwitch(1));
   await waitOut('# ');                       // the prompt echoes through the tty
 
-  // -1: busybox ls (todos/0010) prints columns on a tty; one-per-line keeps
+  // -1: busybox ls (docs/archive/0010) prints columns on a tty; one-per-line keeps
   // the needle stable. Program stdout is raw \n (no OPOST).
   await type('ls -1 /');
   await waitOut('bin\ndev\netc\nproc\nroot');   // 0043: /proc in the tree
@@ -69,7 +69,7 @@ try {
   await waitOut('hello, wasm world', 120000);
   check('cc hello.c && ./a.out runs in-browser', true);
 
-  // vi (todos/0011): the full-screen editor through the REAL xterm path —
+  // vi (docs/archive/0011): the full-screen editor through the REAL xterm path —
   // keystrokes -> xterm -> kernel tty (raw mode) -> vi; file bytes asserted
   // after :wq. Deep edit scenarios live in tests/kernel/test_vi_e2e.js; this
   // proves the browser half. ESC goes via press() with air around it
@@ -101,7 +101,7 @@ try {
     const exit = out.lastIndexOf('\x1b[?1049l');   // only trust post-vi output
     return out.slice(exit).replace(/\r/g, '');
   });
-  check('vi edits a file through xterm (todos/0011)',
+  check('vi edits a file through xterm (docs/archive/0011)',
     viSeg.includes('browser vi works\n'), JSON.stringify(viSeg.slice(0, 300)));
 
   // Reboot the tab: same context = same OPFS; the image must be reused and
@@ -138,7 +138,7 @@ try {
     { timeout: 120000, polling: 250 });
   const grab = await page.evaluate(() =>
     ({ at: window.__vtGrabAt, vt: window.__osVt }));
-  check('manual VT choice during boot survives ready (todos/0070)',
+  check('manual VT choice during boot survives ready (docs/archive/0070)',
     grab.at === 'booting' && grab.vt === 1, JSON.stringify(grab));
   const mode = await page.evaluate(() => document.getElementById('status').textContent);
   // 0040 mode string: <system>/<root> — blob reused + existing v4 root volume.
@@ -152,7 +152,7 @@ try {
     { timeout: 30000, polling: 250 });
   check('halt reaches the page with the exit code', true);
 
-  // Two-tab boot guard (todos/0045): a second tab in the SAME context (same
+  // Two-tab boot guard (docs/archive/0045): a second tab in the SAME context (same
   // origin, same OPFS) must NOT boot a second kernel — the first tab's
   // worker still holds the Web Lock (halted != closed; the lock lives until
   // the tab dies). Closing the first tab frees it; the guard's Retry then
@@ -166,7 +166,7 @@ try {
     document.body.hasAttribute('data-guard') &&
     getComputedStyle(document.getElementById('guard')).display !== 'none' &&
     getComputedStyle(document.getElementById('terminal')).display === 'none');
-  check('second tab hits the boot guard (todos/0045)', guardShown);
+  check('second tab hits the boot guard (docs/archive/0045)', guardShown);
 
   await page.close();   // the winning tab dies -> the browser releases the lock
   // Retry until the release lands (close -> lock-free is not synchronous). A
@@ -182,7 +182,7 @@ try {
     }
     await page2.waitForTimeout(500);   // timing subject: retry-loop poll cadence (loop breaks on __osState==='ready')
   }
-  check('retry boots after the first tab closes (todos/0045)', st === 'ready', st);
+  check('retry boots after the first tab closes (docs/archive/0045)', st === 'ready', st);
   const mode2 = await page2.evaluate(() => document.getElementById('status').textContent);
   check('the retried boot reuses the image', /image: reused\/v4/.test(mode2), mode2);
   await page2.evaluate(() => window.__osVtSwitch(1));   // 0070: ready landed on VT2
@@ -196,7 +196,7 @@ try {
     { timeout: 30000, polling: 250 });
   check('the retried boot reaches a live shell', true);
 
-  // WebGPU boot guard (todos/0055): a browser without worker WebGPU must
+  // WebGPU boot guard (docs/archive/0055): a browser without worker WebGPU must
   // NOT boot — the compositor has no fallback, so the kernel worker stops
   // before mounting anything and the page shows the loud guard screen.
   // --disable-features=WebGPU makes requestAdapter deterministically null.
@@ -211,7 +211,7 @@ try {
       getComputedStyle(document.getElementById('guard')).display !== 'none' &&
       /WebGPU/.test(document.getElementById('guardMsg').textContent) &&
       getComputedStyle(document.getElementById('guardRetry')).display === 'none');
-    check('no-WebGPU boot hits the boot-nogpu guard (todos/0055)', nogpuGuard);
+    check('no-WebGPU boot hits the boot-nogpu guard (docs/archive/0055)', nogpuGuard);
   } finally {
     await noGpuBrowser.close();
   }

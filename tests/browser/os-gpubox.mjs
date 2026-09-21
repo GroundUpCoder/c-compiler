@@ -1,14 +1,14 @@
-// GPU-app browser acceptance (todos/0016): boot the reference OS page in
+// GPU-app browser acceptance (docs/archive/0016): boot the reference OS page in
 // headless Chromium and launch the seeded /bin/gpubox — an SDL window rendered
 // with direct webgpu.h calls on the process worker's OWN WebGPU device, frames
 // reaching the kernel compositor via the `gpu` transport (wgpuSurfacePresent ->
 // transferToImageBitmap handoff, spike S1). Asserts composited desktop pixels:
 // the shaded cube renders, it ANIMATES (raw webgpu.h present is live, not a
 // stale frame), `wmctl resize` renegotiates the gpu-transport window
-// (todos/0019: canvas + surface + depth reconfigure, bitmap-size ack), and
+// (docs/archive/0019: canvas + surface + depth reconfigure, bitmap-size ack), and
 // `wmctl close` quits the app cleanly.
 //
-// Since todos/0258 (menu arch M2) gpubox is a win32 app (CS_OWNCLIENT) and
+// Since docs/archive/0258 (menu arch M2) gpubox is a win32 app (CS_OWNCLIENT) and
 // this file is the REAL-CUBE HALF OF THE M2 ACCEPTANCE GATE (design note,
 // honest-limitation #2): the headless no-Dawn e2e proves the menu machinery
 // over a black client; only this leg proves the menu renders correctly over
@@ -63,7 +63,7 @@ try {
   const TEAL = [0, 128, 128];
   const CLEAR = [20, 20, 64];                 // gpubox render-pass clear color
 
-  // VTs (todos/0022): shell typing on VT1, canvas pixels on VT2 (the
+  // VTs (docs/archive/0022): shell typing on VT1, canvas pixels on VT2 (the
   // compositor may idle while its placeholder canvas is hidden). Deep VT
   // coverage lives in os-vt.mjs.
   const { setVt } = osHelpers(page);
@@ -207,7 +207,7 @@ try {
   await page.waitForFunction(() => window.__osOut.includes('gpubox: spin on'), { timeout: 20000, polling: 'raf' });
   await setVt(2);
 
-  // Client resize through the gpu transport (todos/0019): configure event ->
+  // Client resize through the gpu transport (docs/archive/0019): configure event ->
   // gpubox reconfigures its canvas surface + depth at 321x200 -> the first
   // new-size ImageBitmap acks and the kernel geometry follows. The probe
   // point is desktop BEFORE the resize and render-pass clear AFTER it.

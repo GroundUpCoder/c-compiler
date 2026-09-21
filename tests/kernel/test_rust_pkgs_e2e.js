@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// todos/0416 acceptance, headless: the -rust gucman channel end-to-end over
+// docs/archive/0416 acceptance, headless: the -rust gucman channel end-to-end over
 // the REAL gucos-rust sibling overlay.
 //
 //   - base purity IN-OS: the minimal image ships ZERO *-rust binaries, and

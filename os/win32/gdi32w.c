@@ -1,5 +1,5 @@
 /* gdi32w.c — gdi32's UTF-16 wrappers (0068), split out of gdi32.c by M4
- * (todos/0259): they convert at kernel32's MultiByteToWideChar/
+ * (docs/archive/0259): they convert at kernel32's MultiByteToWideChar/
  * WideCharToMultiByte boundary, and the menucore link set (os/wm.c)
  * carries gdi32 WITHOUT kernel32 — so the W layer rides with the veneer
  * (lib.json), the ANSI raster core with the engine (menucore.json). */

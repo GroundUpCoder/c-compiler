@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // imgbrtables.js — census every `br_table` in every wasm binary inside a
-// baked BlockFS image, so "did todos/0332 change anything a user runs?" is a
+// baked BlockFS image, so "did docs/archive/0332 change anything a user runs?" is a
 // measurement rather than a guess.
 //
 // Why the entry count answers that question exactly. compiler.js lowers a
@@ -63,7 +63,7 @@ function readAll(p, size) {
   let got = 0;
   while (got < size) {
     // POSIX-shaped: read(fd, dstBuf, count) -> bytes read. Loop it — a short
-    // read is legal (todos/0140 was exactly this bug in RemoteFS).
+    // read is legal (docs/archive/0140 was exactly this bug in RemoteFS).
     const n = vol.read(fd, out.subarray(got), size - got);
     if (!(n > 0)) break;
     got += n;

@@ -185,7 +185,7 @@ check('pinnedPython/venvPythonVersion read the real files (stdlib `version =` ke
 // ---- integration: THIS tree resolves, and the result is a real python of
 // the pinned version. A tree without its venv fails here WITH the resolver's
 // own fix-naming message — that red is the diagnosis, not a flake (§ never a
-// downstream mystery, todos/0171).
+// downstream mystery, docs/archive/0171).
 check('this tree resolves to a working interpreter matching .python-version', () => {
   const r = resolvePython({ env: ENV });
   assert.strictEqual(r.ok, true, r.ok ? '' : '\n' + r.message);

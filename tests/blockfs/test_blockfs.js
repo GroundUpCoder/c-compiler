@@ -84,7 +84,7 @@ test('write and read back', function () {
 
 test('write past end extends file', function () {
   var r = makeFS();
-  // O_RDWR: a bare-O_CREAT fd is O_RDONLY and can't write (todos/0376) —
+  // O_RDWR: a bare-O_CREAT fd is O_RDONLY and can't write (docs/archive/0376) —
   // this test used to write through one, encoding the exact defect.
   var O_CREAT = 0x40, O_TRUNC = 0x200, O_RDWR = 0x2;
 
@@ -529,7 +529,7 @@ test('setStdin legacy array-of-bytes shape still works', function () {
 
 test('dup creates new fd', function () {
   var r = makeFS();
-  // O_RDWR: same todos/0376 correction as 'write past end extends file'.
+  // O_RDWR: same docs/archive/0376 correction as 'write past end extends file'.
   var O_CREAT = 0x40, O_RDWR = 0x2;
   var fd = r.fs.open('/dupfile.txt', O_CREAT | O_RDWR, 0o644);
 

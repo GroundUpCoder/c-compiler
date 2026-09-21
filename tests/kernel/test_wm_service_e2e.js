@@ -6,9 +6,9 @@
 // (not the kernel cascade), wmctl list/min/click/shot/focus, taskbar-click
 // restore (injected through the real input ring into the wm's SDL loop),
 // wmctl max maximize/restore on both branches of the resizable dispatch
-// (todos/0025), the crashed-WM story — kill the wm, the system stays
+// (docs/archive/0025), the crashed-WM story — kill the wm, the system stays
 // driveable (kernel-chrome fallback + kernel-owned endpoint), `wm &`
-// respawns it — and the unified activate mechanism (todos/0066): desktop
+// respawns it — and the unified activate mechanism (docs/archive/0066): desktop
 // and Start menu share one launch rule (symlink/runnable spawn, else vi).
 //
 // Run: node tests/kernel/test_wm_service_e2e.js
@@ -31,7 +31,7 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-wm-');
 
-// The single-column Start menu (os/wm.c, todos/0098+0132 + follow-up): a
+// The single-column Start menu (os/wm.c, docs/archive/0098+0132 + follow-up): a
 // FIXED 290x378 root parked above the 36px taskbar on the 1024x768 headless
 // screen. A 30px gucOS branding BAND runs down the left, then a 260px
 // column: pinned + MRU recents, a groove and the fixed places Settings/Run...,
@@ -52,7 +52,7 @@ const AP_ROW = SM_ROWS - 1;                       // All Programs DISPLAY row: p
 const SM_GEOM = `${SM_W}x${SM_H}+0+${SM_Y}`;
 const SM_SEARCH_Y = SM_PAD + SM_ROWS * SM_ROW_H + 4;  // 344
 const SM_ROOT = { x: 0, y: SM_Y, w: SM_W };
-// Flyout columns are menucore chain levels since todos/0259: 30px rows,
+// Flyout columns are menucore chain levels since docs/archive/0259: 30px rows,
 // 1px border (h = 4 + 30n), WIDTH MEASURED from freetype (asserted
 // structurally, never as a literal); a level parks at parent-right - 3
 // with row 0 aligned to the anchor row's drawn top, clamped to the work
@@ -70,7 +70,7 @@ const g4 = (line) => {
 // Context-menu row center (menucore geometry since 0259) — the 0101
 // taskbar-strip menu rows (Cascade 0, Tile 1, Minimize All 2).
 const rowY101 = (i) => 1 + i * MC_ROW + 15;
-// Window system-menu row centers (todos/0102): Restore/Move/Size/Minimize/
+// Window system-menu row centers (docs/archive/0102): Restore/Move/Size/Minimize/
 // Maximize, an 8px sep, then Close — rows past the sep shift down by 8.
 const rowYsys = (i) => (i < 5 ? 1 + i * MC_ROW
                               : 1 + 5 * MC_ROW + MC_SEP + (i - 6) * MC_ROW) + 15;
@@ -84,7 +84,7 @@ const DEMOS = menuLeaves('Demos');
 // The seeded /root/Desktop icons, DERIVED from os/image.json's user section
 // (the manifest that seeds a fresh root volume — these e2es always boot one),
 // so a new seeded icon can't silently shift every row like 785eca2's notepad
-// did (todos/0166; the 0164 rule: derive geometry, never hardcode). The
+// did (docs/archive/0166; the 0164 rule: derive geometry, never hardcode). The
 // grid model lives in drive.js (deskEntries/deskCell) since 0184 pushed the
 // seeded set past one column at 1024x768 (11 rows/col) and 0185 seeded a
 // DIRECTORY (Presentations, dirs-first per entcmp) — column-0 y math alone
@@ -113,14 +113,14 @@ const MOVE = (() => {
 const script = [
   'winbox &',
   'wmctl wait win winbox',
-  // Settle-wait before snapshotting list1 (todos/0283): `wait win winbox` only
+  // Settle-wait before snapshotting list1 (docs/archive/0283): `wait win winbox` only
   // proves the winbox SURFACE exists (kernel-side) — NOT that the wm has drained
   // its startup event backlog and PLACED it. Under load the wm can still be
   // mid-startup here, so list1 would catch the taskbar at its raw create
   // position (e.g. 1024x36+56+86, create-focus still on it) and winbox at the
   // kernel cascade (240x160+8+38, unfocused) — the ~33% flake. winbox's `f`
   // flag is set by kernel create-focus only when the wm MAPS it (its first
-  // WMP_MOVE via place(), todos/0069), and the taskbar's EV_CREATED is drained
+  // WMP_MOVE via place(), docs/archive/0069), and the taskbar's EV_CREATED is drained
   // BEFORE winbox's on the wm's in-order socket, so the taskbar MOVE(0,732) is
   // guaranteed already processed by the kernel (FIFO) once winbox reads focused.
   // Waiting on it settles BOTH placements. (WSID is recomputed below for the
@@ -153,7 +153,7 @@ const script = [
   'wmctl wait gone pong 100 || echo 501-wait-badsid-$?',   // pre-#501: sid 0 is "gone" -> instant false green
   'wmctl key 0 0 && echo 501-sid0-ok',           // SID 0 (focused window) stays valid
 
-  'winbox fixed &',                              // viewport scaling (todos/0024)
+  'winbox fixed &',                              // viewport scaling (docs/archive/0024)
   'wmctl wait win fixbox',
   'FSID=$(wmctl list | grep fixbox$ | sed "s/[^0-9].*//")',
   'wmctl scale $FSID 480 320 && echo scale-ok',
@@ -161,7 +161,7 @@ const script = [
   'wmctl scale $WSID 300 200 || echo scale-refused',
   'echo ==list6',
   'wmctl list',
-  'wmctl max $WSID && echo max-ok',              // maximize/restore (todos/0025)
+  'wmctl max $WSID && echo max-ok',              // maximize/restore (docs/archive/0025)
   'wmctl wait dim $WSID 1024x704',               // maximize RESIZE ack landed (0155)
   'echo ==list7',
   'wmctl list',
@@ -188,7 +188,7 @@ const script = [
   'echo ==list5',
   'wmctl list',
   'TSID=$(wmctl list | grep taskbar$ | sed "s/[^0-9].*//")',   // new wm, new sid
-  // ---- the Start menu (todos/0028; single-column todos/0098+0132) ----
+  // ---- the Start menu (docs/archive/0028; single-column docs/archive/0098+0132) ----
   // Virgin recents so the column is [Settings, Run..., All Programs] (rows 0-2,
   // All Programs at the bottom): open, cascade All Programs -> the tree flyout
   // (GROUPS) -> a nested leaf, which launches winbox AND records a recent.
@@ -224,7 +224,7 @@ const script = [
   'wmctl wait nowin startmenu',
   'echo ==menu4',
   'wmctl list',
-  // ---- the desktop layer (todos/0029) ----
+  // ---- the desktop layer (docs/archive/0029) ----
   'echo ==desk1',
   'wmctl list',
   'DSID=$(wmctl list | grep desktop$ | sed "s/[^0-9].*//")',
@@ -237,7 +237,7 @@ const script = [
   'wmctl wait win term',
   'echo ==desk3',
   'wmctl list',
-  // ---- desktop folder opens in fileman (todos/0185): dblclick the seeded
+  // ---- desktop folder opens in fileman (docs/archive/0185): dblclick the seeded
   // Presentations dir -> activate()'s S_ISDIR branch spawns fileman AT the
   // folder (title truncated to 31 chars); close it so the taskbar legs
   // below start from the same button set as before. ----
@@ -248,7 +248,7 @@ const script = [
   'FMSID=$(wmctl list | grep "File Manager - /root/Desktop/Pr$" | sed "s/[^0-9].*//")',
   'wmctl close $FMSID',
   'wmctl wait nowin "File Manager - /root/Desktop/Pr"',
-  // ---- taskbar polish (todos/0031) ----
+  // ---- taskbar polish (docs/archive/0031) ----
   // Stable button order: 4 fresh winboxes; closing the SECOND must slide
   // the later buttons left (compaction), not swap the last into its slot.
   'winbox & winbox & winbox & winbox &',
@@ -278,7 +278,7 @@ const script = [
   'wmctl click $TSID 1000 14',                    // toggle the date tooltip off
   'wmctl wait nowin datepop',
   'wmctl shot $TSID /root/bar.png && echo bar-shot-ok',
-  // ---- window cycling (todos/0032): wmctl cycle -> WMP CYCLE -> the same
+  // ---- window cycling (docs/archive/0032): wmctl cycle -> WMP CYCLE -> the same
   // EV_CYCLE -> wm.c policy. Focus fixbox then winbox so the recency
   // ladder's top three are known: [.., W6(create), fixbox, winbox]. ----
   'wmctl focus $FSID',
@@ -304,14 +304,14 @@ const script = [
   'sleep 0.3',                                   // timing subject: forward-cycle focus settle (target computed in JS)
   'echo ==cyc5',
   'wmctl list',
-  // ---- z layers (todos/0038): the real wm.c pins its furniture — the
+  // ---- z layers (docs/archive/0038): the real wm.c pins its furniture — the
   // taskbar rides the TOP layer, the desktop the BOTTOM one; a raise (or
   // any later create) must stop below the bar. ----
   'wmctl raise $WSID',
   'sleep 0.3',                                   // timing subject: raise z-order settle (z-order verified in JS)
   'echo ==layer1',
   'wmctl list',
-  // ---- the focus fall skips pinned furniture (todos/0039): SIGKILL the
+  // ---- the focus fall skips pinned furniture (docs/archive/0039): SIGKILL the
   // focused winbox; with the real wm.c bar pinned +1 at the top of z, the
   // fall must land on another NORMAL window, never the furniture. ----
   'wmctl focus $WSID',
@@ -321,10 +321,10 @@ const script = [
   'wmctl wait gone $WSID',
   'echo ==fall1',
   'wmctl list',
-  // ---- unified activate (todos/0066): the desktop and the Start menu
+  // ---- unified activate (docs/archive/0066): the desktop and the Start menu
   // share ONE launch mechanism — a #!/bin/sh launcher script spawns
-  // (shebang exec, todos/0065), a plain text file opens through the
-  // openwith associations (todos/0072 — default.gui is notepad in the
+  // (shebang exec, docs/archive/0065), a plain text file opens through the
+  // openwith associations (docs/archive/0072 — default.gui is notepad in the
   // baked store), symlinks keep running their target (the desk3 leg
   // above). ----
   "printf '#!/bin/sh\\nwinbox\\n' > /root/Desktop/alauncher",
@@ -342,10 +342,10 @@ const script = [
   'echo ==act3',
   'wmctl list',
   // The seeded snake entry became a real launcher script (image v36; in
-  // the Games group since todos/0078).
+  // the Games group since docs/archive/0078).
   'head -c 2 /usr/share/menu/Games/snake && echo =snake-shebang',
   // The menu takes the same path via live search: an /etc/menu override dir
-  // with ONE launcher-script entry (the dir existing wins, todos/0040), so
+  // with ONE launcher-script entry (the dir existing wins, docs/archive/0040), so
   // the search walk sees /etc/menu; typing its name + Enter launches it.
   'mkdir /etc/menu',
   "printf '#!/bin/sh\\nwinbox\\n' > /etc/menu/go",
@@ -360,7 +360,7 @@ const script = [
   'echo ==act4',
   'wmctl list',
   'rm -rf /etc/menu',
-  // ---- Aero effects (todos/0063) ----
+  // ---- Aero effects (docs/archive/0063) ----
   // Aero Peek: injected motion over taskbar button 0 raises the "peek"
   // thumbnail popup; motion over the Start strip drops it.
   'wmctl hover $TSID 120 18',
@@ -408,7 +408,7 @@ const script = [
   'wmctl glass 1 && echo glass-on-ok',
   'wmctl shot screen /root/g.png && echo glass-shot-ok',
   'wmctl glass 0 && echo glass-off-ok',
-  // ---- Start menu v2 tail (todos/0098): command path, live search, Esc
+  // ---- Start menu v2 tail (docs/archive/0098): command path, live search, Esc
   // clear-then-close, the RUN... place, and the keyboard All Programs
   // cascade. Deltas only — window counts at this point are whatever the
   // storms above left behind. ----
@@ -503,7 +503,7 @@ const script = [
   'echo ==sm8',
   'wmctl list',
   'rm -rf /etc/menu',
-  // ---- depth-cap CURE (todos/0259 red→green): a 4-dir-deep tree
+  // ---- depth-cap CURE (docs/archive/0259 red→green): a 4-dir-deep tree
   // cascades to startmenu6 — SIX open Start windows (root + 5 chain
   // levels). The old fork engine's MENU_DEPTH 4 refused past startmenu4,
   // so the `wait win startmenu5` here times out RED on the pre-0259 wm.
@@ -535,7 +535,7 @@ const script = [
   'echo ==deep2',
   'wmctl list',
   'rm -rf /etc/menu',
-  // ---- desktop icon selection & manipulation (todos/0077) ----
+  // ---- desktop icon selection & manipulation (docs/archive/0077) ----
   // /root/Desktop is DESK_ACT here (seeds + 2 dropped files, wrapping into
   // column 1 since 0184). Click coordinates ride desk(); label-strip pixels
   // are asserted from surface shots after the run. The first click also
@@ -545,7 +545,7 @@ const script = [
   'sleep 0.5',                                   // timing subject: in-surface desktop-selection render (navy label strip, no window observable)
   'wmctl shot $DSID /root/s1.png && echo s1-ok',
   // ctrl+click ctlpanel: additive toggle (keydown/keyup hold the modifier
-  // across the separate click injection — todos/0077 wmctl growth)
+  // across the separate click injection — docs/archive/0077 wmctl growth)
   'wmctl keydown $DSID 224 1073742048 64',                    // LCTRL down
   `wmctl click $DSID ${desk(DESK_ACT, 'ctlpanel')}`,
   'wmctl keyup $DSID 224 1073742048 0',
@@ -599,7 +599,7 @@ const script = [
   'echo LAUNCH-DELTA-$((N3-N2))',
   'echo ==sel3',
   'wmctl list',
-  // ---- taskbar polish (todos/0101): strip menu, Minimize All, Show
+  // ---- taskbar polish (docs/archive/0101): strip menu, Minimize All, Show
   // Desktop, clock date. Screen 1024x768 -> clock_left = 1024-14-45 = 965;
   // the Show Desktop sliver is [1010,1024). Two fresh winboxes anchor the
   // reasoning (the two highest sids). ----
@@ -653,7 +653,7 @@ const script = [
   'echo ==tp7',
   'wmctl list',
 
-  // ---- window system menu (todos/0102): Alt+Space / wmctl sysmenu opens
+  // ---- window system menu (docs/archive/0102): Alt+Space / wmctl sysmenu opens
   // the sysmenu on the FOCUSED window; Move enters keyboard-move mode (the
   // popup stays up as the key grabber), arrows nudge 8px, Enter commits,
   // Esc reverts; Size grows a resizable window and is disabled on fixbox;
@@ -756,14 +756,14 @@ const script = [
   'echo ==smClose',
   'wmctl list',                                   // winbox gone
 
-  // ---- desktop icon rename-in-place (todos/0103): F2 or the icon menu's
+  // ---- desktop icon rename-in-place (docs/archive/0103): F2 or the icon menu's
   // Rename opens an inline editor over the label; Enter commits rename(2),
   // Esc cancels, renaming onto an existing name keeps both files. Two fresh
   // 'aa*' files (sort before every seeded FILE icon) make the leg
   // independent of the earlier desktop churn without pixel math: clear the
   // selection with an empty-cell click, Right selects the top-left icon,
   // F2 edits it. The seeded Presentations DIR would sort ahead of them
-  // (entcmp dirs-first, todos/0185), so drop it first — the later
+  // (entcmp dirs-first, docs/archive/0185), so drop it first — the later
   // long-name leg wipes the whole Desktop anyway. ----
   'rm -f /root/Desktop/.icons',                   // auto-flow: predictable order
   'rm -rf /root/Desktop/Presentations',           // dirs-first would steal top-left
@@ -873,7 +873,7 @@ const script = [
   'echo ==rn7',
   'ls /root/Desktop | tr "\\n" " "; echo',         // aaa gone, kkk present
 
-  // ---- long/spaced Desktop-icon launch (todos/0151): menu_ent.name[32]
+  // ---- long/spaced Desktop-icon launch (docs/archive/0151): menu_ent.name[32]
   // truncation. A launcher whose filename is >= 32 chars WITH spaces used to
   // be snprintf-truncated into name[32]; desk_launch then built a path to a
   // file that didn't exist and activate()'s stat() failed -> the icon
@@ -937,7 +937,7 @@ check('taskbar is borderless, parked at the bottom edge (0,740 @1024x768)',
   bar1.includes('1024x36+0+732') && bar1.includes('b'), bar1);
 check('winbox placed by the WM policy (12,36 — not the kernel cascade)',
   win1.includes('240x160+12+36'), win1);
-check('winbox focused + resizable (R flag, todos/0021)',
+check('winbox focused + resizable (R flag, docs/archive/0021)',
   win1.includes('\tf---R----\t'), win1);  // FLAGS: A, U and #789 H slots; visible winbox has H clear
 
 // ---- minimize via wmctl -> EV to the wm ----
@@ -960,18 +960,18 @@ check('#501 non-numeric SID on wait gone fails loud, not instant false green',
 check('#501 the error names the offending argument',
       err.includes("wmctl: key: 'pong' is not a numeric SID (see wmctl list)"));
 check('#501 SID 0 (focused window) still parses as valid', out.includes('501-sid0-ok'));
-// Distinct causes end-to-end (todos/0242): the R_ERR errno reaches wmctl's
+// Distinct causes end-to-end (docs/archive/0242): the R_ERR errno reaches wmctl's
 // stderr as strerror text — a bad sid and a mode-refusal read DIFFERENTLY.
 check('wmctl focus bogus sid names the cause (EINVAL)',
   err.includes('wmctl: focus: Invalid argument'), err.slice(-400));
 
-// ---- viewport scaling (todos/0024): wmctl scale on the real binaries ----
+// ---- viewport scaling (docs/archive/0024): wmctl scale on the real binaries ----
 check('wmctl scale on a fixed-size window succeeds', out.includes('scale-ok'));
 check('wmctl resize on a fixed-size window is refused', out.includes('resize-refused'));
 check('wmctl scale on a RESIZABLE window is refused', out.includes('scale-refused'));
-check('wmctl resize on a fixed-size window names the cause (EPERM, todos/0242)',
+check('wmctl resize on a fixed-size window names the cause (EPERM, docs/archive/0242)',
   err.includes('wmctl: resize: Operation not permitted'), err.slice(-400));
-check('wmctl scale on a RESIZABLE window names the cause (EPERM, todos/0242)',
+check('wmctl scale on a RESIZABLE window names the cause (EPERM, docs/archive/0242)',
   err.includes('wmctl: scale: Operation not permitted'), err.slice(-400));
 const fix6 = row(l6, 'fixbox');
 check('fixbox scaled: buffer geometry intact, DST column shows 480x320',
@@ -980,7 +980,7 @@ check('fixbox is not resizable (no R flag)', fix6 !== '' && !fix6.includes('R'),
 const win6 = row(l6, 'winbox');
 check('winbox unscaled: DST column is -', win6.includes('\t-\t'), win6);
 
-// ---- maximize/restore (todos/0025): wmctl max -> EV_TITLE_ACTIVATE ->
+// ---- maximize/restore (docs/archive/0025): wmctl max -> EV_TITLE_ACTIVATE ->
 // wm.c policy, dispatching on the RESIZABLE bit ----
 check('wmctl max on the resizable winbox succeeds', out.includes('max-ok'));
 check('maximized winbox fills the work area (1024x704+0+28: screen minus taskbar, below the title bar)',
@@ -1002,13 +1002,13 @@ check('WM killed: taskbar gone, endpoint still serves wmctl',
   row(l4, 'taskbar') === '' && row(l4, 'winbox') !== '', JSON.stringify(l4));
 check('wmctl max with no WM is refused (maximize IS policy)',
   out.includes('max-refused'));
-check('wmctl max with no WM names the cause (ENODEV, todos/0242)',
+check('wmctl max with no WM names the cause (ENODEV, docs/archive/0242)',
   err.includes('wmctl: max: No such device (no WM subscribed)'), err.slice(-400));
 const bar5 = row(l5, 'taskbar');
 check('wm & respawns: taskbar back at the bottom edge',
   bar5.includes('1024x36+0+732'), JSON.stringify(l5));
 
-// ---- the Start menu (todos/0028; single-column todos/0098+0132) ----
+// ---- the Start menu (docs/archive/0028; single-column docs/archive/0098+0132) ----
 const menu1 = row(m1, 'startmenu');
 check(`Start click opens the single-column root above the taskbar (${SM_GEOM}, borderless)`,
   menu1.includes(SM_GEOM) && menu1.includes('b'), JSON.stringify(m1));
@@ -1030,17 +1030,17 @@ const fg2 = g4(fly2);
 check(`hovering the Demos group cascades its leaves (h ${demosH}, parent-right - 3)`,
   fg1 && fg2 && fg2.h === demosH && fg2.x === fg1.x + fg1.w - 3 &&
   fg2.y === demosY && fly2.includes('b'), JSON.stringify(m1c));
-// Anchored-child z-order (todos/0282): `wmctl list` rows are z-ordered
+// Anchored-child z-order (docs/archive/0282): `wmctl list` rows are z-ordered
 // bottom -> top, and each flyout column must sort ABOVE the panel it
 // cascades from — pre-0282 the root's keep-the-keyboard WMP_FOCUS raised
 // it over its own (then-ownerless) flyout, so an overlapping child drew
 // BELOW its parent (forced overlap on small viewports).
 const zrow = (sec, title) =>
   sec.split('\n').findIndex(l => l.endsWith('\t' + title));
-check('flyout z-sorts above the root panel (anchored child, todos/0282)',
+check('flyout z-sorts above the root panel (anchored child, docs/archive/0282)',
   zrow(m1b, 'startmenu2') > zrow(m1b, 'startmenu') &&
   zrow(m1b, 'startmenu') >= 0, JSON.stringify(m1b));
-check('nested flyout z-sorts above its parent column (todos/0282)',
+check('nested flyout z-sorts above its parent column (docs/archive/0282)',
   zrow(m1c, 'startmenu3') > zrow(m1c, 'startmenu2') &&
   zrow(m1c, 'startmenu2') > zrow(m1c, 'startmenu') &&
   zrow(m1c, 'startmenu') >= 0, JSON.stringify(m1c));
@@ -1055,7 +1055,7 @@ check('the launch recorded an MRU recent (~/.config/recent grew)',
 check('Start click re-opens the menu', row(m3, 'startmenu') !== '', JSON.stringify(m3));
 check('focus change dismisses the menu', row(m4, 'startmenu') === '', JSON.stringify(m4));
 
-// ---- the desktop layer (todos/0029) ----
+// ---- the desktop layer (docs/archive/0029) ----
 const dl = row(d1, 'desktop');
 check('desktop layer: fullscreen borderless surface', dl.includes('1024x768+0+0') && dl.includes('b'),
   JSON.stringify(d1));
@@ -1068,11 +1068,11 @@ check('single click does NOT launch (no Notepad window from the notepad link)',
   d2.split('\n').every(l => !l.includes('Notepad')), JSON.stringify(d2));
 check('injected double-click on the term icon spawns term',
   row(d3, 'term') !== '', JSON.stringify(d3));
-check('dblclick on the Presentations folder opens fileman AT it (todos/0185)',
+check('dblclick on the Presentations folder opens fileman AT it (docs/archive/0185)',
   row(section('desk4'), 'File Manager - /root/Desktop/Pr') !== '',
   JSON.stringify(section('desk4')));
 
-// ---- taskbar polish (todos/0031) ----
+// ---- taskbar polish (docs/archive/0031) ----
 // wins[] order is creation order (sids ascend); the wmctl-list winbox rows
 // give us the sid ladder to reason about button indices.
 const wsids = (sec) => sec.split('\n').filter(l => l.endsWith('\twinbox'))
@@ -1099,7 +1099,7 @@ check('clock-cell click falls on no button (focused window untouched)',
   JSON.stringify(b3));
 check('taskbar shot written', out.includes('bar-shot-ok'));
 
-// ---- window cycling (todos/0032) ----
+// ---- window cycling (docs/archive/0032) ----
 // Recency ladder set up in-script: [.., W6, fixbox, winbox]. wmctl cycle -1
 // is "previous window"; forward is the LRU walk; minimized are skipped.
 const fsidOf = (sec) => {
@@ -1121,13 +1121,13 @@ check('forward cycle walks to the LRU window (focus moved, minimized still skipp
   fsidOf(c5s) !== fsidOf(c4s) && fsidOf(c5s) !== fixSid && fsidOf(c5s) > 0,
   JSON.stringify([fsidOf(c5s), fsidOf(c4s)]));
 
-// ---- z layers (todos/0038): wm.c pins the taskbar to the TOP layer and
+// ---- z layers (docs/archive/0038): wm.c pins the taskbar to the TOP layer and
 // the desktop to the BOTTOM one; the raised winbox stops below the bar.
 // The wmctl FLAGS column grows a layer char (T/B) for pinned surfaces.
 const zOf = (line) => parseInt((line || '').split('\t')[4]);
 {
   const zAll = lay1.split('\n').filter(l => /\t/.test(l) && !/^SID\t/.test(l)).map(zOf);
-  check('taskbar rides the top of z after a wmctl raise (todos/0038)',
+  check('taskbar rides the top of z after a wmctl raise (docs/archive/0038)',
     row(lay1, 'taskbar') !== '' && zOf(row(lay1, 'taskbar')) === Math.max(...zAll),
     JSON.stringify(lay1));
   check('raised winbox sits directly below the pinned bar',
@@ -1143,7 +1143,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     JSON.stringify([row(lay1, 'taskbar'), row(lay1, 'desktop'), row(lay1, 'winbox')]));
 }
 
-// ---- the focus fall skips pinned furniture (todos/0039 storm find):
+// ---- the focus fall skips pinned furniture (docs/archive/0039 storm find):
 // after SIGKILL of the focused winbox, focus must land on another NORMAL
 // window — with the bar pinned +1, a raw top-of-z fall would park the
 // focus on the taskbar and typed keys would vanish into the furniture.
@@ -1155,9 +1155,9 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     focusedRow.endsWith('\twinbox'), JSON.stringify(fl1));
 }
 
-// ---- unified activate (todos/0066): both launch paths are activate() —
+// ---- unified activate (docs/archive/0066): both launch paths are activate() —
 // runnable regular files (a #!/bin/sh launcher) spawn directly, plain
-// files open through the openwith associations (todos/0072: default.gui
+// files open through the openwith associations (docs/archive/0072: default.gui
 // -> notepad). Window-count deltas cross-check the peek: if
 // ow_is_runnable() misfired, the launcher would open in notepad (not
 // winbox) and notes.txt would fail to spawn (no notepad).
@@ -1218,7 +1218,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     check('link notch on the calc symlink icon (cell 1)',
       String(px(58 + 5, 118 + 24)) === '0,0,0', px(58 + 5, 118 + 24));
     check('empty desktop area is pure teal', String(px(500, 400)) === '0,128,128', px(500, 400));
-    // Folder glyph (todos/0185): cell 0 is the Presentations dir — tab +
+    // Folder glyph (docs/archive/0185): cell 0 is the Presentations dir — tab +
     // body leave (ix+21, iy+8) WHITE where a launcher's solid block is
     // navy (cell 1 = calc); the folder body itself is navy.
     check('folder glyph distinct from launcher block (Presentations vs calc)',
@@ -1228,7 +1228,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
       [px(58 + 21, 22 + 8), px(58 + 10, 22 + 16), px(58 + 16, 118 + 16)].join(' | '));
   }
 
-  // The taskbar shot (todos/0031): clock digits render in the right-aligned
+  // The taskbar shot (docs/archive/0031): clock digits render in the right-aligned
   // HH.MM cell — histogram the black text pixels over the clock area.
   const bShot = (() => {
     try { return parsePng(Buffer.from(COMMON.readFileBytes(ufs, '/root/bar.png'))); }
@@ -1250,7 +1250,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
       clock >= 15, clock);
   }
 
-  // The Start menu shot (todos/0098+0132 + follow-up): a gucOS branding band
+  // The Start menu shot (docs/archive/0098+0132 + follow-up): a gucOS branding band
   // down the left (x < SM_SIDE), then the column — with recents+pinned cleared
   // it is [Settings (row 0), Run... (row 1), All Programs (row 2, cascade
   // arrow)] with grooves, and the search box with its "Search" ghost at the
@@ -1297,7 +1297,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   }
 }
 
-// ---- Start menu v2 tail (todos/0098): the command path, live search, Esc
+// ---- Start menu v2 tail (docs/archive/0098): the command path, live search, Esc
 // clear-then-close, the RUN... place, the keyboard All Programs cascade —
 // window counts as deltas.
 {
@@ -1358,13 +1358,13 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     JSON.stringify(d2));
 }
 
-// ---- Aero effects (todos/0063) ----
+// ---- Aero effects (docs/archive/0063) ----
 {
   const ae1 = section('aero1'), ae2 = section('aero2'), ae3 = section('aero3');
   // Aero Peek: injected hover over button 0 raised the popup (wm furniture,
   // borderless, 160x120, parked above the 36px bar); hover elsewhere drops it.
   const peek = row(ae1, 'peek');
-  check('taskbar hover raises the Aero Peek popup (todos/0063)',
+  check('taskbar hover raises the Aero Peek popup (docs/archive/0063)',
     peek.includes('160x120') && peek.includes('b') && peek.includes('+608'),
     JSON.stringify(ae1));   // parked at 768 - 36(bar) - 120 - 4
   check('peek popup rides the TOP layer like the bar',
@@ -1378,7 +1378,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   // Per-pixel alpha end to end (SDL_WINDOW_TRANSPARENT -> record flag 'A'
   // -> the deterministic src-over composite).
   const ab = row(ae3, 'alphabox');
-  check('alphabox carries the A flag (todos/0063)',
+  check('alphabox carries the A flag (docs/archive/0063)',
     (ab.split('\t')[5] || '').includes('A'), ab);
   check('winbox rows carry no A flag',
     !((row(ae3, 'winbox').split('\t')[5] || '').includes('A')), row(ae3, 'winbox'));
@@ -1391,7 +1391,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   check('glass screen shot written', out.includes('glass-shot-ok'));
 }
 
-// ---- desktop icon selection & manipulation (todos/0077) ----
+// ---- desktop icon selection & manipulation (docs/archive/0077) ----
 // Selection = the navy label strip under an icon (the 0029 highlight,
 // per-set since 0077). Sample 1px left of the label text: navy when
 // selected, teal when not. Cells are (col, row); term moves to MOVE,
@@ -1483,7 +1483,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
   const p4 = readShot('s4.png');
   check(`drag-move relocated term to (${MOVE.col},${MOVE.row}): tile there, old cell teal, still selected`,
     p4(MOVE.x + 45, MOVE.y + 9) === WHITE &&
-    p4(termCell.x + 58, termCell.y + 22) === TEAL &&   // old cell, derived (todos/0166)
+    p4(termCell.x + 58, termCell.y + 22) === TEAL &&   // old cell, derived (docs/archive/0166)
     strip(p4, 'term', MOVE.col, MOVE.row) === NAVY,
     [p4(MOVE.x + 45, MOVE.y + 9), p4(termCell.x + 58, termCell.y + 22),
      strip(p4, 'term', MOVE.col, MOVE.row)]);
@@ -1503,7 +1503,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     out.includes('LAUNCH-DELTA-1'), out.slice(out.indexOf('LAUNCH-DELTA')).slice(0, 20));
 }
 
-// ---- taskbar polish (todos/0101): the strip menu + Minimize All + Show
+// ---- taskbar polish (docs/archive/0101): the strip menu + Minimize All + Show
 // Desktop + the clock date tooltip. The two fresh winboxes are the two
 // highest sids; Minimize All / Show Desktop must move exactly those.
 {
@@ -1556,7 +1556,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     row(tp7, 'datepop') === '', JSON.stringify(tp7));
 }
 
-// ---- window system menu (todos/0102): Alt+Space / wmctl sysmenu, keyboard
+// ---- window system menu (docs/archive/0102): Alt+Space / wmctl sysmenu, keyboard
 // move (Enter commits / Esc reverts), keyboard size, Close via the menu ----
 {
   const smB = section('smB'), smC = section('smC'), smD = section('smD'),
@@ -1608,7 +1608,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
       smClose.split('\n').filter(l => l.endsWith('\twinbox'))));
 }
 
-// ---- desktop icon rename-in-place (todos/0103) ----
+// ---- desktop icon rename-in-place (docs/archive/0103) ----
 {
   const names = (name) => section(name).trim().split(/\s+/);
   const rn0 = names('rn0'), rn2 = names('rn2'), rn3 = names('rn3'),
@@ -1628,7 +1628,7 @@ const zOf = (line) => parseInt((line || '').split('\t')[4]);
     !rn7.includes('aaa') && rn7.includes('kkk'), JSON.stringify(rn7));
 }
 
-// ---- long/spaced Desktop-icon launch (todos/0151): the menu_ent.name[32]
+// ---- long/spaced Desktop-icon launch (docs/archive/0151): the menu_ent.name[32]
 // truncation regression. Both a short spaced name and a 36-char spaced name
 // must launch on double-click; pre-fix the long one truncated and stat()'d a
 // path that didn't exist, so nothing spawned. ----

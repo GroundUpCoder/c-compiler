@@ -1,6 +1,6 @@
 // #184: the host.js CLI wall-clock ceiling — a runaway benchmark-style
 // invocation must die on its own, loudly, instead of burning cores for days
-// (the todos/0332 orphan pair: two `node host.js` processes, ~70 CPU-hours
+// (the docs/archive/0332 orphan pair: two `node host.js` processes, ~70 CPU-hours
 // over 2.5 days, killed by hand).
 //
 // The guard's choke point is host.js ITSELF (runModule wraps the env imports

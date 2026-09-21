@@ -4,7 +4,7 @@
 //
 // As of v176 (main @82bf5994) the 0320 preprocessor blow-up and the 0321 static
 // re-declaration bug are BOTH shipped, so stock compiler.js compiles all 174
-// CPython TUs. The one remaining blocker is todos/0323: whole-program link
+// CPython TUs. The one remaining blocker is docs/archive/0323: whole-program link
 // rejects a cross-TU declared-type mismatch (a `const` qualifier with no ABI
 // consequence) that separate compilation allows and clang/gcc/MSVC accept.
 //

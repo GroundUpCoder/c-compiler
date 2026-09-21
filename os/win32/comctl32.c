@@ -1,5 +1,5 @@
-/* comctl32.c — the common-controls veneer slice (todos/0048, design
- * todos/WIN32.md). Since todos/0370 comctl32 owns REAL classes:
+/* comctl32.c — the common-controls veneer slice (docs/archive/0048, design
+ * docs/WIN32.md). Since docs/archive/0370 comctl32 owns REAL classes:
  * InitCommonControls / InitCommonControlsEx(ICC_LISTVIEW_CLASSES) register
  * SysListView32 + SysHeader32 (listview.c, its own TU — the menucore.c
  * one-facility-per-TU precedent). The standard controls (BUTTON/EDIT/...)

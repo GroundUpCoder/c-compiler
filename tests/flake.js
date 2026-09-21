@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Test flake / under-load gate (todos/0147).
+// Test flake / under-load gate (docs/archive/0147).
 //
 // Runs the historically-flaky, sleep-sensitive test files REPEATEDLY and under
 // CPU contention to prove they stay event-clean. This is the gate to run after
@@ -21,8 +21,8 @@
 //
 // The tripwire set = the files whose sync was a fixed `sleep` before the
 // 0083/0154/0155 event-wait sweep (the documented 0074 os-doom flake + the
-// boot-heavy wm/term/app e2es), plus os-wm (todos/0238 move-composite race +
-// todos/0199 sysmenu-focus / early-boot-teal races — twice-flaky, so it earns
+// boot-heavy wm/term/app e2es), plus os-wm (docs/archive/0238 move-composite race +
+// docs/archive/0199 sysmenu-focus / early-boot-teal races — twice-flaky, so it earns
 // a tripwire slot). Grep the runners for `'sleep ` to see what still carries
 // an annotated timing subject.
 
@@ -30,7 +30,7 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-// Cross-tree preflight (todos/0341) — this driver spawns its legs with
+// Cross-tree preflight (docs/archive/0341) — this driver spawns its legs with
 // `cwd: ROOT`, normalizing the cwd away exactly like tests/run.js does, so the
 // check belongs here at the outermost launch.
 require('./lib/tree-guard.js').assertSameTree(__dirname, { label: 'tests/flake.js' });
@@ -64,7 +64,7 @@ function parse(argv) {
 }
 
 function usage() {
-  process.stdout.write(`Test flake / under-load gate (todos/0147).
+  process.stdout.write(`Test flake / under-load gate (docs/archive/0147).
 
   node tests/flake.js [--repeat N] [--no-under-load] [--kernel-only] [--filter=S]
 

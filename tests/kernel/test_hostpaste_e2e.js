@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Ticket #96 (todos/0432) acceptance, headless: paste legibility + robustness
+// Ticket #96 (docs/archive/0432) acceptance, headless: paste legibility + robustness
 // in the macOS scheme — the parts that hold under ANY keymap policy (the
-// keymap itself is a CLOSED DECISION, todos/KEYMAP.md: no Ctrl edit verbs in
+// keymap itself is a CLOSED DECISION, docs/KEYMAP.md: no Ctrl edit verbs in
 // the macos scheme; nothing here re-tests or re-opens it — that is
 // test_keymap_e2e.js's job and it must stay green untouched).
 //   - /run/host-platform: both boot paths persist the per-boot host verdict

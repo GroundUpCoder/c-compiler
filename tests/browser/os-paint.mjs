@@ -1,4 +1,4 @@
-// Paint browser acceptance (todos/0107, design todos/WIN32.md): boot the
+// Paint browser acceptance (docs/archive/0107, design docs/WIN32.md): boot the
 // reference OS page in headless Chromium, launch the seeded /bin/paint from
 // the shell, and drive it with the REAL mouse — pick the Filled Rectangle
 // toolbox tool + a red palette swatch, drag a rectangle across the memory-DC
@@ -110,7 +110,7 @@ try {
   await page.mouse.click(...scr(20, 200 + BAR));
   // Pick Filled Rectangle (toolbox) + a red swatch (palette); paint.c prints
   // `paint: tool=N` / `paint: fg=...` to its tty on each pick — wait on
-  // __osOut instead of pacing blind (todos/0083).
+  // __osOut instead of pacing blind (docs/archive/0083).
   await page.mouse.click(...tbCell(5));
   await page.waitForFunction(() => window.__osOut.includes('paint: tool=5'), { timeout: 20000, polling: 'raf' });
   check('toolbox click selected Filled Rectangle (tool=5)', true);

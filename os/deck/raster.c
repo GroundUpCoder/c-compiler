@@ -1,4 +1,4 @@
-/* raster.c — /bin/deck's CPU rasterizer (todos/0284). See raster.h for
+/* raster.c — /bin/deck's CPU rasterizer (docs/archive/0284). See raster.h for
  * the AA model. Everything here is exercised rarely (one render per nav/
  * resize/reload — the presenter parks between states), so clarity beats
  * micro-optimization; the only loops that matter are bbox-bounded. */

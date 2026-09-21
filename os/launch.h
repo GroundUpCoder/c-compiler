@@ -1,6 +1,6 @@
 /* launch.h — the ONE desktop spawn primitive AND launch-policy ladder, in
- * ONE place (CD2 dedup: the spawn primitive landed as todos/0239, the
- * shared activate() ladder as todos/0240).
+ * ONE place (CD2 dedup: the spawn primitive landed as docs/archive/0239, the
+ * shared activate() ladder as docs/archive/0240).
  *
  * Header-only by design: the image manifest's `c` entries are single-source
  * compiles, so this is static functions shared by textual inclusion (the
@@ -13,7 +13,7 @@
  * the association) — stay with the callers as launch_activate() hooks.
  *
  * The canonical desktop environment is exposed as macros so no caller
- * re-types the literals: PATH puts /usr/local/bin first (todos/0040 —
+ * re-types the literals: PATH puts /usr/local/bin first (docs/archive/0040 —
  * user-installed binaries deliberately win over system ones), HOME is /root.
  * term.c reuses the strings for its pty session leader's env (a superset
  * adding TERM); its spawn shape (file actions, posix_spawnp) — like
@@ -63,10 +63,10 @@ static void reap_kids(int *nkids) {
     while (*nkids > 0 && waitpid(-1, &st, WNOHANG) > 0) (*nkids)--;
 }
 
-/* ---- the launch POLICY ladder (todos/0240) ---- */
+/* ---- the launch POLICY ladder (docs/archive/0240) ---- */
 
 /* Open `path` through a resolved association command (`cmd path`,
- * todos/0072): ow_build splits the command and appends the path as one
+ * docs/archive/0072): ow_build splits the command and appends the path as one
  * argument, then the desktop spawn. Shared by the launch_activate tail and
  * the Edit flows (wm's desktop Edit, fileman's Edit + "Open with" picker). */
 static void launch_assoc(const char *cmd, const char *path,
@@ -77,13 +77,13 @@ static void launch_assoc(const char *cmd, const char *path,
         spawn_path(prog, argv, nkids, who);
 }
 
-/* One "activate a path" (todos/0066), the ladder shared by wm.c's
+/* One "activate a path" (docs/archive/0066), the ladder shared by wm.c's
  * activate() (Start menu / desktop grid) and fileman's open_selected():
  * anything runnable after symlink resolution — ow_is_runnable peeks
  * through links, so a menu link to a binary still spawns via the link
  * path — runs directly under its basename (launchers are ordinary
  * #!/bin/sh scripts); anything else opens through the openwith
- * associations in the GUI context (todos/0072).
+ * associations in the GUI context (docs/archive/0072).
  *
  * The genuinely per-caller policies are parameters, not flattened:
  *   - `st` is the CALLER's stat of `path`, NULL if it failed. Failure
@@ -91,12 +91,12 @@ static void launch_assoc(const char *cmd, const char *path,
  *     link is a no-op), fileman lets a dangling row fall through to the
  *     association tail — and passing it in keeps one stat per activation.
  *   - `on_dir` (nullable): what a directory does. wm passes its
- *     spawn-a-fileman hook (todos/0185); fileman navigates in place
+ *     spawn-a-fileman hook (docs/archive/0185); fileman navigates in place
  *     BEFORE calling (its listing already knows the row is a dir) and
  *     passes NULL, so a stale-listing dir falls to the association tail
  *     exactly as before.
  *   - `on_launch` (nullable): fires just before a direct spawn — wm's MRU
- *     recents push (sm_record_recent, todos/0098); fileman pushes none. */
+ *     recents push (sm_record_recent, docs/archive/0098); fileman pushes none. */
 static void launch_activate(const char *path, const struct stat *st,
                             void (*on_dir)(const char *),
                             void (*on_launch)(const char *),

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// /bin/gcode STEP 2 e2e (todos/0174 step 2): usage accounting + durable
+// /bin/gcode STEP 2 e2e (docs/archive/0174 step 2): usage accounting + durable
 // resumable sessions IN the booted OS image — the runtime half of the
 // gcode-step2 branch verification (its deterministic native test is the
 // oracle; this proves the same paths against the real compiled binary on

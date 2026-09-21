@@ -3,7 +3,7 @@
 #
 # The fakegit category used to run against the live c-compiler checkout,
 # which pinned every golden to one HEAD and left the category permanently
-# red (todos/0183). This script builds a tiny repo whose history is
+# red (docs/archive/0183). This script builds a tiny repo whose history is
 # byte-stable on any machine: author/committer name, email, date and tz
 # are all fixed, and host/global git config is masked out, so the commit
 # hashes baked into tests/fakegit/*/expected.txt reproduce everywhere.

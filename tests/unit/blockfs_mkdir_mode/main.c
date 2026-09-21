@@ -1,4 +1,4 @@
-// BUG (found by todos/0382): BlockFS.mkdir accepted a mode argument and then
+// BUG (found by docs/archive/0382): BlockFS.mkdir accepted a mode argument and then
 // DISCARDED it — every directory came out DEFAULT_DIR_MODE (0755), so
 // mkdir("/priv", 0700) silently produced a world-readable directory. The
 // mode is now honoured (masked by the process umask, like open's create

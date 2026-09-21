@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // #423 acceptance, headless: the WMP screen-path KEYBOARD verb — real wmKey
-// chord traversal without a browser (the todos/0095 INJECT_SCREEN keyboard
+// chord traversal without a browser (the docs/archive/0095 INJECT_SCREEN keyboard
 // analogue). The REAL /bin/wm + /bin/wmctl through os/boot.js:
 //   - `wmctl skey 41 27 64` (Ctrl+Esc) enters the kernel's wmKey grab table
 //     -> EV_MENU -> wm.c opens the Start menu; a second chord toggles it

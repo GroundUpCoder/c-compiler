@@ -30,7 +30,7 @@ unsigned FAST_FUNC bb_clk_tck(void)
 }
 
 /* appletlib.c globals. Each binary IS its applet: hush by default, or
- * whatever the per-applet bin.json defines (todos/0010). */
+ * whatever the per-applet bin.json defines (docs/archive/0010). */
 #ifndef PORT_APPLET_NAME
 #define PORT_APPLET_NAME "hush"
 #endif
@@ -46,7 +46,7 @@ gid_t* FAST_FUNC bb_getgroups(int *ngroups, gid_t *group_array)
     return group_array;
 }
 
-/* bb_pwd.c replacement (todos/0035): tar create stamps uname/gname into
+/* bb_pwd.c replacement (docs/archive/0035): tar create stamps uname/gname into
  * every header — on a single-user system the answer is fixed, so these
  * skip libpwdgrp entirely (the FEATURE_LS_USERNAME-off philosophy). */
 const char* FAST_FUNC get_cached_username(uid_t uid)
@@ -60,12 +60,12 @@ const char* FAST_FUNC get_cached_groupname(gid_t gid)
     return "root";
 }
 /* libbb/procps.c's cache is compiled out with the two stubs above
- * (todos/0043) — nothing cached, nothing to clear. */
+ * (docs/archive/0043) — nothing cached, nothing to clear. */
 void FAST_FUNC clear_username_cache(void)
 {
 }
 
-/* sysinfo(2) replacement (todos/0043): uptime/free want the Linux syscall;
+/* sysinfo(2) replacement (docs/archive/0043): uptime/free want the Linux syscall;
  * here it's a read of the kernel's synthetic /proc (uptime, loadavg,
  * meminfo — Linux formats by construction). Values are in mem_unit=1024
  * units, i.e. meminfo's kB numbers verbatim; missing /proc (standalone

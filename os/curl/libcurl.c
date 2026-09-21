@@ -1,6 +1,6 @@
 /*
- * libcurl.c — gucOS libcurl veneer (todos/0173): the easy interface over the
- * kernel HTTP transport (todos/0172; fd-shaped since todos/0417).
+ * libcurl.c — gucOS libcurl veneer (docs/archive/0173): the easy interface over the
+ * kernel HTTP transport (docs/archive/0172; fd-shaped since docs/archive/0417).
  *
  * curl_easy_perform maps 1:1 onto the primitive:
  *   __http_open -> an ordinary fd. Wait on it with __wait, consume the
@@ -8,7 +8,7 @@
  *   header blob), then read() until EAGAIN / wait again (feeds
  *   WRITEFUNCTION), then close(fd).
  *
- * Timeouts (todos/0417):
+ * Timeouts (docs/archive/0417):
  *   - CONNECTTIMEOUT[_MS] -> the kernel HEADERS deadline (__http_open's
  *     headers_ms): the response headers must arrive within it. Expiry
  *     surfaces as errno ETIMEDOUT on __http_status.
@@ -59,7 +59,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 
-/* The kernel HTTP primitive (todos/0172, fd-shaped todos/0417), surfaced by
+/* The kernel HTTP primitive (docs/archive/0172, fd-shaped docs/archive/0417), surfaced by
    host.js as env imports. Declared here like every consumer — there is NO
    prelude for these (#392 finding): the twin decls in compiler.js live
    inside the __SDL.c stdlib SOURCE (a separate TU that never calls them —
@@ -75,7 +75,7 @@ __import int __http_status(int fd, int *status_out, char *hdr, int hdrcap);
    BEFORE close(fd) (close aborts and frees the transfer, text included).
    -1/ENOSYS on an embedder predating the op — degrade to errno-only text. */
 __import int __http_error(int fd, char *buf, int cap);
-/* The unified multi-source wait (todos/0178; wm.c precedent). why: 0 =
+/* The unified multi-source wait (docs/archive/0178; wm.c precedent). why: 0 =
    timeout, 1 = an fd is readable, 2 = input ring, -1 = EINTR (the handler
    already ran), -2 = no kernel WAIT in this flavor. */
 __import int __wait(const int *rfds, int nr, int ring, int timeout_ms);
@@ -416,7 +416,7 @@ CURLcode curl_easy_perform(CURL *handle) {
   if (h->verbose)
     fprintf(stderr, "* gucOS libcurl: %s %s (%ld body bytes)\n", method, h->url, blen);
 
-  /* timeouts (todos/0417): CONNECTTIMEOUT rides the kernel headers
+  /* timeouts (docs/archive/0417): CONNECTTIMEOUT rides the kernel headers
      deadline; TIMEOUT is the whole-operation cap on the veneer's own wall
      clock, enforced through __wait's timeout at every park. */
   long long t0 = now_ms();
@@ -658,4 +658,4 @@ char *curl_easy_unescape(CURL *handle, const char *input, int length, int *outle
 
 void curl_free(void *ptr) { free(ptr); }
 
-const char *curl_version(void) { return "libcurl/8.0.0-gucos (todos/0173 veneer)"; }
+const char *curl_version(void) { return "libcurl/8.0.0-gucos (docs/archive/0173 veneer)"; }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// REPLs-over-pty e2e (todos/0036): the three seeded interpreters — lua,
+// REPLs-over-pty e2e (docs/archive/0036): the three seeded interpreters — lua,
 // micropython, sqlite3 — driven interactively on a kernel pty by a real C
 // master (openpty + spawn-on-slave, the /bin/term shape). Proves per REPL:
 //   - the banner and prompt arrive through the slave's line discipline

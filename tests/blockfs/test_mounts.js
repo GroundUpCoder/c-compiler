@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// MountFS walk mechanics (todos/0026) at the BlockFS level: the
+// MountFS walk mechanics (docs/archive/0026) at the BlockFS level: the
 // _mountPrefix/_mountOwns hooks in _walkHops (full-namespace symlink
 // resolution — in-volume prefix strip vs the __mountEscape throw), the
 // single-volume regression guard (no hooks -> unchanged behavior), and a
@@ -170,7 +170,7 @@ test('mixed workload across both volumes; both stores pass fsck independently', 
   assert(usrProblems.length === 0, 'user volume fsck: ' + usrProblems.join('; '));
 });
 
-// ---- O_CREAT through a dangling symlink in the mount namespace (todos/0375) ----
+// ---- O_CREAT through a dangling symlink in the mount namespace (docs/archive/0375) ----
 
 function listNames(fs, path) {
   var h = fs.opendir(path);

@@ -1,5 +1,5 @@
 /* file-gucos-ticket.c — file a ticket (or alert) OUT of gucOS (ticket #451;
- * todos/NETWORK.md "The ticket bridge").
+ * docs/NETWORK.md "The ticket bridge").
  *
  *   file-gucos-ticket --title <t> [--body <text>|-] [--priority 0..3]
  *                     [--difficulty light|medium|heavy] [--kind ticket|alert]
@@ -11,7 +11,7 @@
  * `file-gucos-ticket` command on the HOST's PATH, and this OS knows
  * nothing beyond "such a command may exist". `--body -` reads stdin.
  *
- * Transport: the kernel HTTP primitive (todos/0172, fd-shaped todos/0417),
+ * Transport: the kernel HTTP primitive (docs/archive/0172, fd-shaped docs/archive/0417),
  * exactly the seam curl and ctlpanel's Test Bridge ride — so the request
  * transits the net bridge when /etc/net says `bridge on` and goes direct
  * otherwise, with no special-casing here.

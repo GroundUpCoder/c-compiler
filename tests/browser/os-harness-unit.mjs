@@ -1,4 +1,4 @@
-// Unit coverage for the PURE parts of lib/os-harness.mjs (todos/0146) — the
+// Unit coverage for the PURE parts of lib/os-harness.mjs (docs/archive/0146) — the
 // bits that don't need Playwright or a browser: osUrl, near, makeCheck,
 // wmctlTimeoutHits, and waitForServer against an injected fetch. Runs in plain
 // Node (the harness imports playwright lazily, so this import succeeds without

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// win32rc.js — a tiny Win32 resource compiler (todos/0068, design
-// todos/WIN32.md "resource story").
+// win32rc.js — a tiny Win32 resource compiler (docs/archive/0068, design
+// docs/WIN32.md "resource story").
 //
 // Compiles the .rc subset the port corpus actually uses (STRINGTABLE,
 // MENU, DIALOG/DIALOGEX, ACCELERATORS, BITMAP/ICON/WAVE file refs) into a
@@ -53,7 +53,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// Cross-tree preflight (todos/0341, extended by #142). NB this tool's writes
+// Cross-tree preflight (docs/archive/0341, extended by #142). NB this tool's writes
 // are argument-relative (-o), not next-to-self — the guard here catches the
 // wrong-COPY launch: a stale tree's rc compiler producing a committed .res in
 // yours. Harness spawns (test_win32rc.js) inherit the kernel suite's in-tree
@@ -248,7 +248,7 @@ function tokenize(lines) {
           }
           v += s[j++];
         }
-        // gucOS text is LF-native (todos/0210): the res pack is a text-in
+        // gucOS text is LF-native (docs/archive/0210): the res pack is a text-in
         // path, so \r\n / lone \r normalize to \n at compile time (\r used
         // to leak a literal 'r' into the string).
         v = v.replace(/\r\n?/g, '\n');

@@ -1,5 +1,5 @@
-// os-common.js — logic shared by the OS boot paths (todos/0004) and the
-// image baker (todos/0040): os/kernel-worker.js (browser, OPFS store),
+// os-common.js — logic shared by the OS boot paths (docs/archive/0004) and the
+// image baker (docs/archive/0040): os/kernel-worker.js (browser, OPFS store),
 // os/boot.js (headless Node, file store) and tools/mkimage.js (offline
 // bake). Environment-neutral: plain script, exports via module.exports
 // under Node and self.OS_COMMON under a worker (host.js discipline).
@@ -9,7 +9,7 @@
 //     argv driver over the compiler library, reading sources from and writing
 //     wasm to the kernel's BlockFS. Backs /bin/cc (the __compile RPC).
 //   bakeSystemImage(...)             — bake the read-only system volume from
-//     os/image.json's `system` section (todos/0040): compiled sources,
+//     os/image.json's `system` section (docs/archive/0040): compiled sources,
 //     vendor builds, /usr/local -> /var/local, /usr/share/os-release with
 //     the manifest version, then seal. Runs offline (mkimage), or as the
 //     boot-time fallback when no current blob exists.
@@ -29,7 +29,7 @@
 //   bakedVersion(BLOCK_FS, store)    — a blob's VERSION_ID (or -1): the
 //     staleness gate for "upgrade = swap the blob".
 //   projectExternalDirs(proj, dir)   — the directories a project's sources/
-//     includes/srcRoots reach OUTSIDE its own dir (todos/0354): the half of
+//     includes/srcRoots reach OUTSIDE its own dir (docs/archive/0354): the half of
 //     a project's input closure that `deps` recursion does not reach.
 //   newestBakeInput(...)             — the 0082 input-freshness scan: newest
 //     mtime across everything that can change the blob's bytes (toolchain,
@@ -197,7 +197,7 @@ function createCcDriver(CompilerJS, kfs) {
     // parseAllUnits compile every TU under its PHYSICAL path
     // (/usr/opt/win32/src/win32/gdi32.c), inside the payload's real tree
     // where lexical == physical. realpathPhysical exists on BlockFS,
-    // MountFS and RemoteFS alike (todos/0263).
+    // MountFS and RemoteFS alike (docs/archive/0263).
     pp.realpath = function (p) { return kfs.realpathPhysical(p); };
 
     var usage = 'usage: cc [-o out] [-Ipath] [-Dname[=val]] [-g|-g2] [-fno-inline] [--trap-null-dereference] file.c...\n';
@@ -323,7 +323,7 @@ function buildProject(CompilerJS, projPath, readHostFile, options) {
   }
   /* Expand a bin.json, depth-first over its deps (type "lib" projects —
    * e.g. the busybox applets all dep on vendor/busybox/libbb-core.json).
-   * Diamond deps dedup on normalized path (todos/0079, matching
+   * Diamond deps dedup on normalized path (docs/archive/0079, matching
    * compiler.js's expandProjectJson — no realpath here, XHR context). */
   var seenProjects = {};
   var srcRootDirs = {};   // ns -> normalized dir (conflicting-remap gate)
@@ -412,7 +412,7 @@ function buildProject(CompilerJS, projPath, readHostFile, options) {
  *                   quotes-includes; staged beside it for the compile
  *   entry.text    — asset name of a raw text file; copied verbatim to /path
  *   entry.content — inline string; written verbatim to /path (one-liners
- *                   like the /usr/share/menu command entries, todos/0028)
+ *                   like the /usr/share/menu command entries, docs/archive/0028)
  *   entry.bin     — REPO-relative binary file; copied verbatim to /path
  *                   (game data: gameboy ROMs — needs io.readBinary)
  *   entry.optional — (with entry.bin) a missing asset logs a skip instead of
@@ -430,7 +430,7 @@ function buildProject(CompilerJS, projPath, readHostFile, options) {
  *   relative to the os/ directory; readBinary is repo-relative like
  *   project entries.)
  *
- * No version gate here (todos/0040): the system section is baked into the
+ * No version gate here (docs/archive/0040): the system section is baked into the
  * sealed blob (whose /usr/share/os-release carries the version — the
  * staleness check happens BEFORE the bake), and the user section seeds
  * exactly once, onto a freshly formatted root volume. The old
@@ -612,16 +612,16 @@ function plantSeedNode(kfs, src, dst) {
   return planted;
 }
 
-/* ---- optional opt-in image overlays (todos/0118) ----
+/* ---- optional opt-in image overlays (docs/archive/0118) ----
  *
  * An overlay folds a SIBLING-published, prebuilt `overlay@1` manifest's files
  * into the system image at bake time — real C/C++ apps cross-compiled ahead of
  * time by ~git/clang-simplified (cc2wasm), which this repo's compiler.js can't
  * build. This repo is only the CONSUMER: it never runs cc2wasm and never builds
  * anything from the sibling — it reads the published JSON, VERIFIES hashes, and
- * plants bytes. Design + the frozen `overlay@1` contract: todos/0118.
+ * plants bytes. Design + the frozen `overlay@1` contract: docs/archive/0118.
  *
- * Locked decisions (todos/0118, do not relitigate): prebuilt only (never trigger
+ * Locked decisions (docs/archive/0118, do not relitigate): prebuilt only (never trigger
  * the sibling's build); OFF by default and flag-gated (a base bake with no
  * overlay flag stays byte-identical to today); loud failure (a requested overlay
  * that's missing or fails verification is FATAL — never a quiet degradation);
@@ -783,7 +783,7 @@ function plantOverlays(mfs, loaded, log) {
  * declarative surface gucman plants at install time). A plain bake is the
  * MINIMAL image (the deploy artifact); dev/test bakes fold the packages
  * back in with --packages=all so the existing estate sees the same /usr it
- * always did (the todos/0118 overlay precedent: opt-in, identity-recorded).
+ * always did (the docs/archive/0118 overlay precedent: opt-in, identity-recorded).
  *
  * Baked-mode layout (derived mechanically from the package definition — no
  * per-package special cases): the package tree plants under
@@ -791,7 +791,7 @@ function plantOverlays(mfs, loaded, log) {
  * /usr/opt/<name>/<rel>, each menu entry becomes
  * /usr/share/menu/<group>/<entry> -> /usr/bin/<cmd>, each openwith key
  * appends "<ext>\t/bin/<cmd>" to the baked /usr/share/openwith seed, and
- * each `commands` claim (todos/0338) is spliced AHEAD of the baked
+ * each `commands` claim (docs/archive/0338) is spliced AHEAD of the baked
  * /usr/share/cmdalt body as "<name>\t/bin/<cmd>" — the exact shapes these
  * entries had when they lived in image.json. The installed-mode twin
  * (gucman install) is /opt/<name> + /usr/local/bin/<cmd> + /etc/menu +
@@ -808,7 +808,7 @@ function plantOverlays(mfs, loaded, log) {
  *   producers   : an array of native-sibling producer names ('clang',
  *                 'rust', …) whose GATED definitions to include. A gated
  *                 def carries `requires: "native-sibling:<producer>"` (the
- *                 *-clang / *-rust packages; todos/0416) and is included
+ *                 *-clang / *-rust packages; docs/archive/0416) and is included
  *                 iff its producer is in this list. DEFAULT []: gated defs
  *                 are EXCLUDED from every default enumeration. This one
  *                 choke point is what keeps "base gucOS ships with NO
@@ -902,7 +902,7 @@ function findPackageDef(fsMod, pathMod, rootDir, name, opts) {
   return null;
 }
 
-/* The ONE parser of the gate value (todos/0416): `requires:
+/* The ONE parser of the gate value (docs/archive/0416): `requires:
  * "native-sibling:<producer>"` names the sibling repository that produces
  * the package's prebuilt payloads — "clang" (clang-simplified) or "rust"
  * (gucos-rust). One field carries both the gate and the routing: a
@@ -1106,24 +1106,6 @@ function listTreeFiles(fsMod, pathMod, rootDir, entry, label) {
  * such. opts.defs (#612) adds ordered definition-source roots: a package
  * unit derived from a --defs source carries `root` = that source's root,
  * and its whole closure resolves there. */
-/* The full EXT_LIB_MAP (headers AND sources) read from the repo's
- * libc-ext.js, the same JSON-object-literal slice compiler.js itself
- * parses. Node-only; a missing/broken file throws — the ext sources are
- * part of the libc surface, and a silently smaller libc-sources payload
- * is the zombie-fallback failure mode. */
-function readLibcExtMap(fsMod, pathMod, rootDir) {
-  var p = pathMod.join(rootDir, 'libc-ext.js');
-  var text;
-  try { text = fsMod.readFileSync(p, 'utf-8'); }
-  catch (e) {
-    throw new Error('libc-sources: ' + p + ' is unreadable (' + e.message + ')');
-  }
-  var start = text.indexOf('{'), end = text.lastIndexOf('}');
-  if (start < 0 || end < start)
-    throw new Error('libc-sources: EXT_LIB_MAP object literal not found in libc-ext.js');
-  return JSON.parse(text.slice(start, end + 1));
-}
-
 function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
   opts = opts || {};
   var pkgDir = opts.packagesDir || pathMod.join(rootDir, 'packages');
@@ -1273,9 +1255,9 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
   var units = {};   // name -> unit; 'package' derivation wins over 'image'
 
   // kind 'builtin' — the compiler's OWN standard library (ticket #439): the
-  // headers + .c implementation units living as literals inside compiler.js,
-  // plus ext/'s vendored pieces via libc-ext.js. Neither is a repo source
-  // tree #407's closure rule can reach, so the payload is generated from the
+  // headers + .c implementation units living as literals inside compiler.js
+  // (the vendored musl regex/fnmatch/glob/search.h pieces included). Not a
+  // repo source tree #407's closure rule can reach, so the payload is generated from the
   // SAME maps the compiler compiles from (inline `content` entries), landing
   // at /usr/local/src/libc on install. The baked /usr/include twin
   // (foldStdlibHeaders) carries the headers in the base image; this unit is
@@ -1297,17 +1279,13 @@ function sourcePackageDefs(fsMod, pathMod, rootDir, opts) {
     stdlibHeaderMap(CJS).forEach(function (text, n) { put(n, text, 'header'); });
     var srcs = CJS.getStdlibSources();
     Object.keys(srcs).sort().forEach(function (n) { put(n, srcs[n], 'source'); });
-    var ext = readLibcExtMap(fsMod, pathMod, rootDir);
-    Object.keys(ext).sort().forEach(function (n) {
-      if (!/\.h$/.test(n)) put(n, ext[n], 'ext source');   // .h already rode the merged map
-    });
     var version = String(manifest.version | 0);
     units[name] = {
       name: name,
       parent: 'libc',
       kind: 'builtin',
       root: rootDir,
-      inputs: ['compiler.js', 'libc-ext.js'],
+      inputs: ['compiler.js'],
       def: {
         name: name,
         version: version,
@@ -1550,7 +1528,7 @@ function checkReservedPackageFiles(pkg, label) {
  *     <nsgif.h>, <libnsbmp.h>), each checked against its vendor lib.json
  *     and its srclib package payload exactly like freetype's ft2build.h
  *   - packages/win32.json SHIPS every veneer source under src/win32/ (the
- *     payload half — todos/0387). A require block can only name what the
+ *     payload half — docs/archive/0387). A require block can only name what the
  *     package actually plants: `0370` added listview.c to lib.json but to
  *     neither list, and the two halves fail in different places — the
  *     missing require is a loud mkpkg refusal, the missing PAYLOAD file
@@ -1801,7 +1779,7 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
       throw new Error("package '" + pkgName + "': " + p + ' conflicts with an existing image entry');
     m.system.files[p] = entry;
   }
-  var cmdaltClaims = '';   // todos/0338: folded `commands` claims, spliced below
+  var cmdaltClaims = '';   // docs/archive/0338: folded `commands` claims, spliced below
   names.forEach(function (name) {
     var owner = findPackageDef(fsMod, pathMod, rootDir, name, { packagesDir: pkgDir, defs: opts.defs });
     var srcRoot = owner.root;
@@ -1918,7 +1896,7 @@ function foldPackages(fsMod, pathMod, rootDir, manifest, which, opts) {
         throw new Error('folding package openwith keys needs an inline-content /usr/share/openwith seed');
       ow.content += ext + '\t/bin/' + cmd + '\n';
     });
-    // `commands` (todos/0338): the package CLAIMS a dispatched command name.
+    // `commands` (docs/archive/0338): the package CLAIMS a dispatched command name.
     // The runtime twin is gucman APPENDING the same key+value line to
     // /etc/cmdalt, which outranks the baked suggestion — so the folded
     // claims are collected here and spliced in AHEAD of the baked
@@ -2045,13 +2023,8 @@ function foldDesktopDefaults(manifest) {
 /* ---- baked standard-library headers (ticket #439) ----
  *
  * stdlibHeaderMap(CompilerJS) -> the compiler's MERGED builtin-header map
- * (Map<name, text>): the inline standardHeaders plus libc-ext.js's .h
- * entries, read through createDefaultPPRegistry() — the exact surface
- * `#include <...>` resolves against, in both environments. The ext headers
- * are REQUIRED here even though the compiler treats libc-ext.js as
- * optional: a bake that silently proceeded without them would ship a
- * /usr/include whose contents depend on which files sat next to
- * compiler.js, and the two embedders' blobs could differ byte-for-byte.
+ * (Map<name, text>), read through createDefaultPPRegistry() — the exact
+ * surface `#include <...>` resolves against, in both environments.
  *
  * foldStdlibHeaders(manifest, CompilerJS) plants the whole map as inline
  * `content` entries under /usr/include. The planted files are
@@ -2063,14 +2036,7 @@ function foldDesktopDefaults(manifest) {
  * Collisions with existing image entries (a folded package's srclib
  * symlink top, a future manifest entry) throw loudly — the claim() rule. */
 function stdlibHeaderMap(CompilerJS) {
-  var pp = CompilerJS.createDefaultPPRegistry();
-  (pp.extProvidedHeaders || []).forEach(function (n) {
-    if (!pp.standardHeaders.has(n))
-      throw new Error('stdlib header bake: <' + n + '> is missing from the merged ' +
-        'standardHeaders map — libc-ext.js was not loaded; baking without it would ' +
-        'ship an environment-dependent /usr/include');
-  });
-  return pp.standardHeaders;
+  return CompilerJS.createDefaultPPRegistry().standardHeaders;
 }
 
 function foldStdlibHeaders(manifest, CompilerJS) {
@@ -2159,7 +2125,7 @@ function nodeOverlayIo(fsMod, pathMod, cryptoMod) {
  *     launcher). The cmdalt seed is EXEMPT by design: its values name
  *     PACKAGES (`python  cpython-clang` is a role suggestion), and an
  *     unresolvable pick is cmdalt's specified loud-127-with-a-named-fix
- *     path (todos/0338), not a dead icon.
+ *     path (docs/archive/0338), not a dead icon.
  *
  * Returns an array of error strings (empty = clean); bakeSystemImage
  * throws on any. Exported for the tests/host/test_manifest_refs.js legs.
@@ -2432,7 +2398,7 @@ function checkManifestRefs(manifest) {
   return errs;
 }
 
-/* ---- baking the read-only system image (todos/0040) ----
+/* ---- baking the read-only system image (docs/archive/0040) ----
  *
  * Bakes manifest.system into sysStore as a sealed, independently mountable
  * BlockFS v4 blob whose root is the /usr subtree (bin/, share/, local).
@@ -2470,7 +2436,7 @@ function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
   // never drift from what `#include <...>` actually resolves (the builtins
   // win by design — these are the readable documentation of that surface).
   manifest = foldStdlibHeaders(manifest, CompilerJS);
-  // Overlays (todos/0118): read + verify BEFORE the ~minute-long bake so a bad
+  // Overlays (docs/archive/0118): read + verify BEFORE the ~minute-long bake so a bad
   // flag fails fast. Off by default — an empty/absent io.overlays leaves the
   // base bake byte-identical to today (no overlay dirs, files, provenance, or
   // os-release OVERLAYS line are written).
@@ -2479,7 +2445,7 @@ function bakeSystemImage(BLOCK_FS, CompilerJS, sysStore, manifest, io) {
     ? loadOverlays(overlaySpecs, io.overlayIo, !!io.requireCleanOverlays, log)
     : [];
   if (sysStore.size() >= 256) sysStore.setBytes(0, new Uint8Array(256)); // force format
-  // Deterministic bake clock (todos/0249): every inode a/m/c/btime in the
+  // Deterministic bake clock (docs/archive/0249): every inode a/m/c/btime in the
   // sealed blob comes from BlockFS._now(); with the wall clock two bakes of
   // an identical tree differ → different sha256 → the deploy's
   // content-hashed image name churns on every rebuild. Stamp everything
@@ -2563,10 +2529,10 @@ function bakedVersion(BLOCK_FS, store) {
 /* The overlay set a blob was baked with (its /usr/share/os-release OVERLAYS=
  * line — bakeSystemImage writes it only when overlays were applied), as a
  * SORTED array of ids, or [] for a base blob / anything unreadable. This is
- * the second axis of image identity (todos/0118): a base blob and a
+ * the second axis of image identity (docs/archive/0118): a base blob and a
  * +clang-apps blob share a VERSION_ID but differ here, so a freshness gate
  * that folds overlays in must compare this against the DESIRED set (serve.js
- * --clang, todos/0141) — not just the version. */
+ * --clang, docs/archive/0141) — not just the version. */
 function bakedOverlays(BLOCK_FS, store) {
   try {
     var fs = BLOCK_FS.createV4(store, { readonly: true });
@@ -2609,7 +2575,7 @@ function normalizeRelPath(p) {
   return out.join('/');
 }
 
-/* ---- a project's out-of-directory inputs (todos/0354) ----
+/* ---- a project's out-of-directory inputs (docs/archive/0354) ----
  *
  * projectExternalDirs(proj, dir) -> [repo-relative dir, ...]
  * The directories a bin.json/lib.json at `dir` pulls bake inputs from that
@@ -2650,7 +2616,7 @@ function projectExternalDirs(proj, dir) {
   return out;
 }
 
-/* ---- bake-input freshness (todos/0082) ----
+/* ---- bake-input freshness (docs/archive/0082) ----
  *
  * newestBakeInput(fsMod, pathMod, rootDir, manifest) -> { mtimeMs, path }
  * The newest mtime across everything that can change the system blob's
@@ -2660,7 +2626,7 @@ function projectExternalDirs(proj, dir) {
  * with the whole project directory walked (dir-granular on purpose:
  * quoted includes resolve beside their sources) and every directory its
  * sources/includes/srcRoots reach OUTSIDE that dir walked too
- * (projectExternalDirs, todos/0354) — plus each `bin` blob.
+ * (projectExternalDirs, docs/archive/0354) — plus each `bin` blob.
  * Node-only (statSync), like NodeFileStore.
  *
  * A blob or fixture whose mtime is older than this is STALE no matter
@@ -2746,7 +2712,7 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest, opts) {
     var proj;
     try { proj = JSON.parse(fsMod.readFileSync(pathMod.join(root, n), 'utf-8')); } catch (e) { return; }
     (proj.deps || []).forEach(function (d) { addProject(root, dir + '/' + d); });
-    // `deps` was never the only way in (todos/0354): sources/includes/
+    // `deps` was never the only way in (docs/archive/0354): sources/includes/
     // srcRoots reaching outside the project dir are bake inputs too. The
     // os root keeps its runtime-only skip list wherever it is reached from
     // (gucman's `includes: [".."]`), so this can't enrol os.html.
@@ -2756,9 +2722,6 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest, opts) {
   }
   statFile(pathMod.join(rootDir, 'compiler.js'));
   statFile(pathMod.join(rootDir, 'host.js'));
-  // libc-ext.js is bake CONTENT since ticket #439 (its .h entries bake to
-  // /usr/include via foldStdlibHeaders), not just a runtime sibling.
-  statFile(pathMod.join(rootDir, 'libc-ext.js'));
   walk(pathMod.join(rootDir, 'os'), BAKE_INPUT_SKIP);
   // Package definitions are bake inputs whenever packages fold in (a fat
   // fixture must restale on a packages/*.json edit); scanned unconditionally
@@ -2820,7 +2783,7 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest, opts) {
  * buildProject/createCcDriver; this file — packageControl/listTreeFiles/
  * seedEntries; tools/mkpkg.js — tar/control encoding), the definition, and
  * each file entry's closure (project dirs through deps AND external
- * sources/includes — projectExternalDirs, todos/0354 — plus `bin` blobs,
+ * sources/includes — projectExternalDirs, docs/archive/0354 — plus `bin` blobs,
  * os/-relative `c`/`text` assets, `tree` enumerations, and a native
  * sibling's overlay manifest). Deliberately NARROW — the os/ tree at large
  * is not an input, so unrelated OS work doesn't force a package recompile
@@ -2840,7 +2803,7 @@ function newestBakeInput(fsMod, pathMod, rootDir, manifest, opts) {
  *                   os-common.js) always stat against rootDir: whichever
  *                   repo the definition lives in, the BUILDER is c-compiler.
  *
- * Extracted from tools/mkpkg.js (todos/0363) so the red control in
+ * Extracted from tools/mkpkg.js (docs/archive/0363) so the red control in
  * tests/host/test_bakeinput_sources.js can point it at a synthetic tree —
  * that test carries one leg per input class above plus the narrow-scope
  * pin; a new entry kind added here needs a leg there. */
@@ -2888,7 +2851,7 @@ function newestPkgInput(fsMod, pathMod, rootDir, name, pkg, opts) {
     var proj;
     try { proj = JSON.parse(fsMod.readFileSync(pathMod.join(assetRoot, n), 'utf-8')); } catch (e) { return; }
     (proj.deps || []).forEach(function (d) { addProject(dir + '/' + d); });
-    // Same hole as newestBakeInput's (todos/0354): a source/include reaching
+    // Same hole as newestBakeInput's (docs/archive/0354): a source/include reaching
     // outside the project dir is an input `deps` recursion never sees. This
     // does NOT widen the narrow scope above — no packaged project's external
     // dirs reach the os/ tree at large (they are freetype/libpng/os/win32,
@@ -2981,7 +2944,7 @@ function seedHostKeyScheme(kfs, platform) {
   return true;
 }
 
-/* ---- persisted host verdict (ticket #96 / todos/0432) ----
+/* ---- persisted host verdict (ticket #96 / docs/archive/0432) ----
  * /run/host-platform records the per-boot host hint ('mac' | 'other') so
  * in-OS consumers can read it — first user is keys.h's implicit host-native
  * paste row (⌘V pastes on a Mac host regardless of the in-OS scheme, which
@@ -3029,7 +2992,7 @@ NodeFileStore.prototype.resize = function (newSize) { this._fs.ftruncateSync(thi
 NodeFileStore.prototype.flush = function () { this._fs.fsyncSync(this._fd); };
 NodeFileStore.prototype.close = function () { this._fs.closeSync(this._fd); };
 
-/* ---- network bridge fetch (ticket #349; todos/NETWORK.md Tier 2.5) ----
+/* ---- network bridge fetch (ticket #349; docs/NETWORK.md Tier 2.5) ----
  *
  * The kernel's HTTP transport runs whatever fetch the embedder hands it
  * (KERNEL.md "HTTP transport"). Tier 2.5 makes that fetch SWITCHABLE at

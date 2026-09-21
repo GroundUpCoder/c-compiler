@@ -1,6 +1,6 @@
 // BUG: a negative array size (`int a[-1]`) was silently accepted and
 // produced a negative-size type (negative sizeof, broken layout math
-// downstream). Bug-hunt G22 (todos/0227).
+// downstream). Bug-hunt G22 (docs/archive/0227).
 // C11: 6.7.6.2p1 (constraint) — the size expression shall be greater
 // than zero. (Explicit [0] stays accepted — the GNU zero-length array.)
 // EXPECT: compile error (exit 1).

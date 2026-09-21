@@ -2,7 +2,7 @@
 
 Upstream: https://www.cairographics.org/releases/pixman-0.42.2.tar.gz
 (sha256 `ea1480efada2fd948bc75366f7c349e1c96d3297d09a3fe62626e38e234a625e`).
-Pixel-manipulation library — cairo's raster backend (todos/0061).
+Pixel-manipulation library — cairo's raster backend (docs/archive/0061).
 
 ## What's vendored
 

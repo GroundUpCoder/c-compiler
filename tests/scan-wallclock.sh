@@ -1,5 +1,5 @@
 #!/bin/sh
-# todos/0361 — the survey command. Lists every tests/unit/** source that READS A
+# docs/archive/0361 — the survey command. Lists every tests/unit/** source that READS A
 # CLOCK, which is the necessary condition for pass/fail to depend on elapsed
 # wall-clock time. Run from the repo root; classify the hits by hand (the
 # classification of the current 22 lives in logs/2026-07-28/0361-wallclock.md).

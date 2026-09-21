@@ -1,11 +1,11 @@
-/* ksvc.c — the kernel service blob (todos/0275): the kernel's C half.
+/* ksvc.c — the kernel service blob (docs/archive/0275): the kernel's C half.
  *
  * Built at bake time by OUR compiler (buildProject, like every manifest
  * `project` entry), seeded at /usr/lib/ksvc.wasm, instantiated
  * synchronously IN the kernel's thread by os/ksvc.js over a minimal
  * read-only import env — no process, no pcb, no RPC. Capabilities land
  * as new __export'd entries on THIS blob (design:
- * todos/0275-kernel-text-service-design.md; seam doc: KERNEL.md).
+ * docs/archive/0275-kernel-text-service-design.md; seam doc: KERNEL.md).
  *
  * First capability: label TEXT — FreeType + fontchain.h rasterization
  * for window titles, the close-box 'x' and Exposé captions, replacing
@@ -19,7 +19,7 @@
  * order, opened LAZILY at first codepoint miss; ASCII <=126 always
  * renders from face 0 (the pre-chain contract); a total miss draws the
  * synthesized tofu box (cell * wcwidth), never '?'. */
-#include "../fontcore.h"   /* the shared glyph pipeline (todos/0277) —
+#include "../fontcore.h"   /* the shared glyph pipeline (docs/archive/0277) —
                             * pulls ft2build/freetype, fontchain.h, wcwidth.h */
 #include <stdlib.h>
 #include <string.h>

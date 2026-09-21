@@ -264,12 +264,12 @@ fcntl_ioctl_impl(PyObject *module, int fd, unsigned int code,
         // Fall-through to outside the 'if' statement.
     }
     Py_BEGIN_ALLOW_THREADS
-    /* gucOS vendor patch (todos/0340, CPYTHON.md §4.2): POSIX declares ioctl()
+    /* gucOS vendor patch (docs/archive/0340, CPYTHON.md §4.2): POSIX declares ioctl()
        variadic, so upstream can hand it the plain int `arg`. This libc declares
        it ioctl(int, unsigned long, void *) — a fixed third parameter, which the
        int does not implicitly convert to. The cast reproduces exactly what the
        variadic call would have passed. Whether the libc prototype should become
-       variadic is todos/0325 Group D; until it does, this is the only site. */
+       variadic is docs/archive/0325 Group D; until it does, this is the only site. */
     ret = ioctl(fd, code, (void *)(intptr_t)arg);
     Py_END_ALLOW_THREADS
     if (ret < 0) {

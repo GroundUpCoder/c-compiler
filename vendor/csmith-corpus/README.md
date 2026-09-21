@@ -17,14 +17,14 @@ and compares the checksum against the manifest. On a width-normalized
 program (below), any mismatch is a guaranteed miscompile (Csmith
 programs avoid all undefined and unspecified behavior by construction).
 
-## Oracle soundness — literal-suffix width normalization (todos/0404)
+## Oracle soundness — literal-suffix width normalization (docs/archive/0404)
 
 The recorded checksums come from host clang, which is LP64 (`long` is
 64-bit); compiler.js targets wasm32, which is ILP32 (`long` is 32-bit).
 A raw csmith program can therefore be a DIFFERENT program on each side:
 `0xD7D41305L` is a signed 64-bit `long` natively but an unsigned 32-bit
 `long` under ILP32 (C11 6.4.4.1p5), flipping comparisons against it.
-Seed 450020699 (`c450020699.c`, added by todos/0404) is the proof: its
+Seed 450020699 (`c450020699.c`, added by docs/archive/0404) is the proof: its
 correct ILP32 execution never terminates, which the live tier had
 flagged as a hang-class miscompile.
 

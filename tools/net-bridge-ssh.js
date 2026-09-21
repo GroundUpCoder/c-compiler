@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // net-bridge-ssh.js -- run the Tier 2.5 HTTP bridge on a REMOTE host
-// (ticket #380; todos/NETWORK.md Tier 2.5, which landed tools/net-bridge.js
+// (ticket #380; docs/NETWORK.md Tier 2.5, which landed tools/net-bridge.js
 // itself as #349).
 //
 //   node tools/net-bridge-ssh.js HOST [--port=8199] [--remote-port=PORT]

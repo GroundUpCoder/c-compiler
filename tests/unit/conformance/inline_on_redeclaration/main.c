@@ -3,11 +3,11 @@
 //      definition, or on a block-scope declaration never reached the
 //      definition node. `fnMeta.inlineHint` stayed false and the WAST
 //      inliner used calleeCap (64 nodes) instead of hintCalleeCap (256) —
-//      measurably different codegen for the same function. todos/0328.
+//      measurably different codegen for the same function. docs/archive/0328.
 // C11: 6.7.4p1 — "a function declared with an inline function specifier is
 //      an inline function"; the specifier is a property of the FUNCTION,
 //      not of one declaration of it, so it accumulates across
-//      re-declarations the way attributes already did (todos/0214).
+//      re-declarations the way attributes already did (docs/archive/0214).
 //      NB this is distinct from 6.7.4p7 (whether a translation unit
 //      provides an EXTERNAL definition), which requires ALL file-scope
 //      declarations to carry `inline` and is decided separately.

@@ -1,4 +1,4 @@
-/* SDL3 cursor API (todos/0105): system shapes only, tracked application-wide.
+/* SDL3 cursor API (docs/archive/0105): system shapes only, tracked application-wide.
    - SDL_GetDefaultCursor never NULL; SDL_GetCursor starts at the default.
    - SDL_CreateSystemCursor validates the id (NULL on out-of-range).
    - SDL_SetCursor swaps the active cursor and returns true; NULL is the

@@ -6,7 +6,7 @@
 // (each an os/boot.js node at ~2-3 GB), and the sweep drives a real Chromium
 // per file. A SINGLE runner is bounded — the kernel pool by the memory-aware
 // RAM budget (see suite-runner.js: ramBudgetGb), the sweep by being serial
-// (todos/0045 one-kernel-per-origin lock). What nothing bounded until now was
+// (docs/archive/0045 one-kernel-per-origin lock). What nothing bounded until now was
 // TWO heavy runners at once: two work lanes, a stray re-run, or a coordinator
 // kicking a suite while another still holds one. Their process trees stack and
 // exhaust RAM.
@@ -18,7 +18,7 @@
 // reboot, the desktop just vanished to the login screen). Post-mortem lives in
 // the "Machine Crash Investigation Log" thread.
 //
-// POLICY (todos/0342, which also closed todos/0303). The unit of exclusion is
+// POLICY (docs/archive/0342, which also closed docs/archive/0303). The unit of exclusion is
 // the process tree that spends the RAM — a full-OS boot (`node os/boot.js`,
 // ~2-4 GB) or an os.html boot in a Chromium — so the guard runs at the seams
 // every such boot funnels through, NOT at a list of callers (caller lists
@@ -40,7 +40,7 @@
 //     Chromium, so a hand-run single os-*.mjs is guarded too.
 // The one uncoverable path is a human browser tab against a dev serve.js — no
 // repo process can lock a human's browser (the 0045 Web Lock guards image
-// coherence there, not RAM). Recorded as an exclusion in todos/done/0342.
+// coherence there, not RAM). Recorded as an exclusion in docs/archive/0342.
 // Exit 3 always means LOCK HELD (with a `[heavy-lock]` stderr marker — match
 // BOTH, an init script can exit 3 legitimately); it is never a test failure.
 //
@@ -56,7 +56,7 @@
 // degrades to a refusal, never to silent stacking.
 //
 // Light suites (unit/host/blockfs/ext/bench) never take it — PERMISSION, not
-// a gap (ruled in todos/done/0303): they spawn neither a full-OS boot nor a
+// a gap (ruled in docs/archive/0303): they spawn neither a full-OS boot nor a
 // Chromium, and since the guard rides the boot itself, a light suite that
 // ever spawns one gets locked through that boot anyway.
 //
@@ -95,7 +95,7 @@ function sleepMs(ms) {
 
 // The contend-or-refuse core shared by acquireHeavyLock and joinHeavyLock.
 // waitMs > 0 turns a live-holder refusal into a LOUD poll (a status line
-// every 30s — todos/0171: never nap out a clock silently) that acquires when
+// every 30s — docs/archive/0171: never nap out a clock silently) that acquires when
 // the lock frees and exits 3 at the deadline (Infinity = no deadline).
 function contendForLock({ name, waitMs = 0 }) {
   const meta = () => JSON.stringify({

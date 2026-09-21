@@ -28,7 +28,7 @@
  * Known residuals (documented, not solved): attribution is by the
  * mutator's lexically-canonical path, so a write through a symlink or
  * hardlink ALIAS attributes to the alias's path, not the watched one
- * (the realpath-is-lexical flavor limit, todos/0263 — the kernel's
+ * (the realpath-is-lexical flavor limit, docs/archive/0263 — the kernel's
  * _watchCanon is the one seam to upgrade when a physical resolver
  * lands); and a writer that never closes gets no settle until
  * FSW_MODIFY is opted into.

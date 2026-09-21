@@ -7,7 +7,7 @@ Evidence: `s3://groundupcoder/gucos/508-passb-r2/2026-08-13/` (74 objects).
 
 ## Instrument
 
-`passb/driver.mjs`: spawns `node os/boot.js --image=build/passb/os-system.img --tty-out
+`logs/2026-08-13/508-passb/driver.mjs` (moved from `passb/` on 2026-09-21): spawns `node os/boot.js --image=build/passb/os-system.img --tty-out
 --wait-lock=900` and drives the tty from a JSON step list (send / waitFor-regex / sleep),
 like a human at the keyboard. The DeepSeek key is read by the driver process and scrubbed
 from every logged byte — after an early leak (tty echo split across stdout chunks defeated

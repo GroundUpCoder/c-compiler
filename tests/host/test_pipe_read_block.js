@@ -1,4 +1,4 @@
-// Host-level regression test (todos/0233, code-debt scan CD5): the
+// Host-level regression test (docs/archive/0233, code-debt scan CD5): the
 // native-fs flavor's pipe read must not return a spurious EOF while the
 // write end is still open. Before the fix, an empty pipe buffer returned
 // 0 ("non-blocking for now") — indistinguishable from EOF, so a reader
@@ -83,7 +83,7 @@ async function main() {
   check('drain: buffered bytes first', (await env.read(rd2, BUF, 16)) === 3);
   check('drain: then EOF', (await env.read(rd2, BUF, 16)) === 0);
 
-  // --- R1 (todos/0252): a zero-length read NEVER blocks ------------------
+  // --- R1 (docs/archive/0252): a zero-length read NEVER blocks ------------------
   // POSIX: read(fd, buf, 0) returns 0 IMMEDIATELY. The CD5 blocking fix
   // over-reached: an empty pipe with a LIVE writer parked a count===0 read
   // on the waiter list — a deadlock until some unrelated write/close. The

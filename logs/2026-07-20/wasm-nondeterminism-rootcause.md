@@ -19,7 +19,7 @@
   headers, e.g. `langinfo.h`; a header-presence flip changes which functions compile
   and shifts every baked fp by one, matching the symptom exactly).
 
-## Harness (committed under `build/nondeterminism-0269/`)
+## Harness (committed under `logs/2026-07-20/nondeterminism-0269/`)
 
 - `build-once.js`      — build vendor/sameboy/bin.json with HEAD compiler.js+os-common.js, print sha256+len.
 - `build-once-orig.js` — same, but compiler.js+os-common.js pinned at 7d04f1d (`orig/`, extracted via `git show`; vendor/ is unchanged since).
@@ -102,7 +102,7 @@ symptom, and unlike genuine nondeterminism it is consistent with 0 reproduction 
 1. **Harden the byte-identity GATE, not the compiler.** Build in a pristine
    `git worktree` and hash across ≥20 fresh processes (the harness here does exactly
    this). That removes the "first build over a live-edited tree" confound that
-   produced this false P0. Keep `build/nondeterminism-0269/` as the regression
+   produced this false P0. Keep `logs/2026-07-20/nondeterminism-0269/` as the regression
    tripwire.
 2. **Optional determinism insurance (design change, out of scope here):** teach the
    AST-level inliner/tree-shake to preserve funcIdx/slot numbering the way the WAST

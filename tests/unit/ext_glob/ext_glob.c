@@ -1,4 +1,4 @@
-/* glob via the optional libc-ext.js (vendored musl glob). Globs files this test
+/* glob via the vendored musl glob built into compiler.js. Globs files this test
    creates under TEST_TMPDIR with a unique prefix, so it is deterministic and
    independent of anything else in the directory. */
 #include <stdio.h>

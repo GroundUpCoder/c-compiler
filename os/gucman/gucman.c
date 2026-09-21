@@ -19,7 +19,7 @@
  * that served the OS, described by /packages/index.json. Install target is
  * /opt/<name>/ with tracked symlinks into /usr/local/bin (already first on
  * PATH). The manifest is FULLY DECLARATIVE — a package's control.json lists
- * its bin commands, openwith keys, command claims (todos/0338 —
+ * its bin commands, openwith keys, command claims (docs/archive/0338 —
  * dispatched command NAMES this package provides), menu entries, font
  * faces (fallback-
  * chain lines in /etc/fonts/fallback, Unicode Phase D), srclib tiers
@@ -206,7 +206,7 @@ static int gm_exists(const char *path) {
     return lstat(path, &st) == 0;
 }
 
-/* Same file THROUGH symlinks (todos/0338 — the dispatch-link test: every
+/* Same file THROUGH symlinks (docs/archive/0338 — the dispatch-link test: every
  * /usr/bin/<name> dispatch link stats as the one /usr/bin/cmdalt inode). */
 static int gm_same_file(const char *a, const char *b) {
     struct stat sa, sb;
@@ -569,7 +569,7 @@ static int gm_openwith_set(const char *key, const char *value) {
 
 /* ==================== cmdalt claim line add/remove ===================== *
  *
- * A package CLAIMS a dispatched command name (todos/0338 `commands`): one
+ * A package CLAIMS a dispatched command name (docs/archive/0338 `commands`): one
  * "<name>\t<value>" LINE in /etc/cmdalt. Deliberately APPEND-not-replace —
  * unlike an openwith association, a command key may carry several lines
  * (that is the candidate set the picker offers, and the first line wins, so
@@ -1451,7 +1451,7 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
             fail = 1;
             break;
         }
-        /* todos/0338: never plant over a name the base image DISPATCHES.
+        /* docs/archive/0338: never plant over a name the base image DISPATCHES.
          * /usr/local/bin precedes /bin on PATH and /var/local is user
          * territory an image upgrade never rewrites, so this link would
          * shadow /usr/bin/<cmd> -> /usr/bin/cmdalt forever, and the only
@@ -1494,7 +1494,7 @@ static int gm_install_one(const char *base, cJSON *index, const char *name,
         }
         cJSON_AddItemToArray(db_ow, cJSON_CreateString(it->string));
     }
-    /* `commands` (todos/0338): claim a dispatched command NAME. The value
+    /* `commands` (docs/archive/0338): claim a dispatched command NAME. The value
      * names one of this package's own bin commands, and the claim line
      * points at the /usr/local/bin symlink we just planted — so the claim
      * dies with the package even if someone edits /etc/cmdalt by hand.

@@ -1,4 +1,4 @@
-// gdi32 browser acceptance (todos/0057, design todos/WIN32.md): boot the
+// gdi32 browser acceptance (docs/archive/0057, design docs/WIN32.md): boot the
 // reference OS page in headless Chromium, launch the seeded /bin/gdidemo
 // from the shell, and assert the Petzold-style GDI scene composits
 // correctly on the desktop canvas — shapes, hatch, thick lines, text ink,

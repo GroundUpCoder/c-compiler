@@ -4,7 +4,7 @@
 // host.js's lazy Dawn probe (`webgpu` npm package, a devDependency) backs the
 // per-process device; present is the canvas-less tail: copyTextureToBuffer
 // readback -> the surface's shm SAB, so `wmctl shot` frames are exactly what
-// any CPU app would produce (todos/WM.md "Headless testing tiers", tier 1).
+// any CPU app would produce (docs/WM.md "Headless testing tiers", tier 1).
 //
 // Assertions are TOLERANCE-diff, not bit-exact goldens: GPU output is
 // per-platform stable, not cross-platform identical. The expected center color
@@ -60,7 +60,7 @@ function sessionRender() {
     'SID=$(wmctl list | grep "gpubox$" | sed "s/[^0-9].*//")',
     'wmctl wait seq $SID 1',                         // first Dawn frame presented (device+surface ready) (0155)
     'wmctl shot $SID /root/g0.png && echo shot0-ok',
-    // Client resize (todos/0019): configure -> gpubox reconfigures its Dawn
+    // Client resize (docs/archive/0019): configure -> gpubox reconfigures its Dawn
     // surface + depth at 320x200 -> readback ack swaps the kernel buffer.
     'wmctl resize $SID 320 200 && echo resize-ok',
     'wmctl wait dim $SID 320x200',                   // reconfigure ack: readback swapped the kernel buffer (0155)

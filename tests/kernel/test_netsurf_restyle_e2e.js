@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // A CLASS-SELECTOR RESTYLE ON AN EXISTING ELEMENT REPAINTS, PROMPTLY, IN
-// THE OS (todos/0316; NETSURF-JS.md §9 Lane B's residual, tripped over by
+// THE OS (docs/archive/0316; NETSURF-JS.md §9 Lane B's residual, tripped over by
 // §10).
 //
 // Lane B's bridge re-boxes the document when JS mutates the DOM, and
@@ -142,7 +142,7 @@ document.getElementById('hit').addEventListener('click', function () {
 	/* an element with NO class attribute gains one */
 	idsel.className = 'on';
 	/* an element whose class attribute already EXISTS has its value
-	 * rewritten — the case todos/0316 is about */
+	 * rewritten — the case docs/archive/0316 is about */
 	slab.className = 'slab on';
 	/* the Lane B insertion control, appended LAST and reporting the DOM
 	 * read-back: teal means the re-conversion ran AND both writes took,

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// os-drive — boot the OS page once and DRIVE it (todos/0171).
+// os-drive — boot the OS page once and DRIVE it (docs/archive/0171).
 //
 // The committed replacement for the throwaway boot-type-probe scripts every
 // browser-flake investigation hand-builds (and the rakes they step on: a
@@ -44,7 +44,7 @@ import readline from 'node:readline';
 import { openOsSession } from '../tests/browser/lib/os-harness.mjs';
 import { assertSameTree } from '../tests/lib/tree-guard.js';
 
-// Cross-tree preflight (todos/0341, extended by #142): drives its OWN tree's
+// Cross-tree preflight (docs/archive/0341, extended by #142): drives its OWN tree's
 // serve.js/boot stack (and their bakes). Screenshot writes are caller-path
 // relative, but the driven stack is not. Hand-run only — no harness spawns.
 assertSameTree(path.dirname(fileURLToPath(import.meta.url)),

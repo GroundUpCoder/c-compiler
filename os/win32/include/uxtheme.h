@@ -1,4 +1,4 @@
-/* uxtheme.h — visual-styles surface for the port corpus (todos/0060).
+/* uxtheme.h — visual-styles surface for the port corpus (docs/archive/0060).
  * Declaration-only: calc's theme.c is the only consumer; the veneer has
  * no theming (Win95 look by design), so these will stay in the demand
  * log until a stub slice returns "not themed". */

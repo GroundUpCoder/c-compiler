@@ -10,7 +10,7 @@
 //   drag does NOT (and still moves the window — absolute routing intact);
 //   with the lock granted, locked moves flow as rel deltas and quake keeps
 //   presenting; releasing reverts routing; a SE-grip drag is a no-op (quake
-//   is fixed-res — no SDL_WINDOW_RESIZABLE, todos/0021); wmctl close quits
+//   is fixed-res — no SDL_WINDOW_RESIZABLE, docs/archive/0021); wmctl close quits
 //   quake cleanly and withdraws the wanted state.
 //
 // CAVEAT: Chromium DENIES requestPointerLock under ALL Playwright-driven
@@ -45,7 +45,7 @@ try {
   // Don't race hush's banner: typed input before the first prompt is eaten.
   await page.waitForFunction(() => /~ #/.test(window.__osOut), { timeout: 30000, polling: 'raf' });
 
-  // VTs (todos/0022): shell typing on VT1, canvas pixels/input on VT2 (the
+  // VTs (docs/archive/0022): shell typing on VT1, canvas pixels/input on VT2 (the
   // compositor may idle while its placeholder canvas is hidden). Deep VT
   // coverage lives in os-vt.mjs.
   const { setVt } = osHelpers(page);
@@ -156,7 +156,7 @@ try {
     async () => check('title drag moved the window while unlocked (wmctl list geometry + r flag)',
       false, await page.evaluate(() => window.__osOut.slice(-500))));
 
-  // Fixed-res + viewport scaling (todos/0021 + 0024): quake has no
+  // Fixed-res + viewport scaling (docs/archive/0021 + 0024): quake has no
   // SDL_WINDOW_RESIZABLE (the '-' after 'r' above), so a drag on the SE
   // frame grip SCALES its dst rect instead of configuring — the wm answers
   // the EV_SCALE_REQ with an aspect fit of the (400,260) box: 1.25x ->
@@ -173,8 +173,8 @@ try {
     const i = window.__osOut.indexOf('GRIP-DONE');
     return i >= 0 && /320x200\+72\+76\t400x250\t\d+\tf..r-----\tQuake/.test(window.__osOut.slice(i));
   }, { timeout: 20000, polling: 'raf' }).then(
-    () => check('SE grip drag scales fixed-res quake (aspect-fit dst, buffer untouched — todos/0024)', true),
-    async () => check('SE grip drag scales fixed-res quake (aspect-fit dst, buffer untouched — todos/0024)',
+    () => check('SE grip drag scales fixed-res quake (aspect-fit dst, buffer untouched — docs/archive/0024)', true),
+    async () => check('SE grip drag scales fixed-res quake (aspect-fit dst, buffer untouched — docs/archive/0024)',
       false, await page.evaluate(() => window.__osOut.slice(-500))));
 
   // Clean quit via the WM close request.

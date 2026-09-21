@@ -2,9 +2,9 @@
 //      errno (<errno.h> ENOTSOCK 88 .. EINPROGRESS 115) printed "Unknown error"
 //      -- a refused connect() reported "Unknown error" instead of the real string.
 // C11: 7.24.6.2 -- strerror maps every valid errno to a string; the socket errnos
-//      are defined by <errno.h> here (todos/0008), so they must map too.
+//      are defined by <errno.h> here (docs/archive/0008), so they must map too.
 // EXPECT: the glibc wording for each errno (this libc is glibc-modeled; the
-//         existing strerror strings already use glibc wording). todos/0243.
+//         existing strerror strings already use glibc wording). docs/archive/0243.
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -29,7 +29,7 @@ int main(void) {
   printf("%d %s\n", EHOSTUNREACH, strerror(EHOSTUNREACH));
   printf("%d %s\n", EALREADY, strerror(EALREADY));
   printf("%d %s\n", EINPROGRESS, strerror(EINPROGRESS));
-  /* Non-socket errnos that were also unnamed before todos/0243. */
+  /* Non-socket errnos that were also unnamed before docs/archive/0243. */
   printf("%d %s\n", ENOLCK, strerror(ENOLCK));
   printf("%d %s\n", EOVERFLOW, strerror(EOVERFLOW));
   return 0;

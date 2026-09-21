@@ -179,7 +179,7 @@ check('browserPreflight stands down when the sweep is not selected', () => {
 });
 check('browserPreflight refuses a broken tree whenever sweep is in the set', () => {
   const broken = makeFixture(path.join(tmp, 'disp2'), { installed: DRIFT });
-  for (const ordered of [['sweep'], ['todos', 'unit', 'sweep']]) {
+  for (const ordered of [['sweep'], ['liabilities', 'unit', 'sweep']]) {
     const r = browserPreflight(ordered, broken.browserDir);
     assert.strictEqual(r.ok, false, `sweep in [${ordered}] must pre-flight`);
     assert.ok(r.message.includes(DRIFT));

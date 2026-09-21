@@ -1,4 +1,4 @@
-/* sounds.h — the event-sound scheme, ONE policy in ONE place (todos/0094).
+/* sounds.h — the event-sound scheme, ONE policy in ONE place (docs/archive/0094).
  *
  * Header-only by design (the openwith.h precedent): static functions shared
  * by textual inclusion — os/wm.c (the SystemStart boot chime) and

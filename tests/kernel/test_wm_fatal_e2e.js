@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// R5 (todos/0255): wm.c's fatal diagnostics must name the layer that
+// R5 (docs/archive/0255): wm.c's fatal diagnostics must name the layer that
 // actually failed. Pre-fix, the EV_SCREEN recreate paths funneled through
 // the errno-bearing fatal(), so an SDL_CreateWindow failure — which sets
 // SDL_GetError(), not errno — printed "wm: cannot recreate the desktop

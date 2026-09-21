@@ -10,7 +10,7 @@
 //   - SDL_Delay pre-window             -> blockingSleepMs (private cell)
 //   - SDL_Delay with a window          -> sdlDelay over pumpWait (input ring)
 // Per verb, 40 x 16ms against CLOCK_MONOTONIC; asserts are split by
-// instrument (todos/PRINCIPLES.md): the hard contract bound (never early,
+// instrument (docs/PRINCIPLES.md): the hard contract bound (never early,
 // -0.5ms epsilon for clock quantization) and the statistical quality target
 // (p50 overshoot < 4ms — uncompensated leeway measures 8ms, compensated
 // 0.03ms, so both sides have >2x margin even under CPU load; p50, not p99,
@@ -81,7 +81,7 @@ int main(void) {
     if (!SDL_Init(SDL_INIT_VIDEO)) { printf("NOINIT\\n"); return 3; }
     SDL_Window *w = SDL_CreateWindow("sleepbox", 64, 48, 0);
     if (!w) { printf("NOWIN\\n"); return 3; }
-    /* drain the create-steal FOCUS_GAINED (todos/0256) so the ring is quiet */
+    /* drain the create-steal FOCUS_GAINED (docs/archive/0256) so the ring is quiet */
     SDL_Event ev;
     SDL_WaitEventTimeout(&ev, 2000);
     row("DELAYW", do_delay);         /* windowed: sdlDelay over pumpWait */

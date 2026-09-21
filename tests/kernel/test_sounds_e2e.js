@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Sound scheme end-to-end (todos/0094): a REAL win32 C program (compiled
+// Sound scheme end-to-end (docs/archive/0094): a REAL win32 C program (compiled
 // against os/win32/lib.json) runs as a worker_thread under the kernel and
 // exercises PlaySound (os/win32/winmm.c over the os/sounds.h core) +
 // MessageBeep/MessageBox (user32) against the 0017 kernel mixer. The app

@@ -1,5 +1,5 @@
 'use strict';
-// Shared OS boot driver for the headless kernel e2e tests (todos/0146).
+// Shared OS boot driver for the headless kernel e2e tests (docs/archive/0146).
 //
 // Every `*_e2e.js` used to reimplement the same boilerplate inline: an
 // mkdtemp image dir + `os.img` path, a `node os/boot.js --image=<img> --quiet`
@@ -82,7 +82,7 @@ function driveBoot(script, opts = {}) {
   const r = cp.spawnSync('node', args, spawnOpts);
   if (r.error) throw r.error;
   r.image = image;   // let a follow-up session reuse the same image
-  // Heavy-lock refusal propagation (todos/0342): boot.js exits 3 with a
+  // Heavy-lock refusal propagation (docs/archive/0342): boot.js exits 3 with a
   // `[heavy-lock]` stderr marker when another heavy test job owns the host.
   // That is NOT a test failure — surface the boot's refusal verbatim and exit
   // 3 ourselves, so `node tests/kernel/<e2e>.js` names the holder instead of
@@ -92,7 +92,7 @@ function driveBoot(script, opts = {}) {
     process.stderr.write(String(r.stderr));
     process.exit(3);
   }
-  // Loud-symptom gate (todos/0171): a `wmctl wait` that can't be satisfied
+  // Loud-symptom gate (docs/archive/0171): a `wmctl wait` that can't be satisfied
   // prints `wmctl: wait X timed out after Nms` and exits 1 — but a script
   // with no `set -e` just burns the full timeout and sails on, so a wait on
   // an unreachable condition passes SLOWLY instead of failing. (That is how
@@ -130,10 +130,10 @@ function section(out, name) {
   return parts.length > 1 ? parts[1].split('==')[0] : '';
 }
 
-// ---- the seeded desktop grid model (todos/0184/0185) ----
+// ---- the seeded desktop grid model (docs/archive/0184/0185) ----
 // The seeded /root/Desktop set is DERIVED from os/image.json's user section
 // plus default packages that explicitly preserve a built-in Desktop shortcut
-// (the todos/0166 rule: a new seeded icon must not silently shift hardcoded
+// (the docs/archive/0166 rule: a new seeded icon must not silently shift hardcoded
 // rows) — FILES and DIRS, direct children only (the deck links inside
 // Presentations/ are not icons), plus wm.c's always-recreated Recycle Bin.
 // deskSort replicates wm.c entcmp exactly: Recycle Bin last, dirs first,

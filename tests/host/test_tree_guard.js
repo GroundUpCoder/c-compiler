@@ -1,6 +1,6 @@
 'use strict';
 // tests/host/test_tree_guard.js — the POSITIVE CONTROL for the cross-tree
-// preflight (todos/0341), made durable. "A guard whose failure path was never
+// preflight (docs/archive/0341), made durable. "A guard whose failure path was never
 // exercised is not a guard", so the refusal is exercised here on every run, not
 // just once by hand at landing time.
 //
@@ -60,7 +60,7 @@ const C = path.join(tmp, 'plain'); fs.mkdirSync(C, { recursive: true }); // no .
 const NESTED = makeTree(path.join(A, 'nested'), { git: 'file' });     // a worktree INSIDE A
 const X = makeTree(path.join(tmp, 'treeX'), { git: 'none' });         // an export, no .git
 
-console.log('== cross-tree preflight (todos/0341) ==');
+console.log('== cross-tree preflight (docs/archive/0341) ==');
 
 // ---- THE POSITIVE CONTROL: tree A's harness, launched from tree B's cwd ----
 check('cross-tree launch is REFUSED', () => {

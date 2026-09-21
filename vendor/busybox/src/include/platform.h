@@ -34,7 +34,7 @@
  * unknown attributes are skipped) — swallowing them here made every PACKED
  * struct unpacked (decompress_gunzip's gz-header union was 12 bytes, its
  * BUILD_BUG_ON compile-assert firing invisibly until the compiler learned
- * to diagnose negative array sizes — todos/0231). */
+ * to diagnose negative array sizes — docs/archive/0231). */
 #if !__GNUC_PREREQ(2,7) && !defined(__wasm__)
 # ifndef __attribute__
 #  define __attribute__(x)
@@ -466,7 +466,7 @@ typedef unsigned smalluint;
  * waitpid + getrusage (ticket #619; see the README patch table) */
 # undef HAVE_WAIT3
 /* HAVE_STRSIGNAL stays undef'd even though the libc grew a real strsignal
- * (todos/0325 Group B). This one is NOT a gap: busybox's fallback is a MACRO
+ * (docs/archive/0325 Group B). This one is NOT a gap: busybox's fallback is a MACRO
  * to get_signame(), which deliberately prints the short names ("STOP" rather
  * than "Stopped"), and that is user-visible output the applets are written
  * against. Being a macro it also cannot collide at link. Left as a vendor
@@ -475,7 +475,7 @@ typedef unsigned smalluint;
 # undef HAVE_STRVERSCMP
 # undef HAVE_VASPRINTF
 # undef HAVE_GETLINE
-/* HAVE_MEMRCHR was undef'd here until the libc grew memrchr (todos/0325
+/* HAVE_MEMRCHR was undef'd here until the libc grew memrchr (docs/archive/0325
  * Group B). Unlike strsignal above, libbb/platform.c's fallback is a real
  * DEFINITION, so leaving it undef'd is now a duplicate-symbol link error. */
 /* (MKDTEMP/STRCASESTR stay "available": nothing in the hush build calls

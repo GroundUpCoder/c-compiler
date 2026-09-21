@@ -1,5 +1,5 @@
-// ksvc.js — loader/wrapper for the kernel service blob (todos/0275;
-// design: todos/0275-kernel-text-service-design.md §5/§6).
+// ksvc.js — loader/wrapper for the kernel service blob (docs/archive/0275;
+// design: docs/archive/0275-kernel-text-service-design.md §5/§6).
 //
 // OS_KSVC.load(kfs, {log}) reads /usr/lib/ksvc.wasm through the kernel's
 // MountFS, instantiates it synchronously IN the kernel's thread over an
@@ -140,7 +140,7 @@
       __clock_ns_lo: function () { return 0; },
       __timezone_offset: function () { return 0; },
       // Everything else is OUTSIDE the kernel service surface (§5.2).
-      // The __posix.c block below arrived with todos/0325 Group B: <unistd.h>,
+      // The __posix.c block below arrived with docs/archive/0325 Group B: <unistd.h>,
       // <fcntl.h> and <sys/stat.h> all pull that TU in, and the linker does
       // not drop unreferenced TU functions, so the *at family's imports
       // appear here whether ksvc calls them or not (it calls none of them).

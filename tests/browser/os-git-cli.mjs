@@ -108,7 +108,7 @@ async function sh(cmd, tag, ms = 30000) {
 
 async function shot(name) {
   // Capture VT1 — the tty mirror is where the typed commands land. VT2 is
-  // the desktop composite (todos/0022). The page-side composite re-frames
+  // the desktop composite (docs/archive/0022). The page-side composite re-frames
   // a moment after the VT change; wait for one settled frame.
   await setVt(1);
   await page.waitForTimeout(400);

@@ -181,7 +181,7 @@ static const mp_rom_map_elem_t os_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_urandom), MP_ROM_PTR(&mp_os_urandom_obj) },
     #endif
 
-    // gucOS patch (todos/0117 R2) — the ONLY change to this upstream file.
+    // gucOS patch (docs/archive/0117 R2) — the ONLY change to this upstream file.
     // Upstream reaches the filesystem exclusively through the VFS, so every
     // entry in the #if MICROPY_VFS block below is unreachable in a port that
     // deliberately has no VFS (the kernel owns mounting). This block is the

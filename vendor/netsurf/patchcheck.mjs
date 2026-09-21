@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// patchcheck.mjs — offline verifier for the patches/ record (todos/0423).
+// patchcheck.mjs — offline verifier for the patches/ record (docs/archive/0423).
 //
 // The invariant update.sh's header states — "running it against the pinned
 // revisions must reproduce the committed trees byte-identically" — decomposes
@@ -227,7 +227,7 @@ function joinLines(lines, eol) {
   return lines.join('\n') + (eol ? '\n' : '');
 }
 // Clip a PAIR of differing lines around the first column where they differ
-// (todos/0436). A head-anchored clip of each side showed two identical
+// (docs/archive/0436). A head-anchored clip of each side showed two identical
 // prefixes whenever the difference sat past the cut — exactly the deep-in-a-
 // long-C-line case the check exists for. The 60-char window opens ~20 chars
 // before the difference, pulled left so it never extends past both ends;

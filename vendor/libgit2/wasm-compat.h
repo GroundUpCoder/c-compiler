@@ -12,7 +12,7 @@
 #define NO_STRNLEN
 #endif
 
-/* gmtime_r — the libc supplies it since todos/0325 Group A; the local
+/* gmtime_r — the libc supplies it since docs/archive/0325 Group A; the local
    static-inline copy now conflicts with that declaration. */
 
 /* Process identity — stub to safe defaults for WASM */

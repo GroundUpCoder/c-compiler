@@ -65,7 +65,7 @@ struct gui_window {
 	 * drawn in the bar below the content viewport */
 	char *status;
 
-	/* the out-of-process file chooser (todos/0433): /bin/filepick
+	/* the out-of-process file chooser (docs/archive/0433): /bin/filepick
 	 * wrapping comdlg32, at most one per window — the pending state
 	 * lives here so a result can only ever apply to the window that
 	 * asked for it */

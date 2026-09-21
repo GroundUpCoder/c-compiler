@@ -1,7 +1,7 @@
 {
   "bin": "sameboy_core_bench",
   "name": "sameboy-core-bench",
-  "description": "Headless SameBoy CORE benchmark (todos/0332): the shipped binary's 14 core/*.c TUs with the win32/SDL frontend replaced by a timing main. Same compilerArgs as vendor/sameboy/bin.json so the core is built identically.",
+  "description": "Headless SameBoy CORE benchmark (docs/archive/0332): the shipped binary's 14 core/*.c TUs with the win32/SDL frontend replaced by a timing main. Same compilerArgs as vendor/sameboy/bin.json so the core is built identically.",
   "compilerArgs": [
     "--allow-zero-length-arrays",
     "-DGB_INTERNAL",

@@ -9,7 +9,7 @@
 #include <stdio.h>
 #endif
 
-/* gucOS vendor patch (todos/0340, CPYTHON.md §4.2, superseding the recipe's
+/* gucOS vendor patch (docs/archive/0340, CPYTHON.md §4.2, superseding the recipe's
    -DDATE/-DTIME): overlay@1 requires byte-reproducible payloads, and
    __DATE__/__TIME__ are the one thing in the tree that changes without an input
    changing. The build used to pin them from the command line, but a global

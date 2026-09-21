@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ProcFS (todos/0043): the synthetic /proc volume, driven both directly
+// ProcFS (docs/archive/0043): the synthetic /proc volume, driven both directly
 // through MountFS (the exact surface Kernel._fsRpc funnels into) and over
 // the real SAB RPC protocol with fake workers — deterministic, no threads.
 // In-OS acceptance (busybox ps/pgrep/pkill/top parsing it) lives in
@@ -191,7 +191,7 @@ function lsDir(fs, p) {
   }
   await rpc(1, K.OP.FS_CLOSE, { fd: statusFd });
 
-  // ---- GETSID (todos/0043's libc getsid) ----
+  // ---- GETSID (docs/archive/0043's libc getsid) ----
   r = await rpc(1, K.OP.GETSID, { pid: 0 });
   check('GETSID own sid', r.sid === 1, JSON.stringify(r));
   r = await rpc(1, K.OP.GETSID, { pid: 999 });

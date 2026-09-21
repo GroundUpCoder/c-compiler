@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // mkmpgenhdr.js — regenerate vendor/micropython/genhdr/* from the vendored
-// sources + mpconfigport.h (todos/0117 R1).
+// sources + mpconfigport.h (docs/archive/0117 R1).
 //
 // WHY THIS EXISTS
 // ---------------
@@ -52,7 +52,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync, spawnSync } = require('child_process');
 
-// Cross-tree preflight (todos/0341, extended by #142): regenerates
+// Cross-tree preflight (docs/archive/0341, extended by #142): regenerates
 // vendor/micropython/genhdr/* next to itself. The --check spawn (run.py
 // micropython/genhdr-sync) sets cwd=ROOT_DIR, same tree — measured at #142.
 require(path.join(__dirname, '../tests/lib/tree-guard.js'))

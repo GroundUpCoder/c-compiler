@@ -50,7 +50,7 @@ function resolvedPlaywright(browserDir = BROWSER_DIR) {
   }
 }
 
-// The launch-time assert (todos/0171 loud-symptom rule) — throws on a drifted
+// The launch-time assert (docs/archive/0171 loud-symptom rule) — throws on a drifted
 // resolution, silent otherwise. Kept alongside the pre-flight because a
 // hand-run single os-*.mjs goes through neither runner.
 function checkPlaywrightPin(browserDir = BROWSER_DIR) {

@@ -79,7 +79,7 @@
     },
     {
       "id": "E8",
-      "edit": "SDL_wave.c: SDL_LoadWAV_IO made static — public SDL_IOStream is ABSENT, so the public surface gains only SDL_LoadWAV (absence is honest, todos/PRINCIPLES.md)"
+      "edit": "SDL_wave.c: SDL_LoadWAV_IO made static — public SDL_IOStream is ABSENT, so the public surface gains only SDL_LoadWAV (absence is honest, docs/PRINCIPLES.md)"
     }
   ],
   "declaredDivergences": [

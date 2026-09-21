@@ -309,7 +309,7 @@ void gucos_redraw_all(void)
 }
 
 /* ---------------------------------------------------------------- */
-/* the file gadget's out-of-process picker (todos/0433)             */
+/* the file gadget's out-of-process picker (docs/archive/0433)             */
 /* ---------------------------------------------------------------- */
 
 /** the picker binary (baked by os/image.json; absence is an image bug) */
@@ -638,7 +638,7 @@ gui_window_event(struct gui_window *gw, enum gui_window_event event)
 
 	case GW_EVENT_NEW_CONTENT:
 		/* the window navigated: an open file dialogue belonged
-		 * to the outgoing page, so it goes with it (todos/0433) */
+		 * to the outgoing page, so it goes with it (docs/archive/0433) */
 		gucos_picker_cancel(gw);
 		gw->scrollx = 0;
 		gw->scrolly = 0;
@@ -891,7 +891,7 @@ static struct gui_window_table window_table = {
 	.file_gadget_open = gui_window_file_gadget_open,
 
 	/* BW_CS_SCRIPT_CONSOLE (the page's console.*) and — since ticket
-	 * #177 / todos/0424 — BW_CS_SCRIPT_ERROR both arrive here: dukky's
+	 * #177 / docs/archive/0424 — BW_CS_SCRIPT_ERROR both arrive here: dukky's
 	 * error sites route every uncaught exception through
 	 * dukky_report_exception → browser_window_console_log, so a thrown
 	 * listener prints as `js: exception: error: ...` on the tty.  The
@@ -915,7 +915,7 @@ static browser_mouse_state gucos_mouse_state(struct gui_window *gw)
 	/* HOLDING_* states a button fact, DRAG_ON a drag fact: a held
 	 * button must be reported from the press on, not from the
 	 * DRAG_SLOP promotion on — a track with no HOLDING bits after a
-	 * press is how the core synthesises a mouseup (todos/0427). */
+	 * press is how the core synthesises a mouseup (docs/archive/0427). */
 	if (gw->dragging) {
 		st |= BROWSER_MOUSE_DRAG_ON;
 	}
@@ -1073,7 +1073,7 @@ static uint32_t gucos_nskey(uint32_t key, uint16_t mod)
 
 /**
  * A key came up.  The core has nothing to DO with a release; it is
- * forwarded purely so the DOM can fire `keyup` (todos/0289).
+ * forwarded purely so the DOM can fire `keyup` (docs/archive/0289).
  */
 static void
 gucos_key_up(struct gui_window *gw, const SDL_KeyboardEvent *k)

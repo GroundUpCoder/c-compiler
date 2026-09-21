@@ -19,7 +19,7 @@
 //   - the "notably absent" boundary holds BEHAVIORALLY: representative
 //     absent names fail as undeclared through the real cc driver, and the
 //     documented alternatives (SDL_UpdateTexture, SDL_RenderTextureRotated)
-//     really compile. Per todos/PRINCIPLES.md these absence assertions are
+//     really compile. Per docs/PRINCIPLES.md these absence assertions are
 //     maintained claims: filling one is a two-sided edit (implement the
 //     symbol AND update tools/mksdlindex.js's ABSENT list — regeneration
 //     refuses until you do).

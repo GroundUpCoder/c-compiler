@@ -1,5 +1,5 @@
 %% posix-on-wasm.mgp - POSIX on WebAssembly (or: what is an OS anyway?)
-%% A gucOS talk (todos/0221): what an OS does, the DO / DON'T / DON'T
+%% A gucOS talk (docs/archive/0221): what an OS does, the DO / DON'T / DON'T
 %% NEED TO split, and similar projects. Uses only directives the 0119
 %% port renders (the 0202 whitelist).
 %deffont "standard" tfont "/usr/share/fonts/mono.ttf"

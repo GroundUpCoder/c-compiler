@@ -1,6 +1,6 @@
-// BUG: none (guard) — pins ILP32 integer-constant typing, the semantics axis behind todos/0404: csmith seed 450020699 "ran away" because the LP64 clang oracle types 0xD7D41305L as signed 64-bit long while wasm32 types it unsigned 32-bit, so the two toolchains ran two different programs (ours was correct; the seed legitimately never terminates under ILP32)
+// BUG: none (guard) — pins ILP32 integer-constant typing, the semantics axis behind docs/archive/0404: csmith seed 450020699 "ran away" because the LP64 clang oracle types 0xD7D41305L as signed 64-bit long while wasm32 types it unsigned 32-bit, so the two toolchains ran two different programs (ours was correct; the seed legitimately never terminates under ILP32)
 // C11: 6.4.4.1p5 — a hex constant with suffix L takes the first fitting type of {long, unsigned long, long long, unsigned long long}; long is 32 bits on wasm32, so values in (INT32_MAX, UINT32_MAX] become UNSIGNED long and comparisons against them convert the other operand to unsigned
-// EXPECT: ILP32-specific by design (NOT LP64-clean like the rest of the corpus): lines A/B/E differ from LP64 clang; verified against clang -target i686-pc-linux-gnu constant folding, transcript in todos/0404
+// EXPECT: ILP32-specific by design (NOT LP64-clean like the rest of the corpus): lines A/B/E differ from LP64 clang; verified against clang -target i686-pc-linux-gnu constant folding, transcript in docs/archive/0404
 #include <stdio.h>
 int main(void) {
   int g = 0;

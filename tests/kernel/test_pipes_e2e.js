@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Phase 4 pipes end-to-end (todos/0003): real C processes in worker_threads
+// Phase 4 pipes end-to-end (docs/archive/0003): real C processes in worker_threads
 // over the brokered kernel prove the acceptance criteria:
 //   - a cross-worker blocking pipe read is WOKEN by the writer's write
 //     (the pre-kernel broker's no-wake-path hole, closed)

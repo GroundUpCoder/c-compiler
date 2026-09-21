@@ -34,7 +34,7 @@ const keys = (sid, ch) => 'wmctl key ' + sid + ' 0 ' + ch.charCodeAt(0);
 
 /* ---- session A: drive both apps, leave PNG shots on the root volume ---- */
 const script = [
-  // sent — driven through the `slides` launcher (todos/0444), not a manual
+  // sent — driven through the `slides` launcher (docs/archive/0444), not a manual
   // cd + bare binary: the baked launcher at /usr/bin/slides probes
   // /usr/opt/sent and cd's to share/ ITSELF (deck + image refs are
   // CWD-relative), so this leg is the cd-form launcher's regression guard —

@@ -1,6 +1,6 @@
-// todos/0325 Group A — gmtime_r (ownership: 0325; todos/0382 gap 4 defers to
+// docs/archive/0325 Group A — gmtime_r (ownership: 0325; docs/archive/0382 gap 4 defers to
 // it, and both tickets record that). Plus the ctime_r/asctime_r twins named
-// in the todos/0350 zip-harness gap list.
+// in the docs/archive/0350 zip-harness gap list.
 //
 // BEHAVIOUR: fixed epoch seconds in, calendar fields out. Every expected
 // value here is host-independent (UTC), so it is clang-verifiable.

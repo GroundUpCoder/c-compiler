@@ -1,5 +1,5 @@
 /*
- * gif.c — GIF image loader for the gucOS MagicPoint port (todos/0119
+ * gif.c — GIF image loader for the gucOS MagicPoint port (docs/archive/0119
  * giflib follow-up). A thin wrapper over the vendored giflib 5.2 decoder
  * (vendor/giflib), producing a truecolor Image the same way png.c does.
  *

@@ -1,8 +1,8 @@
-// Shared harness for the browser OS acceptance sweep (todos/0146).
+// Shared harness for the browser OS acceptance sweep (docs/archive/0146).
 //
 // Every `os-*.mjs` used to copy-paste the same setup: serve.js spawn, the
 // `waitForServer` fetch-poll, the `--enable-unsafe-webgpu --enable-features=
-// Vulkan` Chromium launch (todos/0055 — worker WebGPU is required to boot),
+// Vulkan` Chromium launch (docs/archive/0055 — worker WebGPU is required to boot),
 // the boot-to-ready + prompt waits, the `check`/`failures` scoreboard, and the
 // per-page pixel/tty helpers (`setVt`, `sample`, `near`, `waitPixel`,
 // `waitOut`, the `__osScreen` geometry wait). This is the ONE place that lives
@@ -70,7 +70,7 @@ export const osUrl = (port, hostKeys = 'off') =>
 // `serveArgs` appends extra serve.js flags — the seam os-minimal.mjs uses to
 // pass `--minimal` (the DEPLOY image shape: a plain bake + the /packages repo,
 // instead of serve.js's dev-convenience fat blob).
-// Heavy-test host lock (todos/0342): an os.html boot in a Chromium is the
+// Heavy-test host lock (docs/archive/0342): an os.html boot in a Chromium is the
 // browser-shape RAM spend the lock bounds, and this harness is the funnel
 // every os-*.mjs (plus tools/os-drive.mjs and friends) reaches it through.
 // Join ONCE, at the first of startServer/launchBrowser — before any serve.js
@@ -78,7 +78,7 @@ export const osUrl = (port, hostKeys = 'off') =>
 // (CC_HEAVY_LOCK_PID, alive AND matching the recorded holder) joins
 // re-entrantly; a hand-run single file under a foreign holder exits 3 naming
 // it. The uncoverable path — a human browser tab against a dev serve.js — is
-// recorded as an exclusion in todos/done/0342.
+// recorded as an exclusion in docs/archive/0342.
 let heavyLockLatched = false;
 function latchHeavyLock() {
   if (heavyLockLatched) return;
@@ -112,7 +112,7 @@ export function startServer(port, { root = ROOT, onLog, serveArgs = [] } = {}) {
 }
 
 // Poll the URL until it answers 200. Returns true once it does. On exhausting
-// the tries it THROWS a clear, actionable error by default (todos/0171 — the
+// the tries it THROWS a clear, actionable error by default (docs/archive/0171 — the
 // loud-symptom rule): a server that never came up used to be discarded here
 // and surface downstream as a bare `page.goto: net::ERR_CONNECTION_REFUSED`,
 // which reads like a product failure but is almost always a stale `serve.js`
@@ -242,7 +242,7 @@ export function buildPackageRepo({ root = ROOT, args = [] } = {}) {
 // pulled in here, lazily, so the module loads without it. `opts` merges into
 // chromium.launch (tools/os-drive.mjs passes { headless: false }).
 //
-// Before launching, assert the resolved playwright IS the pinned one (todos/
+// Before launching, assert the resolved playwright IS the pinned one (docs/
 // 0171 loud-symptom rule). The check — and its history, and the gate-start
 // pre-flight that now runs the same logic at second zero (#559) — lives in
 // ./playwright-pin.cjs; the call here is defense in depth for a hand-run
@@ -254,7 +254,7 @@ export async function launchBrowser(args = ['--enable-unsafe-webgpu', '--enable-
   return chromium.launch({ args, ...opts });
 }
 
-// Browser twin of tests/kernel/lib/drive.js's todos/0171 loud-symptom gate
+// Browser twin of tests/kernel/lib/drive.js's docs/archive/0171 loud-symptom gate
 // (ticket #97/0287): a `wmctl wait` that can't be satisfied prints
 // `wmctl: wait X timed out after Nms` to stderr and exits 1 — but a shell
 // script with no `set -e` just burns the full timeout and sails on, so the
@@ -446,11 +446,11 @@ export async function openOsSession(opts = {}) {
   }
 }
 
-// ---- the seeded desktop grid model (todos/0184/0185) ----
+// ---- the seeded desktop grid model (docs/archive/0184/0185) ----
 // Twin of tests/kernel/lib/drive.js deskEntries/deskSort/deskCell — one
 // behavior, two module systems. The seeded /root/Desktop set derives from
 // os/image.json's user section plus status-quo default Desktop packages (the
-// todos/0166 rule) — FILES and DIRS,
+// docs/archive/0166 rule) — FILES and DIRS,
 // direct children only (the deck links inside Presentations/ are not
 // icons), plus wm.c's always-recreated Recycle Bin. deskSort replicates
 // wm.c entcmp (Recycle Bin last, dirs first, byte-order strcmp); deskCell

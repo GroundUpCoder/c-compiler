@@ -1,6 +1,6 @@
 build/
 *.wasm
-# The committed wasm binaries: the Rust fixtures (todos/0413 + 0414 +
+# The committed wasm binaries: the Rust fixtures (docs/archive/0413 + 0414 +
 # 0415 + 0442). The gucos-rust sibling builds them; test_rust_e2e.js /
 # test_rust_std_e2e.js freshness-check each against a rebuild.
 !tests/kernel/fixtures/hello-rust/hello-rust.wasm
@@ -29,7 +29,7 @@ os/*.img.lock
 dist/
 
 # CPython writes bytecode caches next to the source it imports; the shipped
-# package sends them to /var/cache instead (todos/0340), but a host-side probe
+# package sends them to /var/cache instead (docs/archive/0340), but a host-side probe
 # run against vendor/cpython/Lib will still leave them here.
 vendor/cpython/**/__pycache__/
 

@@ -11,7 +11,7 @@
 # new upstream drop, bump UPSTREAM.json and re-run (then fix patch fuzz /
 # new relativizations and re-verify with smoke.mjs).
 #
-# That byte-identical claim is ENFORCED, on two cadences (todos/0423):
+# That byte-identical claim is ENFORCED, on two cadences (docs/archive/0423):
 #   - `./update.sh --check` runs the same steps 1-5 into the stage, then
 #     DIFFS the stage against the committed trees and exits non-zero on any
 #     difference, installing nothing (the check path never writes into the
@@ -125,7 +125,7 @@ find "$STAGE" \( -name Makefile -o -name 'Makefile.*' -o -name '*.pc.in' -o -nam
 node "$HERE/relativize.mjs" "$STAGE"
 
 if [ -n "$CHECK" ]; then
-  # ---- 6c. verify (todos/0423): diff the stage against the committed ----
+  # ---- 6c. verify (docs/archive/0423): diff the stage against the committed ----
   # trees and INSTALL NOTHING. This branch only ever reads from $HERE; the
   # rm -rf/cp -R install below is unreachable from here (the exits close it).
   echo "checking (no install)…"

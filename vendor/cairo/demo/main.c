@@ -1,4 +1,4 @@
-/* cairodemo — the seeded cairo acceptance app (todos/0061): real vector
+/* cairodemo — the seeded cairo acceptance app (docs/archive/0061): real vector
  * 2D (gradients, beziers, AA, dashes, alpha, cairo-ft text) drawn by the
  * vendored cairo 1.18.4 into an SDL window surface (= a kernel shm
  * surface, composited like any CPU app).

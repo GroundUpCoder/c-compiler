@@ -1,4 +1,4 @@
-/* strsafe.h — declaration-only (todos/0060). On Windows this is a
+/* strsafe.h — declaration-only (docs/archive/0060). On Windows this is a
  * header-only inline library; here the W entries are veneer symbols so
  * unimplemented ones land in the PORTS.md demand log (0059 implements
  * them as a real strsafe.c slice). Cb variants take BYTE counts, Cch

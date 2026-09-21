@@ -35,7 +35,7 @@ function check(name, cond, extra) {
 
 const { dir: tmp, image } = freshImage('os-ctx-');
 
-// Geometry mirrors the ONE menu engine (menucore, todos/0259 — wm.c's
+// Geometry mirrors the ONE menu engine (menucore, docs/archive/0259 — wm.c's
 // fork rows are gone): MENU_ITEM_H 18, MENU_SEP_H 8, 1px raised border on
 // each side (h = 4 + rows), WIDTH MEASURED from freetype text (not a
 // constant — asserted structurally, never as a literal), clamped to the
@@ -44,8 +44,8 @@ const { dir: tmp, image } = freshImage('os-ctx-');
 // taskbar-button menu: Restore /
 // Minimize / Maximize / --- / Close -> h 134; icon menu on a RUNNABLE icon:
 // Open / --- / Cut / Copy / Download / Delete / Rename -> h 194 (documents
-// grow an Edit row after Open -> h 224, todos/0202 — alauncher stays 194;
-// Download is todos/0398). A
+// grow an Edit row after Open -> h 224, docs/archive/0202 — alauncher stays 194;
+// Download is docs/archive/0398). A
 // cascade parks at parent-right - 3 with its first row aligned to the
 // anchor row's drawn top (New: Folder + Text File -> h 64; Sort by:
 // Name -> h 34). Row centers at 1 + sum(prev rows) + 15.
@@ -67,7 +67,7 @@ const g4 = (line) => {
 // Presentations dir + the tail-pinned Recycle Bin); the script grows it by
 // New Folder (a dir — dirs sort FIRST per entcmp) + three files. Icons
 // auto-flow column-major sorted (no .icons), wrapping past column 0 at 11
-// rows (todos/0184) — cells come from deskCell, never bare row math.
+// rows (docs/archive/0184) — cells come from deskCell, never bare row math.
 const DESK1 = deskEntries([{ name: 'New Folder', dir: true },
                            'New File.txt', 'zzz.txt', 'alauncher']);
 const desk = (list, name) => {
@@ -439,7 +439,7 @@ check('right-click the Start strip raises nothing (reserved)',
   row(section('bar1'), 'ctxmenu') === '', JSON.stringify(section('bar1')));
 const b2 = section('bar2');
 const bg = g4(row(b2, 'ctxmenu'));
-// Button 0 anchors at x=112 since todos/EXPOSE inserted the Task-View button
+// Button 0 anchors at x=112 since docs/EXPOSE inserted the Task-View button
 // (TASKVIEW_W) between the Start strip and the app-button strip.
 check(`right-click button 0 opens the window menu (h ${BAR_MENU_H}, above the bar)`,
   bg && bg.h === BAR_MENU_H && bg.x === 112 && bg.y === 768 - 36 - BAR_MENU_H,

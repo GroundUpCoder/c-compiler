@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// todos/0442 acceptance: std on wasip1 — host.js serves wasi_snapshot_preview1
+// docs/archive/0442 acceptance: std on wasip1 — host.js serves wasi_snapshot_preview1
 // beside "c" by delegating to the fs method surface (BlockFS.toWasiPreview1),
 // and a NORMAL Rust bin crate (upstream std, stable rustc, wasm32-wasip1)
 // runs in gucOS standalone and in-OS.
@@ -22,7 +22,7 @@
 //          it occupies the lowest free slot, prestat round-trips, and a
 //          "c"-side open() after the shim build gets a HIGHER fd (no
 //          collision between the namespaces' fd spaces)
-//        - O_DIRECTORY substrate (the todos/0400 fs half): plain O_RDONLY
+//        - O_DIRECTORY substrate (the docs/archive/0400 fs half): plain O_RDONLY
 //          on a directory stays EISDIR (unchanged estate behavior); with
 //          O_DIRECTORY it opens, read(2) on it is EISDIR, fstat sees a
 //          directory, close frees the slot
@@ -230,7 +230,7 @@ async function main() {
     check('shim: a "c"-side open AFTER the shim build gets a fd above the preopen',
           typeof cfd === 'number' && cfd > 3, String(cfd));
 
-    // 3b: O_DIRECTORY substrate (todos/0400 fs half).
+    // 3b: O_DIRECTORY substrate (docs/archive/0400 fs half).
     check('open(dir, O_RDONLY) without O_DIRECTORY stays EISDIR (unchanged)',
           bfs.open('/', 0, 0) === null && bfs._lastError === 'EISDIR');
     bfs.mkdir('/d1', 0o755);

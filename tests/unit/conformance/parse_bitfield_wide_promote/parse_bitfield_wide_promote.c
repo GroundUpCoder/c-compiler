@@ -1,4 +1,4 @@
-// BUG: a bit-field WIDER than int was promoted to unsigned int anyway, so a binary operand read only its low 32 bits -- `u.p.frc == 0` was true for every NaN (todos/0356: MicroPython's IEEE-754 classifier then raised OverflowError where ValueError is owed).
+// BUG: a bit-field WIDER than int was promoted to unsigned int anyway, so a binary operand read only its low 32 bits -- `u.p.frc == 0` was true for every NaN (docs/archive/0356: MicroPython's IEEE-754 classifier then raised OverflowError where ValueError is owed).
 // C11: 6.3.1.1p2 -- the integer promotions reach a bit-field only when int/unsigned int can represent its values as restricted by the width; all other types are unchanged, so a 33..64-bit field keeps its declared type.
 // EXPECT: 64-bit values survive comparison, shift and division; a 32-bit-wide `long long` field promotes to (signed) int.
 #include <stdio.h>

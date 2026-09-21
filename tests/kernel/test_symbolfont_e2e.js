@@ -122,7 +122,7 @@ async function main() {
   // One 16x19 bitmap per glyph at row 0: glyph i sits in cell 2i (8px cells,
   // space-separated), sampled with its trailing blank cell to keep any
   // proportional overflow inside the sample. Row 0 renders below the 30px
-  // term menu bar band (todos/0273c), as in test_fontpkg_e2e.js.
+  // term menu bar band (docs/archive/0273c), as in test_fontpkg_e2e.js.
   const GRID_Y = 30;
   function glyphBits(shot, i) {
     const out = Buffer.alloc(16 * 19 * 3);

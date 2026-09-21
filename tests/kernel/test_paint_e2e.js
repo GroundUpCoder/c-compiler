@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 0107 acceptance, headless: the Paint accessory (os/win32/paint.c, design
-// todos/WIN32.md) through os/boot.js. Covers:
+// docs/WIN32.md) through os/boot.js. Covers:
 //   - lifecycle: WM_CREATE < WM_PAINT/ready; window titled "untitled - Paint",
 //     fixed surface = client_w x (client_h + MENU_BAR_H)
 //   - the menu (agent tree): File/Edit/Image/Tools/Help with tool + width
@@ -65,7 +65,7 @@ const RED = 10, GREEN = 12;                        // palette indices
  * a `wmctl shot` (pixel-only, no agent/label/text signal), which stays an
  * annotated render-settle (0083 rule). comdlg32 dialogs are real modal WM
  * windows (open via `wait label`, close via `wait nowin`); saved files land
- * after the handler, so poll for them (todos/0154). */
+ * after the handler, so poll for them (docs/archive/0154). */
 const waitFile = (p) =>
   `for i in $(seq 1 120); do [ -s ${p} ] && break; sleep 0.05; done`;
 

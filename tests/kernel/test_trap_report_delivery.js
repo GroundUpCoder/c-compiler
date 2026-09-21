@@ -159,7 +159,7 @@ function readWholeFile(p) {
   //
   // So this guard is deliberately narrow and deliberately honest about it: a
   // small guarantee stated plainly, rather than a broad one that keeps turning
-  // out false (todos/PRINCIPLES.md, honest shape). If you rename the
+  // out false (docs/PRINCIPLES.md, honest shape). If you rename the
   // classifier, UPDATE THE LIST BELOW — nothing will remind you.
   console.log('\nHALF 3. RemoteFS must not answer the fd-2 classifier at all');
   const GUARDED = ['fdSink', 'isConsoleFd'];   // current + historical spellings

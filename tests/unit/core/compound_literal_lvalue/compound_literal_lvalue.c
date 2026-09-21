@@ -1,6 +1,6 @@
 // BUG: a compound literal used as an lvalue (assignment target, ++/--
 // operand) crashed codegen with a raw "emitLValue: unsupported
-// expression ECompoundLiteral" throw (G9, todos/0217).
+// expression ECompoundLiteral" throw (G9, docs/archive/0217).
 // C11: 6.5.2.5p4 — a compound literal IS an lvalue; block-scope
 // evaluations have automatic storage, file-scope ones static storage.
 // EXPECT: clang-verified output below.

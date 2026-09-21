@@ -1,4 +1,4 @@
-/* Headless SameBoy CPU/PPU benchmark: no SDL, deterministic (todos/0186).
+/* Headless SameBoy CPU/PPU benchmark: no SDL, deterministic (docs/archive/0186).
  * usage: bench <rom> <frames>   (prints model, then a framebuffer checksum)
  * Pure GB_run_frame throughput for compiler A/B comparison — the checksum
  * is the correctness interlock: a miscompile changes it, so a "faster"

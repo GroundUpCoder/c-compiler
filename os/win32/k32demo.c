@@ -1,4 +1,4 @@
-/* k32demo.c — the 0059 kernel32 acceptance app (design todos/WIN32.md).
+/* k32demo.c — the 0059 kernel32 acceptance app (design docs/WIN32.md).
  *
  * A UNICODE console program (the corpus's build flavor) that exercises
  * the kernel32/advapi32/wide-CRT veneer end to end and self-checks like

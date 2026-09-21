@@ -1,4 +1,4 @@
-// Guardrail (d) — mkpkg repo ISOLATION (todos/0388) + ADDITIVE publish (#580).
+// Guardrail (d) — mkpkg repo ISOLATION (docs/archive/0388) + ADDITIVE publish (#580).
 //
 // `index.json` + `pool/` are one repo. Since #580 a build UPSERTS it: entries
 // this invocation cannot enumerate are carried forward, and only --prune drops
