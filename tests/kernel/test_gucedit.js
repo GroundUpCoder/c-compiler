@@ -11,8 +11,9 @@ ok('ABI v1 is private and fixed-size',/GUCEDIT_ABI_VERSION 1u/.test(h)&&/sizeof\
 // named execute now: the generation step and batch check/replace run in the
 // probe above (gucedit_generation_advance was extracted for exactly that),
 // and the wired pipeline — EN_CHANGE generation advance, GEM_SETSTYLES
-// validation, styled paint — is pinned end to end by test_sedit_e2e's big-file
-// highlight shot and os-sedit.mjs. The compile-time-only allocator override
-// keeps its behavioural half below: the baked wasm exports no test symbol.
-const wasm=path.join(os.tmpdir(),`gucedit-prod-${process.pid}.wasm`),bc=cp.spawnSync('node',['compiler.js','os/sedit/bin.json','-o',wasm],{cwd:ROOT,encoding:'utf8'});let absent=false;if(bc.status===0){const mod=new WebAssembly.Module(fs.readFileSync(wasm)),names=WebAssembly.Module.exports(mod).map(x=>x.name);absent=!names.some(x=>x.includes('gucedit_test_fail_alloc')||x.includes('sedit_document_test_io'));fs.rmSync(wasm,{force:true});}ok('baked production has no test override export',bc.status===0&&absent);
+// validation, styled paint — was pinned end to end by the sedit editor until
+// it was retired (2026-09-21); notepad below is the production user32 build
+// that carries the same core. The compile-time-only allocator override keeps
+// its behavioural half here: the baked wasm exports no test symbol.
+const wasm=path.join(os.tmpdir(),`gucedit-prod-${process.pid}.wasm`),bc=cp.spawnSync('node',['compiler.js','vendor/notepad/bin.json','-o',wasm],{cwd:ROOT,encoding:'utf8'});let absent=false;if(bc.status===0){const mod=new WebAssembly.Module(fs.readFileSync(wasm)),names=WebAssembly.Module.exports(mod).map(x=>x.name);absent=!names.some(x=>x.includes('gucedit_test_fail_alloc'));fs.rmSync(wasm,{force:true});}ok('baked production has no test override export',bc.status===0&&absent);
 process.exit(fails?1:0);

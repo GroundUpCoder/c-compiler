@@ -173,7 +173,7 @@ SDL coverage percentages here: they drift independently of capability.
 | Graphics and audio | SDL3 subset with per-window software/GPU rendering, WebGPU bindings, kernel audio mixing and browser playback. `os/doc/sdl-api-index.md` lists actual SDL symbols; `os/doc/sdl-gucos.md` explains loop/backend contracts. Browser OS requires WebGPU; headless GPU rendering uses the optional Dawn tier. |
 | Window manager | Kernel-owned surfaces and input, WebGPU browser compositor (`os/compositor.js`), wasm `/bin/wm` policy and `/bin/wmctl` semantic control. Multi-window taskbar, resize/scale/maximize, menus and desktop are implemented. Surface, thumbnail and screen captures include GPU pixels through readback; headless composition is independently available (`WM.md`, kernel/browser suites). |
 | Networking | AF_UNIX IPC and HTTP through kernel fetch/curl are implemented. Browser HTTP follows CORS unless a bridge is configured. General AF_INET remains tracked by `NETWORK.md`; this is not Linux socket ABI compatibility. |
-| Editors | BusyBox vi on the tty, the windowed sedit C editor (`os/sedit/`), and Notepad are manifest/package-managed. C/H GUI associations select sedit; gcode provides the in-OS agent workflow. See `os/doc/` and the editor/browser tests. |
+| Editors | BusyBox vi on the tty and Notepad are manifest/package-managed (the windowed sedit C editor was retired 2026-09-21); gcode provides the in-OS agent workflow. See `os/doc/`. |
 
 ## Reference build: `os/` in this repo
 

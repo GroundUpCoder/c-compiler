@@ -13,7 +13,7 @@
 //     CreateDialog(..., NULL, DlgMainProc)) — it lost its taskbar button and
 //     was unrecoverable once another window covered it. That leg lives in
 //     tests/kernel/test_calc_e2e.js, on the real shipped app.
-//   - sedit's Find/Goto and comdlg32's Open/Find/Font dialogs are OWNED but
+//   - an app's owned Find/Goto and comdlg32's Open/Find/Font dialogs are OWNED but
 //     are not of that class — they wrongly gained taskbar buttons.
 //
 // This file pins the RULE itself, on a fixture whose four top-level windows

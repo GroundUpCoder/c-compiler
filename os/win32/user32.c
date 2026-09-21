@@ -2932,7 +2932,7 @@ static HWND create_window_impl(DWORD exStyle, LPCSTR className, LPCSTR windowNam
          * window is an UNOWNED "#32770" dialog (vendor/calc/winmain.c:
          * CreateDialog(..., NULL, DlgMainProc)) and so lost its taskbar
          * button entirely — unrecoverable once another window covered it —
-         * while sedit's owned Find/Goto and comdlg32's owned Open/Find/Font
+         * while an app's owned Find/Goto and comdlg32's owned Open/Find/Font
          * popups are not of that class and wrongly gained one.
          *
          * The producers must therefore DECLARE their owner; MessageBox,

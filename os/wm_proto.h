@@ -314,7 +314,7 @@ typedef struct {
                                 WS_EX_TOOLWINDOW, and clears it for WS_EX_APPWINDOW
                                 even when owned. "MessageBox and dialogs" is the
                                 common CASE, not the test — calc's main window is
-                                an UNOWNED dialog and must be listed, while sedit's
+                                an UNOWNED dialog and must be listed, while an app's owned
                                 Find box and comdlg32's Open box are owned
                                 non-dialog-class windows and must not be. */
 
