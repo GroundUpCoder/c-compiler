@@ -1,433 +1,331 @@
 # c-compiler
 
-C-to-WebAssembly compiler in one file.
+A C-to-WebAssembly compiler in one JavaScript file, with a runtime for Node.js
+and browsers. The repository also contains **gucOS**, an almost-POSIX browser OS
+built around the compiler: a shell, persistent filesystem, desktop, window
+manager, and tools for developing C/SDL3 games inside the OS.
 
-I occasionally post videos about this project at [youtube.com/@groundupcoder](https://www.youtube.com/@groundupcoder) — design decisions, problems I've hit, and parts of the implementation I find interesting. This repo isn't structured as a tutorial; it's the actual code I'm writing as I go.
+I occasionally post videos about this project at
+[youtube.com/@groundupcoder](https://www.youtube.com/@groundupcoder) — design
+decisions, problems I've hit, and parts of the implementation I find interesting.
+This repo isn't structured as a tutorial; it's the actual code I'm writing as I go.
 
-**compiler.js** — JavaScript, runs on Node.js and browser.
+## Start here
 
-A frozen C++20 port (**compiler.cc**) is preserved in `old/` along with its own test runner and unit tests. The two compilers produce identical output for all unit tests (verified by equiv tests in `old/`).
+Use **Node.js 25+**, or **Node.js 24 with `--experimental-wasm-jspi`** when
+running compiled programs. The compiler and console runtime need no npm install
+or native build. See [Node compatibility](docs/NODE_VERSIONS.md) for the measured
+version matrix and cross-compiling on older Node releases.
 
-### Node.js version
+From the repository root:
 
-Requires **Node.js 24** with `--experimental-wasm-jspi`, or **Node.js 25+** (no flag needed). Older versions can still produce valid `.wasm` bytes (codegen is version-independent), but can't run them locally because their V8 lacks WASM GC and/or `WebAssembly.Suspending`. See [docs/NODE_VERSIONS.md](docs/NODE_VERSIONS.md) for the full compatibility matrix.
-
-There are three ways to run the compiled programs:
-
-### WASM files (`.wasm`) — run with Node.js
-
-Compile to a `.wasm` file and run it with **host.js**, the WASM runtime that provides libc, filesystem, and terminal support:
-
-```bash
-node compiler.js hello.c -o hello.wasm
+```sh
+node compiler.js vendor/hello/main.c -o hello.wasm
 node host.js hello.wasm
+# Hello world
 ```
 
-### JS files (`.js`) — run directly with Node.js
+On Node 24, the run command is:
 
-Compile to a self-contained `.js` file with the WASM binary and runtime embedded. The result is a standalone Node.js script (with a `#!/usr/bin/env node` shebang) — no separate `host.js` needed:
+```sh
+node --experimental-wasm-jspi host.js hello.wasm
+```
 
-```bash
-node compiler.js hello.c -o hello.js
+`compiler.js` contains the compiler, builtin headers, and C library sources.
+`host.js` supplies the host operations that the compiled program imports.
+The emitted modules use this project's C ABI; they are **not WASI binaries**.
+
+## Choose how to run
+
+| Output / environment | How it runs | Files and graphics |
+|---|---|---|
+| `.wasm` + `host.js` | Node runs a separate Wasm module | Host filesystem; supply assets separately. Optional native SDL3/WebGPU addon. |
+| `.js` | Node runs an embedded Wasm module and runtime | Can bundle assets; native graphics libraries remain external. |
+| `.html` | Browser runs an embedded Wasm module and runtime | BlockFS on OPFS; can bundle assets. Browser graphics/audio backends. |
+| gucOS | Browser desktop or headless Node boot | Kernel-managed processes and filesystems, packages, windows, and in-OS `cc`. |
+
+### Native SDL3 and WebGPU on Node
+
+Build the optional addon once, then compile and run Doom:
+
+```sh
+node native/build.js
+node compiler.js vendor/doom/bin.json -o doom.wasm
+node host.js doom.wasm -iwad vendor/doom/data/doom1.wad
+```
+
+The default `--sdl=auto` loads the addon when available. Pass `--sdl=native` to
+`host.js` to require it, or `--sdl=null` for explicit headless simulation.
+Without the addon, console programs still work; SDL device initialization and
+WebGPU adapter requests report unavailable.
+
+The addon uses SDL3 and wgpu-native, and needs a C compiler, CMake, and downloaded
+dependencies to build. macOS arm64 has been exercised; macOS x64 and Linux
+arm64/x64 build targets are provided but unverified here. Windows builds are
+not implemented. It implements this compiler's SDL3/WebGPU surface, not the
+entire upstream APIs. Device availability still depends on the host.
+See [native setup, distribution, and tests](native/README.md).
+
+### Standalone Node scripts
+
+```sh
+node compiler.js vendor/hello/main.c -o hello.js
 node hello.js
+
+# Bundle Doom's WAD with the runtime and Wasm:
+node compiler.js vendor/doom/bin.json -o doom.js
+node doom.js
 ```
 
-### Optional native graphics and audio on Node
+Generated `.js` files need no separate `host.js`. When assets are embedded, the
+script extracts them to a temporary directory, runs with that directory as its
+working directory, and removes it on exit. Files written there, including game
+saves, are temporary too. Use raw `.wasm` plus separately supplied assets when
+you want control over the working directory and persistent files.
 
-Console programs need only the compiler/runtime and Node; no npm installation.
-Build native SDL3 and WebGPU support with `node native/build.js`. The runtime
-loads it automatically when available. Without it, SDL device initialization
-and GPU adapter requests report unavailable, while console programs still run.
-Use `node host.js game.wasm --sdl=native` to require the addon, or `--sdl=null`
-for explicit headless simulation. See [native/README.md](native/README.md) for
-build requirements, copying the optional native libraries, and tests.
+For generated scripts, select `--sdl=auto|native|null` **at compile time**.
+Copy the optional native libraries alongside the script using the layout in
+[native/README.md](native/README.md) when distributing graphical programs.
 
-### HTML files (`.html`) — run in a browser
+### Browser pages
 
-Compile to a self-contained `.html` file with everything embedded (WASM binary, runtime, xterm.js terminal, data files). Runs in any modern browser with support for graphics (SDL/canvas), audio (SharedArrayBuffer), and interactive terminal programs:
-
-```bash
-node compiler.js hello.c -o hello.html
-```
-
-## Project files
-
-Both compilers accept JSON project files as positional arguments. Each vendor project uses `lib.json` (for libraries) or `bin.json` (for executables). A project file expands inline as if its `compilerArgs`, `sources`, and `dataFiles` were passed directly at that position:
-
-```bash
-# These are equivalent:
+```sh
 node compiler.js vendor/doom/bin.json -o doom.html
-node compiler.js -Ivendor/doom/Nuked-OPL3 vendor/doom/src/*.c ... --opfs-file vendor/doom/data/doom1.wad:/doom1.wad -o doom.html
-
-# Project files mix freely with explicit args:
-node compiler.js -DFOO vendor/lua/bin.json extra.c -o out.wasm
+node serve.js doom.html
+# Open the URL printed by the server.
 ```
 
-### Project file format
+HTML output embeds the Wasm, runtime, project data, and terminal widget when
+available. Serve it over localhost or HTTPS. Browser capabilities determine
+which programs run: Wasm GC is required, GPU rendering needs WebGPU, and audio
+uses SharedArrayBuffer and a user gesture. `serve.js` supplies the COOP/COEP
+headers needed for cross-origin isolation. The browser runtime includes paths
+that do not require JSPI; the Node requirement above is not a blanket browser
+requirement.
 
-```json
-{
-  "type": "lib",
-  "name": "mylib",
-  "description": "Optional description",
-  "includes": ["src"],
-  "compilerArgs": ["-DNDEBUG"],
-  "sources": ["src/util.c", "src/core.c"]
+`node serve.js [directory-or-file] [port]` defaults to `build/` and port `8080`.
+Serving an individual HTML file avoids the OS image preparation done when
+serving the repository root.
+
+## What is supported
+
+The compiler advertises C11, with earlier-C compatibility options and selected
+newer-C, GNU, and custom Wasm extensions. It is under active development, not a
+claim of complete C or POSIX conformance. Variable-length arrays, complex
+arithmetic, C atomics, and C threads are explicitly unsupported. It does not
+compile C++ or Objective-C.
+
+The bundled library includes common C headers, allocation and string functions,
+formatted I/O, files, math, time, terminal control, and I/O multiplexing. Host
+capabilities differ: gucOS provides the process/kernel services; a standalone
+`host.js` invocation does not boot that kernel.
+
+- **SDL3:** windows, surfaces, 2D rendering, textures, events, audio streams,
+  and additional helpers. See the [API index](os/doc/sdl-api-index.md) and
+  [SDL3 scope](docs/SDL3.md). This is a subset, not SDL2 compatibility.
+- **WebGPU:** C bindings through `webgpu.h`, rendering and compute, and the
+  SDL window/surface bridge. Use `wgpuSetMainLoopCallback` to drive asynchronous
+  GPU completions. See [WebGPU architecture](docs/WEBGPU.md).
+- **Game loops:** SDL callback applications use `SDL_MAIN_USE_CALLBACKS`.
+  gucOS GPU presentation requires a yielding callback loop; its explicit
+  software renderer supports blocking loops. See [SDL on gucOS](os/doc/sdl-gucos.md).
+- **Wasm extensions:** GC structs/arrays, opaque host references, custom
+  imports, and host callbacks. These extend C; they are not portable C syntax.
+
+For example, GC struct values use the reference form `__struct Point *`, while
+allocation and cast/test type arguments use the heap form `__struct Point`:
+
+```c
+#include <stdio.h>
+
+__struct Point { int x; int y; };
+
+int main(void) {
+    __struct Point *p = __new(__struct Point, 3, 7);
+    __array(int) values = __array_of(int, 10, 20, 30);
+    printf("%d %d\n", p->x, values[1]);
+    return 0;
 }
 ```
 
-Libraries (`"type": "lib"`) cannot be compiled directly — they must be referenced via `deps` from a binary project. Binary projects omit `type` or set it to `"bin"`. All paths are resolved relative to the JSON file's directory. `dataFiles` maps local files to virtual filesystem paths (used for HTML output via OPFS).
+See [Wasm GC](docs/WASM_GC.md), [reference types](docs/EXTERNREF.md), and
+[callback ABI](docs/CALLBACKS.md) for the full syntax and constraints.
 
-## Compiler flags
+## Building projects
 
-| Flag | Description |
-|------|-------------|
-| `-o <file>` | Output file (`.wasm`, `.js`, or `.html`) |
-| `-D<name>[=val]` | Define preprocessor macro |
-| `-I<path>` | Add include search path |
-| `-a <action>` | Stop at stage: `lex`, `parse`, `link`, `compile` |
-| `--opfs-file <src:dest>` | Embed data file in HTML output (accessible via `fopen`) |
-| `--run-arg <arg>` | Pass argument to program's `argv` |
-| `--gc-sections` | Remove unused code sections |
-| `--no-undefined` | Error on undefined symbols |
-| `--no-wasm-validate` | Skip the codegen-time `WebAssembly.validate()` backstop. Lets older Node versions emit `.wasm` for cross-compile. Implies `--no-version-check`. |
-| `--no-version-check` | Suppress the Node.js runtime-support warning at startup. |
-| `--no-irreducible-lowering` | Disable the loop-switch fallback for functions with cross-block gotos (the structured codegen will then surface a "target label not in scope" diagnostic). On by default. |
-| `-v` / `--verbose` | Print warnings to stderr — currently lists which functions required loop-switch lowering. |
-| `--require-source <file>` | Require a source file to be present |
-| `--allow-old-c` | Enable all legacy C compatibility flags |
-| `--allow-implicit-int` | Allow implicit int in declarations |
-| `--allow-empty-params` | Allow empty parameter lists |
-| `--allow-knr-definitions` | Allow K&R-style function definitions |
-| `--allow-implicit-function-decl` | Allow implicit function declarations |
-| `--allow-undefined` | Allow undefined symbols |
-| `--sdl=auto\|native\|null` | Backend selection embedded in generated Node `.js` output |
-| `--no-xterm` | Disable xterm.js terminal in HTML output |
-| `--time-report` | Print compilation timing breakdown |
-| `-W<name>` | Enable warning (`pointer-decay`, `circular-dependency`) |
+One invocation compiles and links all sources into a module. There is no
+GCC-style object-file/archive workflow. JSON project inputs expand dependencies,
+include paths, compiler options, sources, assets, and embedded run arguments:
 
-## Standard library support
-
-The compiler provides a built-in standard library with headers including:
-
-- **Core**: `stdio.h`, `stdlib.h`, `string.h`, `math.h`, `stdint.h`, `stdbool.h`, `stdarg.h`, `stddef.h`, `ctype.h`, `assert.h`, `errno.h`, `limits.h`, `float.h`
-- **Memory/strings**: `malloc`, `free`, `realloc`, `memcpy`, `memset`, `strlen`, `strcmp`, `sprintf`, `snprintf`, `printf`, `fprintf`
-- **Files**: `fopen`, `fclose`, `fread`, `fwrite`, `fseek`, `ftell`
-- **Time**: `time.h`, `clock()`, `time()`, `usleep()`, `nanosleep()`
-- **Terminal**: `termios.h` (`tcgetattr`, `tcsetattr`, `cfmakeraw`), `sys/ioctl.h` (`ioctl`, `TIOCGWINSZ`)
-- **I/O multiplexing**: `sys/select.h` (`select`, `FD_SET`, `FD_CLR`, `FD_ISSET`, `FD_ZERO`)
-- **Graphics/Audio**: SDL2 subset (video, events, audio)
-
-Terminal and timing primitives use JSPI (WebAssembly JavaScript Promise Integration) for async operations on both Node.js and browser backends.
-
-## WebAssembly GC types
-
-The compiler supports Wasm GC heap-allocated structs and arrays managed by the engine's garbage collector. These live on the GC heap (not linear memory) and can be passed to/from JavaScript without serialization.
-
-### Preferred syntax
-
-A GC struct **value** is a reference to a heap-allocated object. To match C's pointer idioms (and stay friendly to clang IDE tooling), **always spell GC struct refs with `*`** and access fields with `->`:
-
-```c
-__struct Point { int x; int y; };
-
-__struct Point *p = __new(__struct Point, 3, 7);
-p->x = 99;
-printf("%d\n", p->x);
-```
-
-For GC arrays, **never** add `*` — arrays don't have a "pointer to" idiom in C, and the compiler rejects `__array(T) *`:
-
-```c
-__array(int) arr = __array_new(int, 5);    // OK
-arr[0] = 42;
-__array_len(arr);
-```
-
-The `*` convention applies to type-arg intrinsics like `__ref_test` / `__ref_test_null`, `__ref_cast` / `__ref_cast_null`, `__ref_null`. (Exception: `__extends(__struct Foo)` stays bare because it names a parent class, never an array.) `__new` takes `__struct Foo` (no `*`, since the result is always a struct ref). The array allocation intrinsics (`__array_new`, `__array_of`) take the bare element type directly:
-
-| Allocation | Always write |
-|---|---|
-| Struct | `__new(__struct Foo, args...)` |
-| Array (default-init) | `__array_new(T, n)` |
-| Array (filled) | `__array_new(T, n, val)` |
-| Array (literal values) | `__array_of(T, v1, v2, ...)` |
-
-The bare form (`__struct Foo` and `.`) also works — both spellings produce the same WASM type — but the `*`/`->` form is the documented preferred style.
-
-### `__struct`
-
-```c
-__struct Node {
-    int v;
-    __struct Node *next;       // recursive ref — '*' form
-    __array(int) children;     // array — no '*'
-};
-
-__struct Animal { int id; };
-__struct Dog {
-    __extends(__struct Animal);
-    int id;       // must repeat parent's fields, in order, same names + types
-    int paws;
-};
-```
-
-Single inheritance via `__extends`. All `__struct` types are emitted as open for subtyping. Structurally identical types unify across translation units; mutually-recursive types share a rec group.
-
-### `__array(T)`
-
-GC-managed arrays with a fixed element type and runtime length:
-
-```c
-__array(int) scores = __array_new(int, 100);  // 100 zero-initialized
-scores[0] = 42;
-int len = __array_len(scores);
-
-__array(int) vals = __array_of(int, 1, 2, 3, 4, 5);  // literal element list
-__array(int) ones = __array_new(int, 5, 1);           // 5 elements, all = 1
-```
-
-When the element type is a GC struct, spell *that* with `*` too:
-
-```c
-__array(__struct Point *) pts = __array_of(__struct Point *,
-    __new(__struct Point, 1, 2),
-    __new(__struct Point, 3, 4));
-pts[0]->x;
-```
-
-Bulk operations: `__array_fill(arr, off, val, n)` and `__array_copy(dst, dstOff, src, srcOff, n)`.
-
-### Reference intrinsics
-
-| Intrinsic | Description |
-|-----------|-------------|
-| `__ref_is_null(ref)` | Null check (`ref.is_null`) |
-| `__ref_eq(a, b)` | Reference identity (`ref.eq`) |
-| `__ref_null(__struct Foo *)` | Typed null reference |
-| `__ref_test(__struct Foo *, ref)` | Type test, false on null (`ref.test`) |
-| `__ref_test_null(__struct Foo *, ref)` | Type-lattice test, true on null (`ref.test null`) |
-| `__ref_cast(__struct Foo *, ref)` | Downcast, traps on null (`ref.cast`) |
-| `__ref_cast_null(__struct Foo *, ref)` | Downcast, null passes through (`ref.cast null`) |
-
-### Boolean / null sugar
-
-Refs can be used in boolean / null contexts as sugar for the explicit intrinsics:
-
-| Sugar | Equivalent |
-|---|---|
-| `if (ref)`, `while (ref)`, `ref ? a : b` | `if (!__ref_is_null(ref))` etc |
-| `!ref` | `__ref_is_null(ref)` |
-| `ref == 0`, `ref == NULL` | `__ref_is_null(ref)` |
-| `ref1 == ref2` | `__ref_eq(ref1, ref2)` (identity) |
-| `__struct Foo *p = NULL;` | `= __ref_null(__struct Foo *)` |
-
-Both forms are valid; pick per IDE-friendliness vs source readability.
-
-### Universal `__eqref` + `__cast`
-
-`__eqref` is the GC-universe supertype of all reference types (struct, array, boxed primitives) — analogous to `void *` for the GC heap. `__cast(TargetType, expr)` is the universal conversion intrinsic that dispatches based on the source/target type combo.
-
-**Implicit conversions to `__eqref` work everywhere**, just like `int *p = NULL;` or `void *q = some_ptr;`:
-
-```c
-void describe(__eqref x);
-
-describe(42);                          // implicit box int → __eqref
-describe(3.14);                        // implicit box double → __eqref
-describe(some_struct);                 // implicit upcast (no opcode)
-
-__eqref store = 100;                   // implicit box on init
-__eqref r = some_function();           // implicit box if return type mismatches
-```
-
-The 0/NULL convention is preserved — `__eqref e = 0;` and `__eqref e;` both produce null (not boxed-zero). Use `__cast(__eqref, 0)` if you specifically want a boxed-zero distinct from null.
-
-For unboxing (and for explicit conversions), use `__cast`:
-
-```c
-int v = __cast(int, store);                                // unbox
-__struct Point *p2 = __cast(__struct Point *, store);      // downcast (ref.cast)
-
-// Discriminated union
-if (__ref_test(__struct Point *, store)) { ... }
-else if (__ref_test(__struct Color *, store)) { ... }
-```
-
-Supported `__cast(target, source)` combos: prim ↔ prim (numeric), prim ↔ `__eqref` (box/unbox), GC ref ↔ `__eqref` (subtype upcast / ref.cast downcast), GC ref → GC ref (downcast/sidecast), GC ref ↔ externref (extern bridges).
-
-`==` works directly between two `__eqref` values (identity comparison via `ref.eq`).
-
-### Extern bridge
-
-GC refs cross the JS/Wasm boundary via `__eqref` + the extern conversions:
-
-| Intrinsic | Description |
-|---|---|
-| `__ref_as_extern(ref)` | GC ref → externref (`extern.convert_any`) |
-| `__ref_as_eq(ext)` | externref → eqref (`any.convert_extern` + `ref.cast eq`; traps if not eq-compatible) |
-
-### Auto + GC
-
-C23 `auto` pairs naturally with GC types — the type spelling stays on the right of the `=`:
-
-```c
-auto p = __new(__struct Point, 7, 11);
-auto arr = __array_of(int, 1, 2, 3);
-for (auto cur = head; cur; cur = cur->next) printf("%d\n", cur->v);
-```
-
-### Constraints
-
-- No `&` on GC refs (no address)
-- No embedding in C structs/unions
-- No `sizeof` on ref types
-- No casts to/from integers (use `__ref_*` intrinsics)
-- `__array(T) *` is rejected — arrays don't take the `*` sugar
-- `__new` takes `__struct Foo` (no `*`): `__new(__struct Foo, ...)`. Typedefs of GC structs work too. `__struct_new` is an alias.
-
-For the full GC design doc see [docs/WASM_GC.md](docs/WASM_GC.md).
-
-## The OS (os/) — gucOS
-
-The repo's north star ([docs/OS.md](docs/OS.md)) is **gucOS** (groundupcoder OS): a wasm-native, almost-POSIX OS in a browser tab — every binary a real wasm module from this compiler. It boots:
-
-```bash
-node serve.js .            # then open http://localhost:8080/os/os.html
-# → a real shell (busybox hush) + userland (28 busybox applets: ls, grep,
-#   sed, … and vi as /bin/vi) over a persistent filesystem (BlockFS on
-#   OPFS): pipelines, $( ), redirections, here-docs, job control — and
-#   `cc hello.c && ./a.out` compiles and runs IN the OS.
-
-echo 'ls / | cat' | node os/boot.js   # the same OS headless, tty on stdio
-```
-
-Under it sits **kernel.js**, the owner-side process control plane ([docs/KERNEL.md](docs/KERNEL.md)): process table, posix_spawn (deliberately **not** fork — see OS.md for the decision), async signal delivery with EINTR, a kernel-side tty line discipline (Ctrl-C means SIGINT), kernel-owned fd tables over one shared BlockFS, pipes with real cross-process blocking + SIGPIPE, and job control (stop/continue, WUNTRACED/WCONTINUED, SIGTTIN). First boot compiles the OS's own userland — including the shell itself — from sources listed in `os/image.json`; there is no build step. `/bin/sh` is **busybox hush**, ported to the no-fork world through a vfork-on-`__spawn` journaling shim ([vendor/busybox/README.md](vendor/busybox/README.md)) — `popen()`/`system()` work, and the port is the kernel design's acceptance test ([docs/KERNEL.md](docs/KERNEL.md)).
-
-## Vendored projects
-
-The compiler is tested against real-world C projects:
-
-- **QuickJS 2025-09-13** — Fabrice Bellard's small JavaScript engine. The full engine + libc + REPL entry point (`qjs.c`) compiles to a 737 KB wasm and runs JavaScript end-to-end. Including the self-host loop: **`compiler.js` runs inside that QuickJS wasm and produces bit-identical wasm output compared to a native build.** See `vendor/quickjs/README.md`, the [Self-hosting](#self-hosting-bootstrap) section below, and [`old/self-host/`](old/self-host/).
-- **Lua 5.5.0** — Full interpreter, compiles and passes the official test suite
-- **DOOM** — doomgeneric port with Nuked-OPL3 music synthesis, runs in the browser
-- **Snake** — Terminal-based snake game using termios raw mode, ANSI escape codes, and `select()` for input handling
-- **TinyEMU** — Fabrice Bellard's RISC-V emulator. The headless 32-bit build boots Linux 4.15 to a BusyBox shell with interactive stdin. The guest userland is minimal (no compiler); x86 isn't supported because TinyEMU's open source ships only a KVM frontend for x86, not a software interpreter. See `vendor/tinyemu/README.md`
-
-### Building vendored projects
-
-```bash
-# Lua interpreter
+```sh
 node compiler.js vendor/lua/bin.json -o lua.wasm
-node host.js lua.wasm
-
-# DOOM (HTML with embedded WAD)
-node compiler.js vendor/doom/bin.json -o doom.html
-
-# FreeType text rendering demo
-node compiler.js vendor/freetype/demo/bin.json -o freetype-demo.js
-node freetype-demo.js
-
-# Snake (terminal game)
-node compiler.js vendor/snake/main.c -o snake.html
-node compiler.js vendor/snake/main.c -o snake.wasm && node host.js snake.wasm
-
-# TinyEMU — boots Linux RISC-V to a BusyBox shell
-node compiler.js vendor/tinyemu/bin.json -o /tmp/tinyemu.js
-node /tmp/tinyemu.js          # run in a real terminal for interactive stdin
+node host.js lua.wasm -e 'print(1 + 2)'
+node compiler.js -DMY_FEATURE app/bin.json extra.c -o app.wasm
 ```
 
-### Serving HTML output
+A binary project can look like this (paths are relative to the JSON file):
 
-```bash
-node serve.js [dir] [port]   # defaults: build/, 8080
+```json
+{
+  "type": "bin",
+  "name": "game",
+  "deps": ["../vendor/zlib/lib.json"],
+  "includes": ["include"],
+  "compilerArgs": ["-DNDEBUG"],
+  "sources": ["main.c", "game.c"],
+  "dataFiles": {"data/level.dat": "/level.dat"},
+  "runArgs": ["level.dat"]
+}
 ```
 
-`serve.js` adds COOP/COEP headers needed for `SharedArrayBuffer` (used by audio). Any HTTP server works for rendering, but without those headers DOOM runs silently.
+`type` defaults to `bin`. A `"type": "lib"` project must be included through
+`deps`, rather than compiled directly. Shared dependencies are included once.
+`srcRoots` can map source namespaces to directories for `__require_source`.
 
-## Self-hosting bootstrap
+`dataFiles` and `runArgs` are embedded in **`.js` and `.html` output only**.
+For raw `.wasm`, supply files through the runtime filesystem and pass arguments
+after the Wasm path. The CLI still checks that project data files exist while
+expanding the project, even for `.wasm` output.
 
-QuickJS is the path to running `compiler.js` on its own output. The pipeline today:
+### Useful compiler options
 
-1. **Stage 1 — C to wasm.** Our compiler builds QuickJS (~64 KLOC of C) into a 737 KB wasm.
-2. **Stage 2 — JS engine alive.** That wasm runs JavaScript: `qjs -e '1+1'` → `2`. Recursion, classes, regex, JSON, all working.
-3. **Stage 3 — Load self.** `compiler.js` itself (~870 KB of JS) loads and executes inside QuickJS-on-our-wasm, exposing `globalThis.CompilerJS`.
-4. **Stage 4 — Compile from inside.** `compiler.js` running inside QuickJS-on-wasm reads C source via `std.loadFile`, drives the full lex → parse → link → codegen pipeline, and writes a wasm file via `std.open(..., "wb").write(...)`. **The output is bit-identical to a native build of the same C source** (verified with `cmp`). See [`old/self-host/`](old/self-host/).
+Run `node compiler.js --help` for the command-line overview.
 
-```bash
-scripts/quickjs-bootstrap.sh
-# → builds qjs.wasm, runs smoke test, loads compiler.js inside qjs.wasm
+| Option | Purpose |
+|---|---|
+| `-o FILE` | Output `.wasm`, `.js`, or `.html`; default `a.wasm` |
+| `-Ipath`, `-DNAME[=value]` | Include search path and preprocessor definitions |
+| `-g`, `-g1`, `-g2` | Function names/source locations; `-g2` also embeds source text |
+| `-fno-inline` | Disable inlining, independently of debug metadata |
+| `--trap-null-dereference` | Opt-in null-access diagnostics |
+| `--gc-sections` | Remove unreachable functions |
+| `--require-source FILE`, `--srcroot NS=DIR` | Add a source or register a source namespace |
+| `--opfs-file SRC:DEST`, `--run-arg ARG` | Bundle an asset or argument in `.js`/`.html` output |
+| `--sdl=auto\|native\|null` | Backend selection for generated Node `.js` output |
+| `--no-xterm` | Omit the terminal widget from HTML output |
+| `--allow-old-c` | Enable legacy declaration compatibility options |
+| `--no-wasm-validate` | Cross-compile without the local engine's Wasm validation |
+| `-a lex\|parse\|link\|cfg\|print\|compile` | Select a compiler action |
+| `--time-report`, `-v` | Compilation timings and verbose diagnostics |
 
-node host.js /tmp/qjs.wasm --std old/self-host/selfhost.js
-# → compiles old/self-host/hello.c inside qjs.wasm
-node host.js /tmp/selfhost-demo/hello-rebuilt.wasm
-# → "Hello from a wasm built INSIDE wasm!" (exit 42)
+Unsupported flags are errors: `-O2`, `-Wall`, `-c`, `-std=...`, and `-l...` are
+not implemented. The in-OS `cc` frontend has a smaller CLI and does not accept
+these host JSON projects; see [the in-OS toolchain guide](os/doc/toolchain.md).
+
+## gucOS
+
+```sh
+node serve.js .
+# Open the printed /os/os.html URL.
+
+# Or boot the same OS headlessly, with its tty on stdio:
+echo 'ls / | cat' | node os/boot.js
 ```
 
-Equivalent stage-1–3 manual commands:
+The browser desktop requires WebGPU in a worker and cross-origin isolation.
+The dev server prepares a system image when needed, so the first start can take
+time. Headless boot does not open native SDL windows: it uses kernel surfaces,
+with optional GPU readback through the separate npm Dawn (`webgpu`) tier.
+Headless boot is silent by design.
 
-```bash
-node compiler.js -o /tmp/qjs.wasm vendor/quickjs/bin.json
-node host.js /tmp/qjs.wasm -e 'console.log(1+1)'        # → 2
-node host.js /tmp/qjs.wasm --std -e \
-  "std.evalScript(std.loadFile('compiler.js')); console.log('OK');"
-# → OK
+The OS includes BusyBox hush and coreutils, pipes, job control, terminals,
+a desktop/window manager, Notepad, and the `cc` compiler. BlockFS provides a
+persistent writable root and a sealed read-only `/usr`; `/usr/local` routes to
+writable storage. Process creation uses `posix_spawn`, not faithful `fork/exec`.
+The kernel and its processes run in separate workers.
+
+Packages are managed by `gucman`. `os/image.json` is the authority for the base
+image and default packages; `packages/` holds package definitions. Development
+boots normally fold optional packages into the image. `serve.js --minimal .`
+serves the minimal-image shape, where optional applications are installed from
+the separately built package repository. If a sibling `gucos-packages` checkout
+is discovered, the server checks package-index coverage; `--no-extra-packages`
+explicitly selects only this repository's definitions.
+
+Start with the [in-OS developer guide](os/doc/README.md) for writing, building,
+debugging, and packaging programs. [OS architecture](docs/OS.md),
+[kernel](docs/KERNEL.md), [window manager](docs/WM.md), and
+[networking](docs/NETWORK.md) describe the implementation and its boundaries.
+The current primary goal is [C/SDL3 game development inside gucOS](docs/GAMEDEV-EPIC.md),
+including the gcode agent workflow.
+
+## Repository map
+
+| Path | Role |
+|---|---|
+| `compiler.js` | Compiler, builtin headers/libc, source linking, output packaging |
+| `host.js` | Per-program runtime, host adapters, BlockFS/MountFS, graphics/audio |
+| `kernel.js` | Process control, kernel-owned files, IPC, tty, surfaces, and input |
+| `native/` | Optional standalone Node SDL3/wgpu-native addon |
+| `os/` | gucOS boot frontends, userland, window manager, and image manifest |
+| `packages/` | Optional application/library package definitions |
+| `vendor/` | Ported third-party sources and assets, with per-project licenses |
+| `tests/` | Compiler, runtime, filesystem, native, and OS/browser validation |
+| `tools/` | Image/package builders, diagnostics, and maintenance tools |
+| `docs/`, `logs/` | Designs and reference docs; engineering history |
+| `old/` | Frozen experiments, including the C++ compiler and Objective-C snapshot |
+
+Vendored projects include Doom, Quake, Game Boy emulators, Lua, MicroPython,
+SQLite, QuickJS, TinyEMU, NetSurf, and libraries such as zlib, libpng, FreeType,
+and Cairo. Presence under `vendor/` does not imply complete upstream support
+or inclusion in every OS image; consult the port's README and project/package
+definitions. Optional `*-clang` packages use a separate sibling toolchain.
+
+QuickJS can be built and run with
+`node compiler.js vendor/quickjs/bin.json -o qjs.wasm` and
+`node host.js qjs.wasm -e 'console.log(1 + 1)'`.
+The [self-hosting experiment](old/self-host/) is archived; its historical
+bootstrap results are not a current-tree equivalence guarantee. Likewise,
+`old/compiler.cc` is a frozen C++ port, not a second maintained compiler.
+Rust/WASI and self-service (`ss`) execution support are retired; C's Wasm
+GC/reference extensions remain supported.
+
+## Tests and development
+
+`tests/run.js` is the unified dispatcher and the authority for which suites a
+diff needs. Start small and use the mapped gate for changes:
+
+```sh
+node tests/run.js --list
+node tests/run.js unit
+node tests/run.js --diff --dry-run
+node tests/run.js --diff
+node tests/run.js smoke
+node tests/run.js full
 ```
 
-### Patches to upstream
+`smoke` is a subset; `full` is the unfiltered ship gate and refuses filtered or
+resumed runs. Results and scope are recorded under `build/test-run/`. A source
+or documentation inspection is not evidence that the full gate passed.
 
-QuickJS sources in `vendor/quickjs/` are upstream verbatim with three small patches:
-- `quickjs.c` and `libregexp.c` — added `#include <alloca.h>` (QuickJS calls `alloca()` directly relying on glibc's transitive include via `<stdlib.h>`).
-- `quickjs-libc.c` — commented out `#define USE_WORKER` (the `os.Worker` API needs real OS threads).
+Python-backed suites use the interpreter pinned by `.python-version`; prepare
+it with `uv venv`. Browser suites require the pinned packages and Chromium:
 
-Plus one new compiler flag introduced along the way: `--allow-zero-length-arrays` (for the GCC legacy `arr[0]` extension QuickJS leans on for `JSString`'s type-aliased trailing buffer).
-
-### What's left
-
-- Build `qjsc.c` (QuickJS's AOT compiler) on our wasm and feed `repl.js` through it → real interactive REPL.
-- Compile QuickJS *itself* through stage 4 (~64 KLOC of C inside the wasm sandbox) — heavier memory/time test of the same pipeline.
-
-## Tests
-
-`node tests/run.js` is the unified entry point over the whole estate — it
-dispatches to the individual runners and, given a diff, runs exactly the
-suites that diff needs:
-
-```bash
-node tests/run.js all                    # The entire estate, one summary
-node tests/run.js unit kernel            # Named suites (--list to see them)
-node tests/run.js --diff                 # Suites the working-tree diff needs
-node tests/run.js --diff main --dry-run  # Print the plan vs `main`, run nothing
-node tests/run.js --list                 # Suites + the path→suite rule table
+```sh
+pnpm --dir tests/browser install --frozen-lockfile
+pnpm --dir tests/browser exec playwright install chromium
 ```
 
-The individual runners stay independently invocable:
+The root npm `webgpu` dependency is for the optional headless gucOS GPU tier;
+it is separate from the native addon above. Native integration checks are also
+available directly:
 
-```bash
-python3 tests/run.py                                  # Unit tests (default)
-python3 tests/run.py --all                             # Everything
-python3 tests/run.py --types=unit,extra                # Multiple categories
-python3 tests/run.py --types=lua                       # Lua test suite
-python3 tests/run.py --filter=struct                   # Filter by name
+```sh
+node tests/native/run.js               # explicitly reports absent optional tiers
+node tests/native/sdl.js               # requires the native build
+node tests/native/webgpu.js            # requires native WebGPU; real offscreen GPU
+node tests/native/webgpu.js --surfaces # window/surface lifecycle
 ```
 
-Test categories:
-- **unit** — Core C language features and standard library (compile + run, check stdout)
-- **extra** — Additional compile + run tests
-- **lua** — Compile the Lua VM and run the official Lua test suite
+Read [CLAUDE.md](CLAUDE.md) for repository rules, prerequisites, test gates,
+and ticket workflow; it applies to all contributors and agents despite its
+filename. [The documentation index](docs/README.md) separates current guides,
+design proposals, and historical records.
 
-The frozen C++ compiler snapshot in `old/` has its own test runner with equiv tests:
+## Contributing and license
 
-```bash
-python3 old/tests/run.py                              # Unit tests, JS compiler
-python3 old/tests/run.py --all                         # Unit (both compilers) + equiv + sourcemap
-python3 old/tests/run.py --types=equiv --compiler=all  # JS vs C++ equivalence
-```
+Bug reports and questions are welcome. Please discuss non-trivial contributions
+in an issue first; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## License
-
-Apache License, Version 2.0 — see [LICENSE](LICENSE).
-
-## Contributing
-
-Bug reports as issues are very welcome. For pull requests, please open an issue first to discuss. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+The project is licensed under [Apache License 2.0](LICENSE). Vendored projects
+and redistributed native dependencies retain their own licenses.

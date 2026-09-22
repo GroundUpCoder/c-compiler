@@ -1,11 +1,33 @@
 # WebGPU for the C compiler (webgpu.h)
 
-Status: **Tiers 0–3 + conformance pass A1–A9 landed. Direction (2026-06-19):
-finish the conformance pass (A10–A15) on the surface we already expose, PAUSE
-further surface expansion (Phase B), and make SDL3 the next major feature (see
-`docs/SDL3.md`). Unifying SDL_Renderer onto `webgpu.h` is deferred until JSPI
-reaches iOS. See "Progress + revised direction" below.**
-Decision date: 2026-06-18. Full-coverage plan: 2026-06-19.
+## Current runtime paths
+
+The compiler supplies a `webgpu.h` API subset and an embedded `__webgpu.c`
+veneer. The veneer flattens C descriptors into `__wgpu_*` host imports and
+reconstructs callback arguments; native pointers do not cross into Wasm.
+`host.js` selects the backend:
+
+- **Browser:** `createBrowserWebGPU`, using the browser's WebGPU API.
+- **gucOS:** the kernel surface adapter supplies the per-process canvas/present
+  configuration; headless GPU execution uses the separately installed optional
+  npm Dawn (`webgpu`) tier with readback into shared surfaces.
+- **Standalone Node:** the optional SDL3/wgpu-native addon supplies
+  `createNativeWebGPU`. Build and distribution instructions are in
+  [native/README.md](../native/README.md). This is separate from the npm Dawn tier.
+- **Unavailable GPU:** the null adapter resolves imports and reports that no
+  adapter is available; successful module instantiation does not imply GPU support.
+
+Use `wgpuSetMainLoopCallback` to keep asynchronous request/map completions
+moving. The native guide documents window presentation ownership and cleanup.
+The C headers/veneer in `compiler.js`, adapters in `host.js`, and
+`tests/native/webgpu.js` are the concrete implementation references.
+
+## Design and conformance history
+
+The following design was started on 2026-06-18 and expanded on 2026-06-19.
+Its tier/phase statuses, upstream browser-support observations, and expansion
+plans are dated records, not current compatibility guarantees or queue order.
+The runtime paths above supersede the original Node-stub-only description.
 
 ## What and why
 
@@ -61,29 +83,25 @@ callback modes) — accepted.
 
 ## Architecture
 
-All of this lives in the existing single-`env` import model — no new runtime
+All of this lives in the existing C ABI import module (`c`) — no new runtime
 fork.
 
 ### 1. The header — `webgpu.h` in `compiler.js`
 
-Add `"webgpu.h"` to `_stdlibHeaders` (the SDL.h precedent at compiler.js ~17089).
-Pure declarations: opaque handle typedefs (`typedef struct WGPUDeviceImpl*
-WGPUDevice;` …), enums, descriptor structs, `WGPUStringView`, callback-info
-structs, and `extern` prototypes for every `wgpu*` function. No C implementation
-file is needed (unlike `__SDL.c`): each `wgpu*` prototype maps **directly** to a
-host import. The header just declares them `extern` so calls lower to wasm
-imports that `host.js` satisfies.
+`webgpu.h` is embedded in `compiler.js` and automatically includes
+`__webgpu.c` through `__require_source`. It declares the C-facing handle,
+structure, enum, and function types. The veneer owns C structure layout and
+passes flattened arguments or packed arrays through `__wgpu_*` imports.
 
-Handles are pointer-sized opaque ints (i32 in wasm32). Structs use the exact
-field order/sizes the binding reads back from linear memory — this header and the
-JS marshaller are one contract; they change together.
+Handles are opaque integer IDs in Wasm. The C veneer and host adapters form
+one ABI and must change together.
 
-### 2. The binding — `createBrowserWebGPU({ canvas, ctx })` in `host.js`
+### 2. The binding — selected by `host.js`
 
-Mirrors `createBrowserSDL` (host.js ~4480) and is merged the same way
-(`Object.assign(imports[ENV_KEY], webgpu[ENV_KEY])` near host.js ~6286, right
-after the SDL merge). A `createNullWebGPU()` stub variant resolves the imports in
-headless/Node so modules always instantiate.
+`runModule` merges the selected WebGPU adapter's imports alongside the SDL
+adapter. Browser/kernel configuration takes precedence; standalone Node can
+load the native addon. `createNullWebGPU` supplies unavailable-capability
+behavior when no GPU backend is selected.
 
 Three mechanisms:
 
@@ -91,18 +109,16 @@ Three mechanisms:
   (`GPUDevice`, `GPUBuffer`, `GPUTexture`, `GPURenderPipeline`,
   `GPUCommandEncoder`, …). Each `wgpuXCreateY` allocates a handle and stores the
   JS object; each `wgpuYRelease` frees it. Handle 0 = null.
-- **Descriptor marshalling.** Read descriptor structs out of wasm linear memory
-  via `ctx.getMemory()` + DataView, following the header's field layout, into JS
+- **Descriptor marshalling.** Consume the veneer's flattened arguments and
+  packed arrays from wasm linear memory to construct JS
   descriptor objects. Strings via `WGPUStringView` (ptr+len) → `readString`-style
   decode. Chained structs (`nextInChain`) walked by `sType`.
-- **Async via callbacks (NO JSPI).** `wgpuInstanceRequestAdapter`,
-  `wgpuAdapterRequestDevice`, `wgpuBufferMapAsync`, `wgpuQueueOnSubmittedWork…`
-  take callback-info structs. The binding calls the JS Promise
-  (`navigator.gpu.requestAdapter()` …) and, on resolve, invokes the C callback
-  **function pointer through the indirect function table**
-  (`ctx.getIndirectFunctionTable().get(fnPtr)(status, handle, message, userdata)`)
-  — the identical mechanism `__sdl_set_animation_frame_func` uses for frames.
-  Per-frame rendering is fully synchronous WGPU calls; only setup is async.
+- **Async via callbacks (NO JSPI).** Adapter/device requests, mapping, and
+  other asynchronous operations complete through C trampoline exports such as
+  `__wgpu_call_adapter_cb`. These reconstruct the C callback's arguments and
+  invoke it using the compiler's callback ABI. Browser requests use promises;
+  native completions are pumped by the callback loop. Mapping/readback can be
+  asynchronous during operation as well as setup.
 
 ### 3. The surface — straight from the run's OffscreenCanvas
 

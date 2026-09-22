@@ -1,15 +1,16 @@
 # Networking — the tier model
 
-Status: designed 2026-07-09 (discussion log
-`logs/2026-07-09/roadmap-network-desktop.md`); queue items `0052`
-(loopback AF_INET — live ticket **#3**), `0054` (relay transport — live
-ticket **#7**), `0182` (/bin/curl CLI).
-**Tier 2 is LANDED** (2026-07-13): the kernel HTTP transport is
-`docs/archive/0172`, the curl easy veneer is `docs/archive/0173` (which
-superseded the original `0053` item — closed 2026-07-15); only the
-`/bin/curl` tool remains (`0182`).
-**Tier 2.5 is LANDED** (2026-08-01, ticket #349 Stage 1): the
-off-by-default localhost HTTP bridge, below.
+Current implementation: **kernel HTTP transport, the curl-easy veneer,
+`/usr/bin/curl`, and the opt-in localhost HTTP bridge are implemented**.
+The command is built from `os/curl/cli.json` by `os/image.json`; its implementation
+is `os/curl/curl-cli.c`. The bridge remains off by default.
+
+This tier model was designed on 2026-07-09 (discussion log
+`logs/2026-07-09/roadmap-network-desktop.md`). Tier 1 loopback AF_INET and
+Tier 4 raw socket relay below are designs, tracked by **#3** and **#7**,
+respectively, not implemented socket capabilities. AF_UNIX IPC is implemented.
+Tier 2 landed through `docs/archive/0172` and `docs/archive/0173`; the curl CLI
+followed in `docs/archive/0182`. Tier 2.5 landed with #349 Stage 1.
 
 ## Platform truth (don't re-litigate the constraint)
 
@@ -24,9 +25,9 @@ below is built from those.
 Headless (Node) has none of these limits. The browser/headless asymmetry
 is permanent; each tier documents it rather than hiding it.
 
-## Tier 1 — loopback AF_INET (`0052`)
+## Tier 1 — proposed loopback AF_INET (`0052`, #3)
 
-`127.0.0.1` TCP implemented entirely in kernel.js: the AF_UNIX OFD
+Proposed: `127.0.0.1` TCP implemented entirely in kernel.js: the AF_UNIX OFD
 machinery (docs/archive/0008) plus a kernel port table instead of BlockFS
 rendezvous nodes. **No web constraint at all** — identical in browser and
 headless. Unlocks the large class of client/server software that never

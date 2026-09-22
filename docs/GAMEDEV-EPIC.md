@@ -46,8 +46,8 @@ under. Companion principle: `docs/OS.md` "Dev-experience first" (commit
 > as when it's done with gcode."*
 
 This is **higher than the bar the rest of this document states**, and it is the
-bar this epic is judged against when it eventually takes primacy back from
-PKGDEV. Three things it changes:
+bar the current primary epic is judged against. Primacy was restored on
+2026-08-13 as recorded above. Three things it changes:
 
 1. **"Various games", not one showcase.** A single working demo does not
    satisfy it. The plural is load-bearing.
@@ -64,8 +64,8 @@ PKGDEV. Three things it changes:
    exercises only the hand-coded arm is incomplete.
 
 Recorded by @master from the email thread of 2026-08-09 (the same reply that
-ruled PKGDEV not yet done, so this bar governs the epic that is *next*, not the
-one running now).
+ruled PKGDEV not yet done; gamedev was next at that time and became primary
+again on 2026-08-13).
 
 That directive is **not scoped to a batch or a cycle** — it stands until he
 says otherwise. **Operative reading for queue selection: gamedev primacy is a

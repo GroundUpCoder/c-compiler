@@ -1,10 +1,14 @@
 # SDL3 for the C compiler — scope, current state, and the work to do
 
-Status: **partial SDL3 subset shipped (window + 2D renderer + basic events +
-audio streams + timer + the `sdl3webgpu` bridge). This doc enumerates the full
-SDL3 surface and what remains.** Written 2026-06-19, after the WebGPU
-conformance pass (A1–A9; see `docs/WEBGPU.md`). SDL3 is the next major feature
-after the WebGPU A10–A15 conformance pass.
+Status: **a partial SDL3 API is implemented**, with browser, gucOS surface,
+and optional standalone Node native backends. The generated
+[SDL API index](../os/doc/sdl-api-index.md) lists the current C symbols;
+[SDL on gucOS](../os/doc/sdl-gucos.md) describes its loop/backend contracts;
+[the native guide](../native/README.md) covers Node windows, input, and audio.
+
+The dated inventories and conformance passes below record the evolution of the
+implementation, beginning in June 2026. Their counts are historical, not a
+complete inventory of today's symbols or a current test result.
 
 ## Goal
 
@@ -39,10 +43,10 @@ continues to use its existing adapters. Without the addon, standalone auto mode
 reports unavailable SDL devices; `--sdl=null` explicitly selects the headless
 simulation used by tests.
 
-- **Single `env` import model**, same as WebGPU: `__SDL.c` (in `compiler.js`,
-  ~424 lines) flattens SDL structs to primitives and forwards to `__sdl_*`
-  imports satisfied by `createBrowserSDL` in `host.js` (~550 lines). `SDL.h` is
-  in `_stdlibHeaders` (~289 lines).
+- **C ABI import module (`c`)**, same as WebGPU: `__SDL.c` (embedded in
+  `compiler.js`) flattens SDL structs to primitives and forwards to `__sdl_*`
+  imports satisfied by the selected SDL adapter in `host.js`. `SDL.h` and
+  the SDL3 include aliases are embedded builtin headers.
 - **No JSPI ⇒ SDL3's callback main loop is the natural fit — and since #551
   it is IMPLEMENTED and ENFORCED.** `SDL_MAIN_USE_CALLBACKS`
   (`SDL_AppInit`/`SDL_AppIterate`/`SDL_AppEvent`/`SDL_AppQuit`, real
@@ -81,7 +85,7 @@ simulation used by tests.
   shares the same async-device-under-sync-API / no-JSPI problem as the renderer
   unification, so it is likewise **JSPI-gated** (see "SDL_GPU" below).
 
-## Current state (what already works)
+## Initial implemented surface (June 2026; see the API index for current coverage)
 
 Host ops implemented (32) and the `SDL.h`/`__SDL.c` C API on top of them:
 

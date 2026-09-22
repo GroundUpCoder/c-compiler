@@ -7,10 +7,12 @@ Upstream sources from https://bellard.org/quickjs/quickjs-2025-09-13-2.tar.xz
 - **License**: MIT (see `LICENSE`)
 - **SHA256**: `996c6b5018fc955ad4d06426d0e9cb713685a00c825aa5c0418bd53f7df8b0b4`
 
-## Status
+## Recorded port status
 
-**Full QuickJS — engine + libc + REPL entry point — compiles, runs, and
-evaluates large JS programs.** 737 KB wasm. Direct eval works:
+The port contains the engine, libc integration, and `qjs.c`, with an empty
+interactive-REPL bytecode stub. The examples and size/determinism measurements
+below are historical results, not a current full-bootstrap validation. Direct
+evaluation can be checked with the build/run commands below:
 
 ```
 $ node host.js /tmp/qjs.wasm -e 'console.log(1 + 1)'
@@ -29,22 +31,11 @@ json: {"a":[1,2],"b":"x"}
 Recursion, arrow functions, `Array.map`, regex with capture groups,
 JSON, ES6 classes — all working.
 
-**Bootstrap loop**: `compiler.js` itself (~870 KB of JS) loads and runs
-inside QuickJS-on-our-wasm, **and that running-inside-wasm compiler
-produces bit-identical wasm output** compared to a native Node build of
-the same C source:
-
-```
-$ node host.js /tmp/qjs.wasm --std demos/self-host/selfhost.js
-[selfhost] generated 25175 bytes of wasm
-[selfhost] wrote /tmp/selfhost-demo/hello-rebuilt.wasm
-
-$ cmp /tmp/selfhost-demo/hello-rebuilt.wasm /tmp/hello-native.wasm
-$ echo $?    # (no output)
-0            # files are byte-for-byte identical
-```
-
-The full recipe is in [`demos/self-host/`](../../demos/self-host/).
+**Historical bootstrap experiment:** an earlier `compiler.js` loaded inside
+QuickJS-on-Wasm and compiled a small C program to output matching a Node build.
+The archived recipe and measurements are in
+[`old/self-host/`](../../old/self-host/). Those scripts retain historical paths
+and are not maintained quick-start commands or proof of current-tree equivalence.
 
 No workarounds — `bin.json` uses the compiler's normal flags. The
 `--no-reuse-locals` workaround that earlier was required has been
@@ -73,7 +64,7 @@ real REPL bytecode from `repl.js`.
 
 ```bash
 node compiler.js -o /tmp/qjs.wasm vendor/quickjs/bin.json
-node host.js /tmp/qjs.wasm -e '1+1'
+node host.js /tmp/qjs.wasm -e 'console.log(1 + 1)'
 ```
 
 ## Build flags
@@ -104,7 +95,11 @@ Minimal:
   the real bytecode by running `qjsc` over `repl.js`. Direct eval
   (`qjs -e '...'`) bypasses the bytecode load and works fully.
 
-## Compiler / stdlib gaps closed along the way
+## Compiler / stdlib history
+
+The list below describes the initial port. In particular, its original process
+stubs are not the current kernel contract: gucOS now has spawn/wait/signals.
+See [OS.md](../../docs/OS.md) for the current process model.
 
 - **`parser`: enum tag names live in their own namespace** — `typedef enum
   X X;` no longer prevents a later `enum X { ... }` definition. Surfaced

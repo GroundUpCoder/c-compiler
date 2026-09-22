@@ -11,7 +11,9 @@ V8's support for these features matured at different points, so older Node versi
 
 ## Compatibility matrix
 
-Smoke test: compile `vendor/hello/main.c` to `.wasm`, run via `host.js`. Full unit suite is `tests/run-unit.js` (530 tests).
+Historical measurements below used `vendor/hello/main.c` compiled to `.wasm`
+and run via `host.js`, plus the then-current `tests/run-unit.js` corpus.
+The pass totals describe those runs, not the current suite size or a fresh gate.
 
 | Node | hello.c (default) | hello.c (with flags) | Unit tests |
 |---|---|---|---|

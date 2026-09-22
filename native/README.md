@@ -30,6 +30,20 @@ x64 and Linux arm64/x64 dependency selections; Linux needs development headers
 for the desired video/audio drivers. Those other targets have not been tested
 here. Windows builds are not implemented by this component.
 
+## Doom example and data files
+
+From the repository root, after building the addon:
+
+```sh
+node compiler.js vendor/doom/bin.json -o doom.wasm
+node host.js doom.wasm -iwad vendor/doom/data/doom1.wad
+```
+
+Raw `.wasm` output does not embed a project's `dataFiles`. The Node runner uses
+host files, so pass Doom's WAD path explicitly or run from a directory containing
+it. `.js` output embeds project assets, extracts them into a temporary working
+directory, and removes that directory on exit; saves written there are temporary.
+
 ## Selection and absence
 
 `node host.js game.wasm --sdl=auto|native|null` selects the backend. For generated

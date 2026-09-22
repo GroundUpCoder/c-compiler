@@ -8,6 +8,29 @@
 > to `tools/liabilities/`, the pre-commit hook to `tools/githooks/`. See
 > `CLAUDE.md` "Tickets & the work queue" for the live workflow.
 
+## Reading current state
+
+Start with the [repository README](../README.md) for build/run instructions,
+[the in-OS guide](../os/doc/README.md) for gucOS application development, and
+[the native guide](../native/README.md) for standalone Node SDL3/WebGPU.
+
+Topic docs mix implemented contracts, dated investigations, and future designs.
+A dated measurement or a proposed phase is not a current validation result.
+Check the source and executable tests before treating an old status paragraph
+as proof. In particular:
+
+| Question | Authority |
+|---|---|
+| What does the compiler accept? | `compiler.js --help`, parser/builtin headers, `tests/unit/` |
+| What does the OS ship? | `os/image.json`, `packages/`, optional sibling package definitions |
+| Which runtime handles graphics? | `host.js` backend selection; `native/README.md` for standalone Node |
+| What SDL symbols exist? | `os/doc/sdl-api-index.md` (generated), builtin headers |
+| What gate does a change need? | `node tests/run.js --diff --dry-run` |
+| What passed? | Artifacts from the particular completed test invocation |
+| What work is scheduled? | The live cc ticket tracker, not a document's unchecked list |
+
+## Document types
+
 Three kinds of files live here:
 
 1. **Design / topic docs** (`NAME.md`) — live, referenced by tickets.

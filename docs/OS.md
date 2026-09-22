@@ -154,7 +154,7 @@ pgid atomically at spawn).
    could be built on memory snapshot + JSPI/stack-switching. Big project, low
    priority, and per-port patching is almost always cheaper.
 
-## Current implementation (source checked 2026-09-07)
+## Current implementation
 
 This table describes the local source, not a deployment or a fresh gate result.
 `os/image.json` owns image/package membership and version; `tests/run.js full`
@@ -170,7 +170,7 @@ SDL coverage percentages here: they drift independently of capability.
 | Reference build | `os/os.html` boots in a browser; `os/boot.js` is the headless twin. Both use `os/os-common.js` and the same image manifest. `cc hello.c && ./a.out` builds and runs in-OS. Source-built distribution binaries include names and source locations; direct developer builds opt in with `-g`/`-g2`. |
 | Shell and coreutils | BusyBox hush plus a multicall coreutils binary and manifest-declared applet links (`vendor/busybox/`, `os/image.json`). Pipelines, redirects, command substitution, interactive editing and shell control flow use the spawn substrate. |
 | Threads | Deferred indefinitely (`logs/2026-07-07/threads-atomics-deferral.md`). Processes are the parallelism unit; the compiler declares `__STDC_NO_ATOMICS__` and `__STDC_NO_THREADS__`. |
-| Graphics and audio | SDL3 subset with per-window software/GPU rendering, WebGPU bindings, kernel audio mixing and browser playback. `os/doc/sdl-api-index.md` lists actual SDL symbols; `os/doc/sdl-gucos.md` explains loop/backend contracts. Browser OS requires WebGPU; headless GPU rendering uses the optional Dawn tier. |
+| Graphics and audio | SDL3 subset with per-window software/GPU rendering, WebGPU bindings, kernel audio mixing and browser playback. `os/doc/sdl-api-index.md` lists actual SDL symbols; `os/doc/sdl-gucos.md` explains loop/backend contracts. Browser OS requires WebGPU; headless GPU rendering uses the optional Dawn tier. Standalone Node has a separate optional SDL3/wgpu-native addon (`native/README.md`), not the gucOS surface backend. |
 | Window manager | Kernel-owned surfaces and input, WebGPU browser compositor (`os/compositor.js`), wasm `/bin/wm` policy and `/bin/wmctl` semantic control. Multi-window taskbar, resize/scale/maximize, menus and desktop are implemented. Surface, thumbnail and screen captures include GPU pixels through readback; headless composition is independently available (`WM.md`, kernel/browser suites). |
 | Networking | AF_UNIX IPC and HTTP through kernel fetch/curl are implemented. Browser HTTP follows CORS unless a bridge is configured. General AF_INET remains tracked by `NETWORK.md`; this is not Linux socket ABI compatibility. |
 | Editors | BusyBox vi on the tty and Notepad are manifest/package-managed (the windowed sedit C editor was retired 2026-09-21); gcode provides the in-OS agent workflow. See `os/doc/`. |
@@ -238,7 +238,11 @@ os/os.html            thin boot shim (UI bridge): xterm + canvas + input
   program. It exercises the spawn, pipe, signal, tty, and job-control
   substrate delivered by kernel Phases 1–4.
 
-## Roadmap
+## Historical phased roadmap
+
+The phase descriptions below preserve the original sequencing and rationale.
+They are not the current work queue: the implementation table above describes
+the shipped architecture, and the live ticket tracker owns remaining work.
 
 Sequencing principle: **shell before window manager.** The shell is the
 keystone app — it forces spawn composition, pipes, signals, tty semantics and
