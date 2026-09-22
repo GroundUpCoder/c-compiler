@@ -55,7 +55,6 @@ don't duplicate them. Current map:
   native software-manager design.
 - `CPYTHON.md`, `CLANG-CPP-EPIC.md`, `CPP-LADDER-PROPOSAL.md` — the
   CPython / clang-sibling programme (starts only on a jku ruling).
-- `RUST.md`, `RUST-D1-RULING.md` — the Rust programme and its ruling.
 - `NETSURF-JS.md`, `W3M-INVESTIGATION.md` — the browser port and the
   text-browser investigation.
 - `KEYMAP.md`, `KEYBINDING-OVERRIDE-SYSTEM.md`, `META-ARROW-KEYBIND.md` —
@@ -167,3 +166,7 @@ files stay readable; none of it applies to new work.
   new evidence — record the *why* when deciding anything new.
 - Land a dev-log entry when completing anything substantial
   (`logs/YYYY-MM-DD/<topic>.md`), cross-linking the funding ticket.
+
+Rust/WASI and self-service (`ss`) runtime support were retired on 2026-09-21.
+Their historical designs are preserved in `archive/RUST.md`,
+`archive/RUST-D1-RULING.md`, and `archive/SS-INTEROP.md`.

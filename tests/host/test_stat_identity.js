@@ -196,7 +196,7 @@ test('kernel filesystem devices, spawn OPEN/inheritance, and anonymous compatibi
   child.fds.forEach(id => k._ofdUnref(id, child.pid)); child.fds.clear();
   f.client.call(K.OP.FS_CLOSE, { fd });
 });
-test('actual mounted pairs survive both production ABI adapters', () => {
+test('actual mounted pairs survive the production C ABI adapter', () => {
   const f = roFixture(), r = new K.RemoteFS(f.client, {
     roFs: f.reader(), roPrefix: '/usr', roDev: f.kernel._roImage.dev, roLeaf: true,
   });
@@ -204,12 +204,9 @@ test('actual mounted pairs survive both production ABI adapters', () => {
     const memory = new WebAssembly.Memory({ initial: 1 }), view = new DataView(memory.buffer);
     const ctx = { getMemory: () => memory, readString: () => '/usr/f', setErrnoName: e => { throw new Error(e); } };
     const c = B.BlockFS.prototype.toWasmEnv.call(fs, ctx);
-    const w = B.BlockFS.prototype.toWasiPreview1.call(fs, ctx);
     const fd = fs.open('/usr/f', 0, 0), expected = pair(f.fs.stat('/usr/f'));
     assert.strictEqual(c.stat(0, 128), 0);
     assert.deepStrictEqual([view.getUint32(128, true), view.getUint32(132, true)], expected);
-    assert.strictEqual(w.fd_filestat_get(fd, 128), 0);
-    assert.deepStrictEqual([Number(view.getBigUint64(128, true)), Number(view.getBigUint64(136, true))], expected);
     fs.close(fd);
   }
 });
@@ -270,44 +267,35 @@ test('manual RO coverage and custom owner metadata fail closed', () => {
 function adapters() {
   const fs = fresh(), memory = new WebAssembly.Memory({ initial: 1 }); let errno;
   const ctx = { getMemory: () => memory, readString: () => '/f', setErrnoName: e => { errno = e; } };
-  const c = fs.toWasmEnv(ctx), w = fs.toWasiPreview1(ctx);
+  const c = fs.toWasmEnv(ctx);
   const st = { dev: 0xffffffff, ino: 0x80000001, mode: 0o100644, size: 17, nlink: 1, atime: 1, mtime: 2, ctime: 3 };
   fs.stat = fs.lstat = fs.fstat = () => st;
   new Uint8Array(memory.buffer).set([102], 16);
-  return { fs, memory, c, w, st, errno: () => errno };
+  return { fs, memory, c, st, errno: () => errno };
 }
-test('C and WASI preserve unsigned identity and unchanged field offsets', () => {
+test('C preserves unsigned identity and unchanged field offsets', () => {
   const a = adapters(), v = new DataView(a.memory.buffer);
   for (const fn of [() => a.c.stat(16, 128), () => a.c.lstat(16, 128), () => a.c.fstat(5, 128)]) {
     assert.strictEqual(fn(), 0); assert.strictEqual(v.getUint32(128, true), a.st.dev);
     assert.strictEqual(v.getUint32(132, true), a.st.ino); assert.strictEqual(v.getBigInt64(160, true), 17n);
   }
-  for (const fn of [() => a.w.fd_filestat_get(5, 128), () => a.w.path_filestat_get(3, 1, 16, 1, 128), () => a.w.path_filestat_get(3, 0, 16, 1, 128)]) {
-    assert.strictEqual(fn(), 0); assert.strictEqual(v.getBigUint64(128, true), BigInt(a.st.dev));
-    assert.strictEqual(v.getBigUint64(136, true), BigInt(a.st.ino)); assert.strictEqual(v.getBigUint64(160, true), 17n);
-  }
 });
-test('invalid identity pair returns EIO without writing either ABI output', () => {
+test('invalid identity pair returns EIO without writing the C ABI output', () => {
   for (const field of ['dev', 'ino']) for (const value of [undefined, null, -1, 0x100000000, 0.5, NaN, '1']) {
     const a = adapters(); a.st[field] = value;
     const bytes = new Uint8Array(a.memory.buffer, 128, 120); bytes.fill(0xa5);
     for (const fn of [() => a.c.stat(16, 128), () => a.c.lstat(16, 128), () => a.c.fstat(5, 128)]) {
       assert.strictEqual(fn(), -1, field + '=' + value); assert.strictEqual(a.errno(), 'EIO'); assert(bytes.every(x => x === 0xa5));
     }
-    for (const fn of [() => a.w.fd_filestat_get(5, 128), () => a.w.path_filestat_get(3, 1, 16, 1, 128), () => a.w.path_filestat_get(3, 0, 16, 1, 128)]) {
-      assert.strictEqual(fn(), 29); assert(bytes.every(x => x === 0xa5));
-    }
   }
 });
 test('backend failures retain ENOENT/EBADF; explicit legacy dev zero remains valid', () => {
   const a = adapters(); a.st.dev = a.st.ino = 0;
-  assert.strictEqual(a.c.stat(16, 128), 0); assert.strictEqual(a.w.fd_filestat_get(0, 128), 0);
+  assert.strictEqual(a.c.stat(16, 128), 0);
   a.fs.stat = () => { a.fs._lastError = 'ENOENT'; return null; };
   a.fs.fstat = () => { a.fs._lastError = 'EBADF'; return null; };
   assert.strictEqual(a.c.stat(16, 128), -1); assert.strictEqual(a.errno(), 'ENOENT');
-  assert.strictEqual(a.w.path_filestat_get(3, 1, 16, 1, 128), 44);
   assert.strictEqual(a.c.fstat(999, 128), -1); assert.strictEqual(a.errno(), 'EBADF');
-  assert.strictEqual(a.w.fd_filestat_get(999, 128), 8);
 });
 console.log(`stat identity: ${passed} passed, ${failed} failed`);
 process.exitCode = failed ? 1 : 0;

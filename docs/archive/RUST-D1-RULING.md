@@ -1,3 +1,6 @@
+> Retired 2026-09-21 by user direction: Rust/WASI and ss support removed.
+> Historical design record; not current support policy.
+
 # docs/RUST-D1-RULING.md — D1: codex on gucOS, the ruling (ticket #192)
 
 - **Status**: ruled 2026-07-31 (ticket `#192`, unit D1 of `docs/RUST.md` §4).
