@@ -1172,6 +1172,24 @@ var BLOCK_FS = (function () {
   // ByteStore — random-access byte-addressable backing store
   // =================================================================
 
+  // ByteStore write notifications keep derived directory indexes coherent even
+  // across live filesystem instances and direct writes through the store API.
+  // A custom store without this capability remains correct, but uncached.
+  var storeWriteListeners = new WeakMap();
+  function directoryStoreKey(store) {
+    while (store instanceof ReadOnlyStore) store = store._i;
+    return store instanceof SyncAccessHandleStore ? store._h : store;
+  }
+  function watchStoreWrites(listener) {
+    var key = directoryStoreKey(this), listeners = storeWriteListeners.get(key);
+    if (!listeners) storeWriteListeners.set(key, listeners = new Set());
+    listeners.add(listener);
+  }
+  function notifyStoreWrite(store, offset, length) {
+    var listeners = storeWriteListeners.get(directoryStoreKey(store));
+    if (listeners && length > 0) listeners.forEach(function (listener) { listener(offset, length); });
+  }
+
   // For tests: backed by an ArrayBuffer.
   function MemoryByteStore(initialSize) {
     initialSize = initialSize || 65536;
@@ -1179,16 +1197,19 @@ var BLOCK_FS = (function () {
     this._u8 = new Uint8Array(buf);
     this._dv = new DataView(buf);
   }
+  MemoryByteStore.prototype.watchWrites = watchStoreWrites;
   MemoryByteStore.prototype.getUint32 = function (off) {
     return this._dv.getUint32(off, true);
   };
   MemoryByteStore.prototype.setUint32 = function (off, val) {
+    notifyStoreWrite(this, off, 4);
     this._dv.setUint32(off, val, true);
   };
   MemoryByteStore.prototype.getBytes = function (off, len) {
     return this._u8.slice(off, off + len);
   };
   MemoryByteStore.prototype.setBytes = function (off, data) {
+    notifyStoreWrite(this, off, data.length);
     this._u8.set(data, off);
   };
   MemoryByteStore.prototype.size = function () {
@@ -1211,11 +1232,13 @@ var BLOCK_FS = (function () {
     this._tmp4 = new Uint8Array(4);
     this._tmpDV = new DataView(this._tmp4.buffer);
   }
+  SyncAccessHandleStore.prototype.watchWrites = watchStoreWrites;
   SyncAccessHandleStore.prototype.getUint32 = function (off) {
     this._h.read(this._tmp4, { at: off });
     return this._tmpDV.getUint32(0, true);
   };
   SyncAccessHandleStore.prototype.setUint32 = function (off, val) {
+    notifyStoreWrite(this, off, 4);
     this._tmpDV.setUint32(0, val, true);
     this._h.write(this._tmp4, { at: off });
   };
@@ -1225,12 +1248,14 @@ var BLOCK_FS = (function () {
     return buf;
   };
   SyncAccessHandleStore.prototype.setBytes = function (off, data) {
+    notifyStoreWrite(this, off, data.length);
     if (data.length > 0) this._h.write(data, { at: off });
   };
   SyncAccessHandleStore.prototype.size = function () {
     return this._h.getSize();
   };
   SyncAccessHandleStore.prototype.resize = function (newSize) {
+    notifyStoreWrite(this, 0, Infinity);
     this._h.truncate(newSize);
   };
   // Force buffered writes to durable storage. OPFS write() does NOT guarantee
@@ -1243,6 +1268,7 @@ var BLOCK_FS = (function () {
   // Wraps a store so every write throws — used to mount the legacy v3 image as a
   // strictly read-only "view" (the toggle), so it can never be mutated.
   function ReadOnlyStore(inner) { this._i = inner; }
+  ReadOnlyStore.prototype.watchWrites = function (listener) { return this._i.watchWrites(listener); };
   ReadOnlyStore.prototype.getUint32 = function (o) { return this._i.getUint32(o); };
   ReadOnlyStore.prototype.getBytes = function (o, l) { return this._i.getBytes(o, l); };
   ReadOnlyStore.prototype.size = function () { return this._i.size(); };
@@ -1265,6 +1291,7 @@ var BLOCK_FS = (function () {
     this._u8 = new Uint8Array(sab);
     this._dv = new DataView(sab);
   }
+  SabByteStore.prototype.watchWrites = function () {}; // sealed, immutable by contract
   SabByteStore.prototype.getUint32 = function (off) {
     return this._dv.getUint32(off, true);
   };
@@ -2384,49 +2411,90 @@ var BLOCK_FS = (function () {
     return { inodeId: inoId, nameLen: nameLen, name: decodeStr(nameBytes) };
   }
 
-  // Scan the directory for an entry with the given name.
-  // Returns { inodeId, offset: offset within extent of this entry } or null.
-  function dirLookup(store, extentBase, extentSize, name) {
-    // Binary search — entries are sorted by name.
-    // Directory entries are variable-length, so we use a two-pass approach:
-    // first collect entry offsets, then binary search. The whole extent is read
-    // once up front so the scan is a single syscall, not one per entry.
-    var ext = readDirExtent(store, extentBase, extentSize);
-    var offsets = [];
-    var pos = 0;
-    while (pos < extentSize) {
-      var ent = parseDirEnt(ext.buf, ext.dv, pos, extentSize);
-      if (!ent) break;
-      if (ent.inodeId !== 0) offsets.push(pos); // skip deleted entries
-      pos += DIR_ENT_HEADER + ent.nameLen;
-    }
-
-    var lo = 0, hi = offsets.length - 1;
-    while (lo <= hi) {
-      var mid = (lo + hi) >>> 1;
-      var e = parseDirEnt(ext.buf, ext.dv, offsets[mid], extentSize);
-      if (!e) break;
-      if (e.name === name) return { inodeId: e.inodeId, offset: offsets[mid] };
-      if (e.name < name) lo = mid + 1;
-      else hi = mid - 1;
-    }
-    return null;
+  // IBFS: derived indexes, never persisted metadata. The underlying
+  // inode table and allocator remain read-through. LRU bounds apply per store;
+  // oversized directories work without retention. Writes invalidate BEFORE a
+  // potentially partial operation; successful directory edits then republish
+  // their updated index without reparsing names or reading the whole directory.
+  var directoryIndexes = new WeakMap();
+  var DIR_CACHE_DIRS = 128, DIR_CACHE_ENTRIES = 65536, DIR_CACHE_BYTES = 4 * 1024 * 1024;
+  function DirectoryIndexes(store) {
+    this.items = new Map(); this.entries = 0; this.bytes = 0;
+    this.hits = 0; this.builds = 0; this.invalidations = 0;
+    var self = this;
+    store.watchWrites(function (offset, length) {
+      self.items.forEach(function (index) {
+        if (offset < index.base + index.size && offset + length > index.base) {
+          self.drop(index.base); self.invalidations++;
+        }
+      });
+    });
   }
-
-  // Find the insertion point for `name` in sorted order.
-  // Returns the byte offset where the entry should be inserted.
-  function dirFindInsertPos(store, extentBase, extentSize, name) {
-    var ext = readDirExtent(store, extentBase, extentSize);
-    var target = 0;
-    var pos = 0;
-    while (pos < extentSize) {
-      var ent = parseDirEnt(ext.buf, ext.dv, pos, extentSize);
+  DirectoryIndexes.prototype.drop = function (base) {
+    var old = this.items.get(base);
+    if (!old) return;
+    this.items.delete(base); this.entries -= old.list.length; this.bytes -= old.size;
+  };
+  DirectoryIndexes.prototype.keep = function (index) {
+    this.drop(index.base);
+    if (index.list.length > DIR_CACHE_ENTRIES || index.size > DIR_CACHE_BYTES) return;
+    while (this.items.size >= DIR_CACHE_DIRS ||
+           this.entries + index.list.length > DIR_CACHE_ENTRIES ||
+           this.bytes + index.size > DIR_CACHE_BYTES)
+      this.drop(this.items.keys().next().value);
+    this.items.set(index.base, index);
+    this.entries += index.list.length; this.bytes += index.size;
+  };
+  function directoryCache(store) {
+    // ReadOnlyStore can wrap a custom store that does not provide notifications.
+    var inner = store;
+    while (inner instanceof ReadOnlyStore) inner = inner._i;
+    if (typeof inner.watchWrites !== 'function') return null;
+    var key = directoryStoreKey(store), cache = directoryIndexes.get(key);
+    if (!cache) directoryIndexes.set(key, cache = new DirectoryIndexes(store));
+    return cache;
+  }
+  function directoryIndex(store, base, size) {
+    var cache = directoryCache(store), index = cache && cache.items.get(base);
+    if (index && index.size === size) {
+      cache.hits++;
+      cache.items.delete(base); cache.items.set(base, index);
+      return index;
+    }
+    if (index) cache.drop(base);
+    var ext = readDirExtent(store, base, size);
+    index = { base: base, size: size, list: [], names: new Map(), cache: cache };
+    for (var pos = 0; pos < size;) {
+      var ent = parseDirEnt(ext.buf, ext.dv, pos, size);
       if (!ent) break;
-      if (ent.inodeId !== 0 && ent.name >= name) break;
-      target = pos + DIR_ENT_HEADER + ent.nameLen;
+      if (ent.inodeId !== 0) {
+        ent.offset = pos;
+        index.list.push(ent); index.names.set(ent.name, ent);
+      }
       pos += DIR_ENT_HEADER + ent.nameLen;
     }
-    return target;
+    if (cache) { cache.builds++; cache.keep(index); }
+    return index;
+  }
+  function directoryIndexStats(store) {
+    var cache = directoryCache(store);
+    return { enabled: !!cache, directories: cache ? cache.items.size : 0,
+      entries: cache ? cache.entries : 0, bytes: cache ? cache.bytes : 0,
+      hits: cache ? cache.hits : 0, builds: cache ? cache.builds : 0,
+      invalidations: cache ? cache.invalidations : 0,
+      maxDirectories: DIR_CACHE_DIRS, maxEntries: DIR_CACHE_ENTRIES, maxBytes: DIR_CACHE_BYTES };
+  }
+  function dirLookup(store, extentBase, extentSize, name) {
+    return directoryIndex(store, extentBase, extentSize).names.get(name) || null;
+  }
+  function dirLowerBound(index, name) {
+    var lo = 0, hi = index.list.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >>> 1;
+      if (index.list[mid].name < name) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
   }
 
   // Write a directory entry at `offset` within the dir extent.
@@ -2443,53 +2511,50 @@ var BLOCK_FS = (function () {
     store.setBytes(extentBase + offset + 6, nameBytes);
   }
 
-  // Insert a directory entry, maintaining sort order.
-  // Returns true on success. The caller must ensure the extent has room.
+  // Packed directory bytes retain their v3/v4 layout. Moving a suffix is
+  // still linear in its byte count, but unchanged names are no longer decoded.
   function dirInsert(store, extentBase, extentSize, inodeId, name) {
-    var nameBytes = encodeStr(name);
-    var entSize = DIR_ENT_HEADER + nameBytes.length;
-    var insertPos = dirFindInsertPos(store, extentBase, extentSize, name);
-
-    // Shift data after insertPos to make room
+    var index = directoryIndex(store, extentBase, extentSize);
+    var nameLen = encodeStr(name).length, entSize = DIR_ENT_HEADER + nameLen;
+    var at = dirLowerBound(index, name);
+    var insertPos = at < index.list.length ? index.list[at].offset : extentSize;
+    // Detach before mutation, including an append to an empty cached directory
+    // (which has no byte range for the write watcher to intersect).
+    if (index.cache) index.cache.drop(extentBase);
     if (insertPos < extentSize) {
-      var tail = store.getBytes(extentBase + insertPos,
-        extentSize - insertPos);
+      var tail = store.getBytes(extentBase + insertPos, extentSize - insertPos);
       store.setBytes(extentBase + insertPos + entSize, tail);
     }
     dirWriteEnt(store, extentBase, insertPos, inodeId, name);
+    for (var i = at; i < index.list.length; i++) index.list[i].offset += entSize;
+    var ent = { name: name, nameLen: nameLen, inodeId: inodeId, offset: insertPos };
+    index.list.splice(at, 0, ent); index.names.set(name, ent); index.size += entSize;
+    if (index.cache) index.cache.keep(index);
     return insertPos;
   }
 
   // Remove a directory entry by name. Returns the old inodeId or 0.
   function dirRemove(store, extentBase, extentSize, name) {
-    var found = dirLookup(store, extentBase, extentSize, name);
+    var index = directoryIndex(store, extentBase, extentSize);
+    var found = index.names.get(name);
     if (!found) return 0;
-    // Read the entry to get its full size
-    var ext = readDirExtent(store, extentBase, extentSize);
-    var ent = parseDirEnt(ext.buf, ext.dv, found.offset, extentSize);
-    if (!ent) return 0;
-    var entSize = DIR_ENT_HEADER + ent.nameLen;
-    // Shift subsequent data back (reuse the buffer we already read).
-    var tailStart = found.offset + entSize;
-    if (tailStart < extentSize) {
+    var entSize = DIR_ENT_HEADER + found.nameLen, tailStart = found.offset + entSize;
+    var at = dirLowerBound(index, name);
+    if (index.cache) index.cache.drop(extentBase);
+    if (tailStart < extentSize)
       store.setBytes(extentBase + found.offset,
-        ext.buf.subarray(tailStart, extentSize));
-    }
+        store.getBytes(extentBase + tailStart, extentSize - tailStart));
+    index.list.splice(at, 1); index.names.delete(name); index.size -= entSize;
+    for (var i = at; i < index.list.length; i++) index.list[i].offset -= entSize;
+    if (index.cache) index.cache.keep(index);
     return found.inodeId;
   }
 
-  // List all non-deleted entries in a directory.
+  // A readdir handle owns its snapshot; future index edits cannot mutate it.
   function dirList(store, extentBase, extentSize) {
-    var ext = readDirExtent(store, extentBase, extentSize);
-    var result = [];
-    var pos = 0;
-    while (pos < extentSize) {
-      var ent = parseDirEnt(ext.buf, ext.dv, pos, extentSize);
-      if (!ent) break;
-      if (ent.inodeId !== 0) result.push({ name: ent.name, inodeId: ent.inodeId });
-      pos += DIR_ENT_HEADER + ent.nameLen;
-    }
-    return result;
+    return directoryIndex(store, extentBase, extentSize).list.map(function (ent) {
+      return { name: ent.name, inodeId: ent.inodeId };
+    });
   }
 
   // =================================================================
@@ -5733,6 +5798,8 @@ var BLOCK_FS = (function () {
   // =================================================================
 
   return {
+    implementationName: 'IBFS',
+    directoryIndexStats: directoryIndexStats,
     init: BlockFS.init,
     openWorkspace: BlockFS.openWorkspace,
     create: BlockFS.create,

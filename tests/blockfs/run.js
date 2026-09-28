@@ -30,6 +30,7 @@ const tests = [
   { file: 'test_readonly.js' },
   { file: 'test_mounts.js' },
   { file: 'test_blockfs.js' },
+  { file: 'test_directory_index.js' },
   { file: 'test_stdin_sab.js' },
   { file: 'test_e2e.js' },
   { file: 'test_fsck.js' },

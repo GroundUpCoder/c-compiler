@@ -1564,9 +1564,12 @@ command since docs/archive/0081: `node tests/browser/os-sweep.mjs`
 
 ## BlockFS (host.js) and its tests
 
-`host.js` contains **BlockFS** — a POSIX-ish filesystem backed by one byte store
+`host.js` contains **IBFS** (Indexed BlockFS, exposed through `BLOCK_FS`) —
+a POSIX-ish filesystem backed by one byte store
 (an OPFS `SyncAccessHandle` in the browser, a `MemoryByteStore` in tests). The
 superblock + TLSF allocator + inode table + directories all live in the store.
+Derived, bounded directory indexes are invalidated through byte-store writes;
+the persisted metadata below remains read-through. See `docs/IBFS.md`.
 
 **MountFS** (also host.js, docs/archive/0026) is a mount table over N BlockFS volumes:
 longest-prefix routing with prefix strip, its own fd/dir-handle namespaces,

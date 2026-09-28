@@ -298,4 +298,14 @@ thing this file exists to kill.
 - anchor: // L82 / #788: anonymous resources still share legacy (dev,ino)=(0,0).
 - provenance: #785
 
+### L83 — SameBoy clang packaging awaits the matching Win32 frontend; old SDL overlay artifacts fail the package drift guard
+- ticket: #378
+- file: docs/IBFS.md
+- anchor:    SameBoy clang packaging remains blocked on the matching Win32 frontend (#378).
+
+### L84 — GPU lifecycle browser checks fail to observe correct hide/vetoed-close pixels
+- ticket: #802
+- file: docs/IBFS.md
+- anchor:    The GPU lifecycle browser check also has unresolved rendering failures (#802).
+
 <!-- END ENTRIES -->

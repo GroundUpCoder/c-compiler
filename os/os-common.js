@@ -2884,19 +2884,36 @@ function writeHostPlatform(kfs, platform) {
  * The headless twin of host.js's SyncAccessHandleStore (OPFS). Takes the
  * caller's `fs` module so this file stays environment-neutral (os/boot.js
  * and tools/mkimage.js pass require('fs'); the browser never calls it). */
+// One invalidation domain per open native inode, including hard-link aliases.
+// The existing boot lock supplies cross-process single-writer ownership.
+var nodeStoreDomains = new Map();
 function NodeFileStore(fsMod, filePath, fresh) {
   if (fresh) { try { fsMod.unlinkSync(filePath); } catch (e) {} }
   this._fs = fsMod;
   this._fd = fsMod.openSync(filePath, fsMod.existsSync(filePath) ? 'r+' : 'w+');
+  var stat = fsMod.fstatSync(this._fd, { bigint: true });
+  this._domainKey = stat.dev + ':' + stat.ino;
+  this._domain = nodeStoreDomains.get(this._domainKey);
+  if (!this._domain) nodeStoreDomains.set(this._domainKey,
+    this._domain = { references: 0, listeners: new Set() });
+  this._domain.references++;
+  this._writeListeners = new Set();
   this._tmp4 = new Uint8Array(4);
   this._tmpDV = new DataView(this._tmp4.buffer);
 }
+NodeFileStore.prototype.watchWrites = function (listener) {
+  this._writeListeners.add(listener); this._domain.listeners.add(listener);
+};
+NodeFileStore.prototype._notifyWrite = function (off, length) {
+  if (length > 0) this._domain.listeners.forEach(function (listener) { listener(off, length); });
+};
 NodeFileStore.prototype.getUint32 = function (off) {
   this._tmp4.fill(0);
   this._fs.readSync(this._fd, this._tmp4, 0, 4, off);
   return this._tmpDV.getUint32(0, true);
 };
 NodeFileStore.prototype.setUint32 = function (off, val) {
+  this._notifyWrite(off, 4);
   this._tmpDV.setUint32(0, val, true);
   this._fs.writeSync(this._fd, this._tmp4, 0, 4, off);
 };
@@ -2906,12 +2923,20 @@ NodeFileStore.prototype.getBytes = function (off, len) {
   return buf;
 };
 NodeFileStore.prototype.setBytes = function (off, data) {
+  this._notifyWrite(off, data.length);
   if (data.length > 0) this._fs.writeSync(this._fd, data, 0, data.length, off);
 };
 NodeFileStore.prototype.size = function () { return this._fs.fstatSync(this._fd).size; };
-NodeFileStore.prototype.resize = function (newSize) { this._fs.ftruncateSync(this._fd, newSize); };
+NodeFileStore.prototype.resize = function (newSize) {
+  this._notifyWrite(0, Infinity); this._fs.ftruncateSync(this._fd, newSize);
+};
 NodeFileStore.prototype.flush = function () { this._fs.fsyncSync(this._fd); };
-NodeFileStore.prototype.close = function () { this._fs.closeSync(this._fd); };
+NodeFileStore.prototype.close = function () {
+  this._fs.closeSync(this._fd);
+  var domain = this._domain;
+  this._writeListeners.forEach(function (listener) { domain.listeners.delete(listener); });
+  if (--domain.references === 0) nodeStoreDomains.delete(this._domainKey);
+};
 
 /* ---- network bridge fetch (ticket #349; docs/NETWORK.md Tier 2.5) ----
  *

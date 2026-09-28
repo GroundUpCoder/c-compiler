@@ -1,5 +1,9 @@
 # BLOCK_FS — synchronous POSIX filesystem backed by a single OPFS file
 
+The active implementation is **IBFS (Indexed BlockFS)**; see [IBFS.md](IBFS.md)
+for directory indexing, coherence and memory bounds. The `BLOCK_FS` API remains.
+
+
 **Status**: implemented, tested, and the **only** browser filesystem backend
 for emitted `.html` pages (the legacy broad-tree full-OPFS backend was removed
 in 2026-06; `--browser-fs`/`--no-block-fs` now warn and emit a BLOCK_FS page).
