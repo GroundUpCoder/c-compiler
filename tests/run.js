@@ -406,6 +406,8 @@ const RULES = [
   [/^os\/os-common\.js$/, ['host'], 'the listPackages base-purity gate — host guardrail'],
   [/^image\.json$/, ['kernel', 'sweep'], 'the bake manifest'],
   [/^serve\.js$/, ['sweep', 'host'], 'the browser test server + its first-run/overlay checks'],
+  [/^apps\/pyplay\//, ['sweep'],
+    'the standalone pyplay page (drop a zip of Python, run it on the cpython-clang package) — os-pyplay.mjs'],
   // The clang-mandatory dev server (CLANG-CPP-EPIC Part II §6): host holds its
   // preflight guardrail (test_serve_with_clang.js).
   [/^serve-with-clang\.js$/, ['host'], 'the clang-mandatory serve wrapper — its preflight guardrail is a host test'],

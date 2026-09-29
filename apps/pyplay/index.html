@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pyplay — run a Python program in the browser</title>
+<link rel="stylesheet" href="../../vendor/xterm/xterm.css">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:#0d0d1a;color:#d0d0e0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;display:flex;flex-direction:column;overflow:hidden}
+#bar{display:flex;align-items:center;gap:8px;padding:6px 10px;background:#161630;border-bottom:1px solid #2a2a4a;flex-wrap:wrap;flex-shrink:0}
+#bar h1{font-size:15px;font-weight:600;margin-right:6px;color:#fff}
+#bar h1 span{color:#8fb4ff}
+#bar button,#bar select,#bar input[type=text]{font:inherit;font-size:13px;padding:4px 10px;background:#22224a;color:#eee;border:1px solid #3a3a6a;border-radius:4px}
+#bar button{cursor:pointer}
+#bar button:hover{background:#2c2c5c}
+#bar button:disabled{opacity:.45;cursor:default}
+#bar button.primary{background:#2f6fdc;border-color:#3f7fec}
+#bar button.primary:hover{background:#3a7ae8}
+#bar select{max-width:260px}
+#bar input[type=text]{width:180px}
+#bar label{font-size:12px;color:#9aa;display:flex;align-items:center;gap:4px}
+#status{margin-left:auto;font-size:12px;color:#9ab;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40vw}
+#status.err{color:#f66}
+#main{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
+#canvas-container{flex:1;display:none;align-items:center;justify-content:center;background:#000;min-height:0}
+#canvas{image-rendering:pixelated;object-fit:contain;width:100%;height:100%;outline:none}
+#terminal{flex:1;min-height:0;padding:4px}
+#terminal.aside{flex:0 0 160px;border-top:1px solid #2a2a4a}
+#drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:rgba(13,13,26,.92);z-index:5;text-align:center;padding:24px}
+#drop.hidden{display:none}
+#drop.armed{background:rgba(47,111,220,.35);outline:3px dashed #8fb4ff;outline-offset:-12px}
+#drop .big{font-size:22px;color:#fff}
+#drop .small{font-size:13px;color:#9ab;max-width:560px;line-height:1.5}
+#drop button{font:inherit;font-size:14px;padding:8px 18px;background:#2f6fdc;color:#fff;border:1px solid #3f7fec;border-radius:6px;cursor:pointer}
+#drop kbd{background:#22224a;padding:1px 5px;border-radius:3px;font-family:monospace}
+#file{display:none}
+</style>
+</head>
+<body>
+<div id="bar">
+  <h1><span>py</span>play</h1>
+  <button id="open">Open zip…</button>
+  <label>entry <select id="entry" disabled></select></label>
+  <label>args <input id="args" type="text" placeholder="argv[1..]" spellcheck="false"></label>
+  <button id="run" class="primary" disabled>Run</button>
+  <button id="stop" disabled>Stop</button>
+  <button id="reset" title="Delete the cached Python runtime image (OPFS) and reload">Reset runtime</button>
+  <span id="status"></span>
+</div>
+<div id="main">
+  <div id="canvas-container"><canvas id="canvas" tabindex="0"></canvas></div>
+  <div id="terminal"></div>
+  <div id="drop">
+    <div class="big">Drop a .zip of Python scripts here</div>
+    <div class="small">A zip (or a folder, or loose <kbd>.py</kbd> files). The program runs on CPython 3.13
+      compiled to WebAssembly, entirely in this tab: no server, no install. <kbd>main.py</kbd> is picked as
+      the entry point when present; change it in the bar. Standard input and output are the terminal below.</div>
+    <button id="open2">Choose files…</button>
+  </div>
+</div>
+<input id="file" type="file" multiple accept=".zip,.py,application/zip">
+<script src="../../vendor/xterm/xterm.js"></script>
+<script src="../../vendor/xterm/xterm-addon-fit.js"></script>
+<script src="../../host.js"></script>
+<script src="pyplay.js"></script>
+</body>
+</html>
