@@ -69,11 +69,66 @@ CPython, run a multi-file program with `input()`, exit 3 — under the 60 s
 output wait with margin. Second run: no download, no unpack (negative
 control on the status events).
 
+## Step 2 — the page as display server (same day)
+
+The blocker for a Python game loop was the loop shape: the standalone
+browser SDL flavor is callback-model (`SDL_Delay` throws, a worker parked
+in `main()` never commits an OffscreenCanvas frame), and an interpreter
+cannot be restructured into `SDL_AppIterate`. Two routes were on the table:
+
+- **JSPI**: make the standalone flavor's present/delay imports suspending
+  so the worker's event loop turns per frame. Chrome-only today (Safari has
+  no JSPI), and it would be a second mechanism next to the one gucOS has.
+- **The gucOS transport with the page as the kernel**: host.js's surface
+  flavor (`createSurfaceSDL`) already does exactly what is needed — shm
+  mailbox presents, ring input, futex parks for `SDL_Delay`/`WaitEvent`,
+  a vsync word — against a `hooks` object. Its consumer is a compositor +
+  input bridge, which under gucOS is kernel.js + compositor.js, and on this
+  page is ~150 lines of main-thread JS.
+
+The second route landed: **one transport, two embedders**, no JSPI, works
+wherever `Atomics.wait` works in a worker. Concretely:
+
+- `pyplay-worker.js` `makePageHooks(state, fs)` implements the surface
+  hooks (create/destroy/configure/resize/flags/cursor/visible/state/frame),
+  `screen`, the vsync trio (`vsyncEnabled`/`vsyncSeq`/`vsyncWait`/
+  `vsyncWaitUntil`, KernelClient's ARMED discipline over a page-state SAB),
+  `waitMulti` (ring ⊕ stdin ⊕ timeout, 50 ms slices when two futexes are
+  in play), `exit`, and the audio trio. `spawn`/`wait`/`kill` answer
+  ENOSYS/ECHILD/ESRCH — there is no process broker here, and the surface
+  flavor is selected by runModule purely on `hooks.surfaceCreate`.
+- `pyplay.js` composites under `SH_LOCK` with compositor.js's try-lock
+  discipline (never wait on the producer; contention keeps the previous
+  frame), writes ring records in `_wmPushEvent`'s shape (drop-newest,
+  notify WPOS) with `SDL_WEB` deriving scancode/keysym/mod, bumps the vsync
+  word per rAF, and runs one `createAudioReceiver` per device ring — the
+  surface flavor's per-device rings share the standalone ring layout, so
+  the receiver plays them unchanged (the "sink spec = requested spec" dummy
+  driver contract; Web Audio resamples per AudioContext).
+- The ring keeps ONE producer: the worker's `surfaceResize` posts the
+  request and the page pushes the `WINDOW_RESIZED` record.
+- `host.js`: the layout table `assertWmSabLayout` compares against is now
+  the named constant `WM_SAB_LAYOUT_HOST`, so a kernel-free embedder can
+  hand the host's own table back as `hooks.wmSabLayout`. There is no second
+  declaration to drift from on this page, so that is honest, not a bypass;
+  kernel.js keeps its copy and the tripwire keeps catching that drift.
+  Semantically a no-op refactor; it still draws the whole estate as a gate.
+- GPU tier: when `navigator.gpu` exists in the worker the browser branch of
+  the surface flavor is chosen (SDL_Renderer on WebGPU, ImageBitmap frames
+  via `surfaceFrame`, which the page `drawImage`s) with the #551 blocking-
+  present refusal intact — one program behaves the same here and on gucOS.
+  Without it, the headless branch's software renderer serves.
+
+Tested by leg E of `os-pyplay.mjs`: a classic blocking C loop
+(`fixtures/pyplay-sdlbox.c`, built by the test with this repo's compiler,
+dropped as a `.wasm` entry) presents red, turns green on a key (scancode 4,
+sym 97 through the ring), reports a click at the inverse-mapped centre,
+keeps presenting through `SDL_Delay` (60+ frames), and exits 0 on the QUIT
+record the Stop button sends.
+
 ## What is deliberately NOT here yet
 
-- SDL from Python: pygame is not built (`docs/CPYTHON.md` §8). The page's
-  SDL plumbing (OffscreenCanvas hand-off, `SDL_WEB` input forwarding, shared
-  audio ring) is wired so step 3 lands on top of it.
-- A blocking `while True: flip()` loop cannot present on this page today:
-  the standalone browser flavor is callback-model, `SDL_Delay` throws and a
-  blocked worker never commits an OffscreenCanvas frame. Step 2.
+- SDL from Python: pygame is not built (`docs/CPYTHON.md` §8). Step 3.
+- One top-level window per page: extra windows composite on top at their
+  own size. A real multi-window layout is the OS's job, not this page's.
+- Gamepads and clipboard: the hooks answer empty; both are additive later.

@@ -7251,31 +7251,39 @@ const WMEV_QUIT = 0x100, WMEV_WINDOW_RESIZED = 0x206,
  * instead of shipping wrong pixels. The field is REQUIRED (the 0235 rule:
  * kernel.js and host.js ship from one tree, so a missing field is version
  * skew — fail loud rather than present on a stale guess). */
+/* host.js's OWN declaration of the shared-SAB layouts, as the table
+ * assertWmSabLayout compares against the kernel's. Exposed so a KERNEL-FREE
+ * embedder of createSurfaceSDL (apps/pyplay's page broker: the page itself
+ * composites the shm mailbox and feeds the input ring) can hand it back as
+ * hooks.wmSabLayout — there is no second declaration to drift from there, so
+ * passing the host's table is honest, not a bypass; kernel.js still ships
+ * its own copy and the tripwire below still catches THAT drift. */
+const WM_SAB_LAYOUT_HOST = {
+  shMagic: WMSH_MAGIC, shW: WMSH_W, shH: WMSH_H, shFormat: WMSH_FORMAT,
+  shFlip: WMSH_FLIP, shSeq: WMSH_SEQ, shGen: WMSH_GEN, shLock: WMSH_LOCK, shPmiss: WMSH_PMISS,
+  shMagicValue: WMSH_MAGIC_VALUE, shHdrBytes: WMSH_HDR_BYTES,
+  irWpos: WMIR_WPOS, irRpos: WMIR_RPOS, irCap: WMIR_CAP,
+  irDropped: WMIR_DROPPED,
+  irHdrBytes: WMIR_HDR_BYTES, irRecordWords: WMIR_RECORD_WORDS,
+  auWpos: WMAU_WPOS, auQueued: WMAU_QUEUED, auPlaying: WMAU_PLAYING,
+  auHdrBytes: WMAU_HDR_BYTES,
+  ev: {
+    QUIT: WMEV_QUIT, WINDOW_RESIZED: WMEV_WINDOW_RESIZED,
+    WINDOW_SHOWN: 0x202, WINDOW_HIDDEN: 0x203,
+    FOCUS_GAINED: WMEV_FOCUS_GAINED, FOCUS_LOST: WMEV_FOCUS_LOST,
+    KEYDOWN: WMEV_KEYDOWN, KEYUP: WMEV_KEYUP,
+    MOUSEMOTION: WMEV_MOUSEMOTION, MOUSEBUTTONDOWN: WMEV_MOUSEBUTTONDOWN,
+    MOUSEBUTTONUP: WMEV_MOUSEBUTTONUP, MOUSEWHEEL: WMEV_MOUSEWHEEL,
+    GAMEPAD_AXIS: WMEV_GAMEPAD_AXIS,
+    GAMEPAD_BUTTON_DOWN: WMEV_GAMEPAD_BUTTON_DOWN,
+    GAMEPAD_BUTTON_UP: WMEV_GAMEPAD_BUTTON_UP,
+    GAMEPAD_ADDED: WMEV_GAMEPAD_ADDED,
+    GAMEPAD_REMOVED: WMEV_GAMEPAD_REMOVED,
+    POPUP_DISMISSED: WMEV_POPUP_DISMISSED,
+  },
+};
 function assertWmSabLayout(hooks) {
-  const mine = {
-    shMagic: WMSH_MAGIC, shW: WMSH_W, shH: WMSH_H, shFormat: WMSH_FORMAT,
-    shFlip: WMSH_FLIP, shSeq: WMSH_SEQ, shGen: WMSH_GEN, shLock: WMSH_LOCK, shPmiss: WMSH_PMISS,
-    shMagicValue: WMSH_MAGIC_VALUE, shHdrBytes: WMSH_HDR_BYTES,
-    irWpos: WMIR_WPOS, irRpos: WMIR_RPOS, irCap: WMIR_CAP,
-    irDropped: WMIR_DROPPED,
-    irHdrBytes: WMIR_HDR_BYTES, irRecordWords: WMIR_RECORD_WORDS,
-    auWpos: WMAU_WPOS, auQueued: WMAU_QUEUED, auPlaying: WMAU_PLAYING,
-    auHdrBytes: WMAU_HDR_BYTES,
-    ev: {
-      QUIT: WMEV_QUIT, WINDOW_RESIZED: WMEV_WINDOW_RESIZED,
-      WINDOW_SHOWN: 0x202, WINDOW_HIDDEN: 0x203,
-      FOCUS_GAINED: WMEV_FOCUS_GAINED, FOCUS_LOST: WMEV_FOCUS_LOST,
-      KEYDOWN: WMEV_KEYDOWN, KEYUP: WMEV_KEYUP,
-      MOUSEMOTION: WMEV_MOUSEMOTION, MOUSEBUTTONDOWN: WMEV_MOUSEBUTTONDOWN,
-      MOUSEBUTTONUP: WMEV_MOUSEBUTTONUP, MOUSEWHEEL: WMEV_MOUSEWHEEL,
-      GAMEPAD_AXIS: WMEV_GAMEPAD_AXIS,
-      GAMEPAD_BUTTON_DOWN: WMEV_GAMEPAD_BUTTON_DOWN,
-      GAMEPAD_BUTTON_UP: WMEV_GAMEPAD_BUTTON_UP,
-      GAMEPAD_ADDED: WMEV_GAMEPAD_ADDED,
-      GAMEPAD_REMOVED: WMEV_GAMEPAD_REMOVED,
-      POPUP_DISMISSED: WMEV_POPUP_DISMISSED,
-    },
-  };
+  const mine = WM_SAB_LAYOUT_HOST;
   const theirs = hooks && hooks.wmSabLayout;
   if (!theirs) {
     throw new Error('spawnHooks.wmSabLayout missing — kernel.js/host.js out of sync (CD26, the docs/archive/0235 shape)');

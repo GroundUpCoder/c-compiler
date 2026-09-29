@@ -52,10 +52,35 @@ worker. The image is a **v4** volume on purpose: `BLOCK_FS.init` formats the
 legacy v3 layout, which has no `/dev` nodes, and this CPython build seeds
 hash randomization from `/dev/urandom`.
 
+## The display server
+
+The page is the program's display server, in the exact shape the gucOS
+kernel plays for its processes. In the worker, host.js's surface SDL
+flavor (`createSurfaceSDL`) runs over a kernel-free hook set
+(`makePageHooks` in the worker): presents are shm mailbox flips into a
+SharedArrayBuffer, input arrives on the ring SAB, `SDL_Delay` and
+`SDL_WaitEvent` park on it, vsync is a shared word. On the main thread,
+`pyplay.js` composites the mailbox onto a 2D canvas every rAF under the
+frame-ownership lock, writes DOM key/mouse events into the ring as the
+kernel would, bumps the vsync word, and runs one audio receiver per
+device ring. A program that blocks in `while True: ... flip()` therefore
+presents and gets input without ever yielding, and without JSPI. The
+protocol constants come from host.js's own table (`WM_SAB_LAYOUT_HOST`),
+never restated here.
+
+One top-level window owns the canvas; further windows (popups, tooltips)
+composite on top at their own size, anchored top-left. Owner-initiated
+resizes follow the kernel's renegotiation (a `WINDOW_RESIZED` record with a
+configure serial, acked with the new buffer). Stop sends a `QUIT` record
+first and force-stops after three seconds, the hung-app rule.
+
+An entry ending in `.wasm` is run directly instead of through the
+interpreter: a dropped compiled game, and how the transport is tested
+before pygame exists (`tests/browser/fixtures/pyplay-sdlbox.c`).
+
 ## Status
 
-Text-mode Python programs run today. SDL programs from Python need pygame,
-which is not built yet; the trajectory is `docs/CPYTHON.md` §8. The SDL
-plumbing on this page (canvas hand-off, input forwarding, shared audio
-ring) is already the emitted-page shape so that work lands on top, not
-beside.
+Text-mode Python programs run today, and compiled SDL programs run with
+graphics, input, audio and a blocking main loop. SDL from Python needs
+pygame, which is not built yet; the trajectory is `docs/CPYTHON.md` §8 and
+it lands on top of the transport above.

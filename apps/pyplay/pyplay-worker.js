@@ -11,6 +11,16 @@
 // opt/<name>/ — installed at the SAME /opt/<name> prefix gucman uses, so the
 // interpreter's argv0 landmark walk (docs/CPYTHON.md §5.2) finds
 // /opt/cpython-clang/lib/python3.13 with zero environment variables.
+//
+// SDL on this page is host.js's SURFACE flavor (createSurfaceSDL) — the one
+// gucOS processes use — driven by a KERNEL-FREE hook set built below
+// (makePageHooks). The interpreter may block in its main loop (pygame's
+// `while True: ... flip()`): presents are shm mailbox flips into a
+// SharedArrayBuffer, input arrives on the ring SAB, SDL_Delay parks on it,
+// and the PAGE (pyplay.js, main thread) composites the mailbox and feeds the
+// ring. That is the gucOS transport with the page standing in for the
+// kernel's compositor and input bridge — one transport, two embedders. It
+// needs no JSPI and works wherever Atomics.wait works in a worker.
 importScripts('../../host.js');
 
 var PKG = 'cpython-clang';
@@ -20,10 +30,9 @@ var REPO = new URL('../../packages/', self.location.href);
 
 var decoder = new TextDecoder();
 var encoder = new TextEncoder();
-var sdlRef = null;
 var imageHandle = null;   // the OPFS sync-access handle; closed explicitly before 'exit' (see closeImage)
 
-function post(msg) { self.postMessage(msg); }
+function post(msg, transfer) { self.postMessage(msg, transfer || []); }
 function status(text) { post({ type: 'status', text: text }); }
 
 // Release the OPFS handle deterministically: a terminated worker's handle is
@@ -46,8 +55,6 @@ self.onmessage = function (e) {
       closeImage();
       post({ type: 'error', message: (err && err.stack) || String(err) });
     });
-  } else if (msg.type === 'sdl-input') {
-    if (sdlRef) SDL_WEB.dispatch(sdlRef, msg.input);
   }
 };
 
@@ -205,6 +212,168 @@ async function ensureRuntime() {
   return { fs: fs, entry: entry };
 }
 
+// ---- the page broker: kernel-free spawnHooks for createSurfaceSDL ----------
+// Page-state SAB words, shared with pyplay.js (the main thread writes SCREEN_*
+// and FOCUSED, bumps VSEQ once per rAF; the worker parks on VSEQ).
+var PS_VSEQ = 0, PS_ARMED = 1, PS_FOCUSED = 2, PS_SCREEN_W = 3, PS_SCREEN_H = 4;
+
+function makePageHooks(state, fs) {
+  var nextSid = 1, nextAid = 1, cfgSerial = 1, masterGain = 100;
+  var surfaces = new Map();          // sid -> { w, h, fb, flags, visible, serial }
+  var ringI32 = null;                // the process's ONE input ring (page = producer)
+  var vsyncSeen;
+  function fdReadable(fd) {
+    // No kernel fd table: fd 0 is the page's stdin ring; everything else a
+    // process can hold here is a regular file, which select(2) calls readable.
+    if (fd === 0) return fs._stdinSab ? fs._stdinSabReady() : true;
+    return true;
+  }
+  return {
+    // Layout tripwire (CD26): host.js's own table — no second declaration
+    // exists in this embedder, so this is the honest answer, not a bypass.
+    wmSabLayout: WM_SAB_LAYOUT_HOST,
+    payloadChunk: 65536,             // clipboard/http staging chunk; no kernel page to derive it from
+    // No process broker on this page: posix_spawn and friends fail loud.
+    spawn: function () { return { errno: 'ENOSYS' }; },
+    wait: function () { return { errno: 'ECHILD' }; },
+    kill: function () { return { errno: 'ESRCH' }; },
+    getpgid: function () { return { pgid: 1 }; },
+    getsid: function () { return { sid: 1 }; },
+
+    // ---- surfaces: the page composites the shm mailbox (pyplay.js) ----
+    surfaceCreate: function (w, h, title, fbSab, ringSab, flags) {
+      var sid = nextSid++;
+      if (!ringI32 && ringSab) ringI32 = new Int32Array(ringSab);
+      var visible = !(flags & 256);          // bit8 = SDL_WINDOW_HIDDEN construction
+      surfaces.set(sid, { w: w, h: h, fb: fbSab, flags: flags | 0, visible: visible, serial: 1 });
+      post({ type: 'surface-create', sid: sid, w: w, h: h, title: title || '', flags: flags | 0,
+             visible: visible, fb: fbSab, ring: ringSab });
+      return { sid: sid, lifecycle: 2 };
+    },
+    surfaceDestroy: function (sid) {
+      if (!surfaces.delete(sid)) return { errno: 'EINVAL' };
+      post({ type: 'surface-destroy', sid: sid });
+      return {};
+    },
+    surfaceSetTitle: function (sid, title) { post({ type: 'surface-title', sid: sid, title: title || '' }); return {}; },
+    surfaceSetFlags: function (sid, flags) {
+      var s = surfaces.get(sid);
+      if (!s) return { errno: 'EINVAL' };
+      s.flags = flags | 0;
+      post({ type: 'surface-flags', sid: sid, flags: flags | 0, relativeMouse: !!(flags & 2) });
+      return {};
+    },
+    surfaceSetCursor: function (sid, shape) {
+      post({ type: 'surface-cursor', sid: sid, css: CURSOR_CSS[shape] || 'default' });
+      return {};
+    },
+    surfaceSetVisible: function (sid, visible) {
+      var s = surfaces.get(sid);
+      if (!s) return { errno: 'EINVAL' };
+      s.visible = !!visible;
+      post({ type: 'surface-visible', sid: sid, visible: !!visible });
+      return {};
+    },
+    surfaceActivate: function (sid) { return surfaces.has(sid) ? {} : { errno: 'EINVAL' }; },
+    surfaceSetOwner: function (sid) { return surfaces.has(sid) ? {} : { errno: 'EINVAL' }; },
+    surfaceGetState: function (sid) {
+      var s = surfaces.get(sid);
+      if (!s) return { errno: 'EINVAL' };
+      return { visible: s.visible, viewable: s.visible, minimized: false,
+               focused: Atomics.load(state, PS_FOCUSED) === 1 && s.visible,
+               x: 0, y: 0, w: s.w, h: s.h };
+    },
+    // Owner-initiated resize (SDL_SetWindowSize): the same renegotiation as
+    // under the kernel — a WINDOW_RESIZED ring record carrying a configure
+    // serial, acked by surfaceConfigure with the new buffer. The ring has ONE
+    // producer (the page), so the record is pushed there, not here.
+    surfaceResize: function (sid, w, h) {
+      var s = surfaces.get(sid);
+      if (!s) return { errno: 'EINVAL' };
+      var serial = ++cfgSerial;
+      post({ type: 'surface-resize', sid: sid, w: w, h: h, serial: serial });
+      return {};
+    },
+    surfaceConfigure: function (sid, w, h, sab, serial) {
+      var s = surfaces.get(sid);
+      if (!s) return { errno: 'EINVAL' };
+      if (!sab) return {};                    // declined: keep the old buffer
+      s.w = w; s.h = h; s.fb = sab; s.serial = serial | 0;
+      post({ type: 'surface-configure', sid: sid, w: w, h: h, fb: sab, serial: serial | 0 });
+      return {};
+    },
+    // GPU-tier frames (SDL_Renderer on WebGPU, webgpu.h): ImageBitmaps, the
+    // gucOS gpu transport. The page drawImage()s them.
+    surfaceFrame: function (sid, bmp, serial) {
+      post({ type: 'surface-frame', sid: sid, bmp: bmp, serial: serial | 0 }, [bmp]);
+      return {};
+    },
+    screen: function () { return { w: Atomics.load(state, PS_SCREEN_W), h: Atomics.load(state, PS_SCREEN_H) }; },
+
+    // ---- vsync: the page's rAF is the display clock (KernelClient discipline) ----
+    vsyncEnabled: function () { return typeof Atomics.waitAsync === 'function'; },
+    vsyncSeq: function () { return Atomics.load(state, PS_VSEQ); },
+    vsyncWait: function () {
+      var cur = Atomics.load(state, PS_VSEQ);
+      if (vsyncSeen === undefined) vsyncSeen = cur;
+      if (cur !== vsyncSeen) { vsyncSeen = cur; return Promise.resolve(); }   // missed tick(s): fire now
+      Atomics.add(state, PS_ARMED, 1);
+      var r = Atomics.waitAsync(state, PS_VSEQ, cur);
+      if (!r.async) { Atomics.sub(state, PS_ARMED, 1); vsyncSeen = Atomics.load(state, PS_VSEQ); return Promise.resolve(); }
+      return r.value.then(function () { Atomics.sub(state, PS_ARMED, 1); vsyncSeen = Atomics.load(state, PS_VSEQ); });
+    },
+    vsyncWaitUntil: function (target) {
+      for (;;) {
+        var cur = Atomics.load(state, PS_VSEQ);
+        if (((cur - target) | 0) >= 0) return cur;
+        Atomics.add(state, PS_ARMED, 1);
+        Atomics.wait(state, PS_VSEQ, cur, 1000);    // 1 s chunks: a hidden tab stops ticking (honest pause)
+        Atomics.sub(state, PS_ARMED, 1);
+      }
+    },
+    compParked: function () { return false; },   // the page compositor runs every rAF while a run is live
+    wantFrame: function () {},
+    frameIdle: function () {},
+
+    // Unified wait (docs/archive/0178 shape): {r:[fds], ring, timeoutMs|null} →
+    // {why: 0 timeout | 1 fd | 2 ring}. Readiness check + park; the only fd
+    // with a real wait source here is stdin (its SEQ futex), so a wait that
+    // mixes the ring and stdin parks in 50 ms slices — one futex per wait.
+    waitMulti: function (req) {
+      var fds = req.r || [], wantRing = !!(req.ring && ringI32);
+      var wantStdin = fds.indexOf(0) >= 0 && !!fs._stdinSab;
+      var deadline = req.timeoutMs == null ? Infinity : performance.now() + req.timeoutMs;
+      for (;;) {
+        if (wantRing && Atomics.load(ringI32, WMIR_WPOS) !== Atomics.load(ringI32, WMIR_RPOS)) return { why: 2 };
+        for (var i = 0; i < fds.length; i++) if (fdReadable(fds[i])) return { why: 1 };
+        var left = deadline - performance.now();
+        if (left <= 0) return { why: 0 };
+        var slice = Math.min(left, wantRing && wantStdin ? 50 : 1000);
+        if (wantRing) Atomics.wait(ringI32, WMIR_WPOS, Atomics.load(ringI32, WMIR_WPOS), slice);
+        else if (wantStdin) Atomics.wait(fs._stdinCtrl, 0 /* SI_SEQ */, Atomics.load(fs._stdinCtrl, 0), slice);
+        else BLOCK_FS.blockingSleepMs(slice);
+      }
+    },
+    exit: function (status) { post({ type: 'exit-status', status: status | 0 }); return {}; },
+    padName: function () { return { name: '' }; },
+
+    // ---- audio: one page receiver per device ring (the standalone ring layout) ----
+    audioOpen: function (freq, format, channels, sab) {
+      var aid = nextAid++;
+      post({ type: 'audio-ring-open', aid: aid, freq: freq | 0, format: format | 0, channels: channels | 0,
+             sab: sab, bufferSize: WMAUDIO_RING_BYTES });
+      // Dummy-driver contract: the sink runs at the requested spec (Web Audio
+      // resamples per AudioContext), so no format conversion is asked of the app.
+      return { aid: aid, sinkFormat: format | 0, sinkChannels: channels | 0, sinkFreq: freq | 0 };
+    },
+    audioClose: function (aid) { post({ type: 'audio-ring-close', aid: aid }); return {}; },
+    audioGain: function (gain) {
+      if (gain >= 0) { masterGain = Math.min(200, gain | 0); post({ type: 'audio-gain', gain: masterGain }); }
+      return { gain: masterGain };
+    },
+  };
+}
+
 // ---- run --------------------------------------------------------------------
 async function doRun(msg) {
   var rt = await ensureRuntime();
@@ -219,15 +388,25 @@ async function doRun(msg) {
   mkdirp(fs, '/var/cache/' + PKG);
   fs.chdir('/game');
 
-  var wasm = PREFIX + '/bin/' + PKG + '.wasm';
-  var bytes = readFile(fs, wasm);
-  var args = [wasm, msg.entry].concat(msg.args || []);
+  // The entry is a Python script run by the package interpreter — or, when
+  // it is a .wasm produced by this repo's compiler, the program itself (a
+  // dropped compiled game; also how the transport is tested before pygame).
+  var exe, args;
+  if (/\.wasm$/i.test(msg.entry)) {
+    exe = '/game/' + msg.entry;
+    args = [exe].concat(msg.args || []);
+  } else {
+    exe = PREFIX + '/bin/' + PKG + '.wasm';
+    args = [exe, msg.entry].concat(msg.args || []);
+  }
+  var bytes = readFile(fs, exe);
   var env = {
     HOME: '/root', TMPDIR: '/tmp', TERM: 'xterm-256color', LANG: 'C.UTF-8',
     PYTHONPYCACHEPREFIX: '/var/cache/' + PKG,   // keep /opt pristine (CPYTHON.md §5.3)
     PYTHONUNBUFFERED: '1',                       // prints land in the terminal as they happen
     PYTHONUTF8: '1',
   };
+  var state = new Int32Array(msg.stateSab);
 
   var opts = {
     bytes: bytes,
@@ -235,15 +414,12 @@ async function doRun(msg) {
     env: env,
     blockFsFactory: function (ctx) { return Promise.resolve({ c: fs.toWasmEnv(ctx) }); },
     stdinSab: msg.stdinSab,
+    // The page broker: makes runModule pick createSurfaceSDL (surface ops on
+    // the hooks) — kernel-shaped SDL with the page as compositor.
+    spawnHooks: makePageHooks(state, fs),
     writeOut: function (buf) { post({ type: 'stdout', text: buf instanceof Uint8Array ? decoder.decode(buf) : String(buf) }); },
     writeErr: function (buf) { post({ type: 'stderr', text: buf instanceof Uint8Array ? decoder.decode(buf) : String(buf) }); },
-    onReady: function (info) { sdlRef = info.sdl; post({ type: 'started' }); },
-    notifyWindow: function (m) { post(m); },
+    onReady: function () { post({ type: 'started' }); },
   };
-  if (msg.canvas) opts.getBrowserSDL = msg.canvas;
-  if (msg.sharedAudioBuffer) {
-    opts.sharedAudioBuffer = { sharedBuffer: msg.sharedAudioBuffer, bufferSize: msg.audioBufferSize };
-    opts.notifyAudio = function (m) { post(m); };
-  }
   return runModule(opts);
 }

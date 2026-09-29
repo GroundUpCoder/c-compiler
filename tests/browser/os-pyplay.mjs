@@ -17,6 +17,7 @@
 import fsMod from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { spawnSync } from 'node:child_process';
 import { startServer, waitForServer, launchBrowser, ROOT } from './lib/os-harness.mjs';
 
 const PORT = 3287;
@@ -190,6 +191,56 @@ try {
   check(JSON.stringify(prog) === JSON.stringify(['data/words.txt', 'main.py', 'pkg/__init__.py', 'pkg/util.py']),
     `B: top-level folder stripped and __MACOSX dropped (${prog.join(',')})`);
   check(entrySel === 'main.py', 'B: main.py auto-selected as entry');
+  // ---- E: the SDL transport — a blocking C loop presenting via the shm mailbox
+  // (the shape a pygame loop has), dropped as a .wasm entry. Proves: frames
+  // reach the canvas from a worker that never yields, keys/clicks reach the
+  // program through the input ring, SDL_Delay paces, a close request lands
+  // as QUIT, and the run exits cleanly.
+  console.log('[pyplay] leg E: blocking SDL loop over the page display server');
+  {
+    const src = path.join(ROOT, 'tests', 'browser', 'fixtures', 'pyplay-sdlbox.c');
+    const wasmPath = path.join(zipDir, 'pyplay-sdlbox.wasm');
+    const cc = spawnSync(process.execPath, [path.join(ROOT, 'compiler.js'), src, '-o', wasmPath], { encoding: 'utf8' });
+    if (cc.status !== 0) throw new Error('fixture compile failed: ' + cc.stdout + cc.stderr);
+    const wasmB64 = fsMod.readFileSync(wasmPath).toString('base64');
+    await page.goto(PAGE);
+    await page.waitForFunction(() => !!window.__pyplay, {}, { timeout: 20_000 });
+    const runE = page.evaluate((b64) => {
+      const bin = atob(b64), bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return window.__pyplay.runFiles([{ path: 'sdlbox.wasm', data: bytes }], 'sdlbox.wasm');
+    }, wasmB64);
+    await waitOutput('READY');
+    await page.waitForFunction(() => window.__pyplay.frames >= 2, {}, { timeout: 20_000, polling: 50 });
+    const win = await page.evaluate(() => window.__pyplay.window);
+    check(win && win.w === 320 && win.h === 200 && win.title === 'sdlbox', 'E: window created at 320x200 with its title (' + JSON.stringify(win) + ')');
+    const visible = await page.evaluate(() => getComputedStyle(document.getElementById('canvas-container')).display !== 'none');
+    check(visible, 'E: canvas shown when the program creates a window');
+    let px = await page.evaluate(() => window.__pyplay.pixel(160, 100));
+    check(px && px[0] === 255 && px[1] === 0 && px[2] === 0, 'E: first frame composited red (' + px + ')');
+    await page.focus('#canvas');
+    await page.keyboard.press('a');
+    await waitOutput('KEY 4 97');
+    await page.waitForFunction(() => { const p = window.__pyplay.pixel(160, 100); return p && p[1] === 255 && p[0] === 0; }, {}, { timeout: 10_000, polling: 50 });
+    px = await page.evaluate(() => window.__pyplay.pixel(160, 100));
+    check(px[1] === 255 && px[0] === 0, 'E: keydown reached the loop (scancode 4, sym 97) and the next frame is green');
+    const box = await page.evaluate(() => { const r = document.getElementById('canvas').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+    // object-fit: contain letterboxes; click the canvas centre = logical (160,100)
+    await page.mouse.click(box.x + box.w / 2, box.y + box.h / 2);
+    await waitOutput('CLICK 1 ');
+    const outE1 = await page.evaluate(() => window.__pyplay.output);
+    const click = /CLICK 1 (\d+) (\d+)/.exec(outE1);
+    check(click && Math.abs(+click[1] - 160) <= 2 && Math.abs(+click[2] - 100) <= 2, 'E: click inverse-mapped to logical window coords (' + (click && click[0]) + ')');
+    await waitOutput('FRAME 60');
+    const framesBefore = await page.evaluate(() => window.__pyplay.frames);
+    check(framesBefore >= 30, 'E: the blocking loop keeps presenting through SDL_Delay (' + framesBefore + ' composited)');
+    const codeE = await page.evaluate(() => window.__pyplay.requestClose());
+    const outE = await page.evaluate(() => window.__pyplay.output);
+    check(codeE === 0, 'E: close request → QUIT → exit 0 (got ' + codeE + ')');
+    check(outE.includes('QUIT'), 'E: program saw the QUIT event');
+    await runE;
+  }
+
   check(!consoleLines.some((l) => /^\[pageerror\]/.test(l)), `no page errors (${consoleLines.filter((l) => l.startsWith('[pageerror]')).join(' ; ')})`);
 } catch (e) {
   failures.push('exception: ' + (e && e.stack || e));
