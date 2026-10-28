@@ -285,4 +285,17 @@ thing this file exists to kill.
 - file: os/doc/publish.md
 - anchor: - The maintainer intake is manual. There is no automatic pipeline
 
+
+### L81 — the native Node stat adapter drops native device identity and narrows inode values
+- ticket: #787
+- file: host.js
+- anchor: // L81 / #787: the native adapter still drops native st_dev and narrows ino.
+- provenance: #785
+
+### L82 — anonymous descriptors retain the legacy zero device/inode pair
+- ticket: #788
+- file: kernel.js
+- anchor: // L82 / #788: anonymous resources still share legacy (dev,ino)=(0,0).
+- provenance: #785
+
 <!-- END ENTRIES -->

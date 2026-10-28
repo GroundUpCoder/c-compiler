@@ -1,0 +1,25 @@
+{
+  "actual_parent": "aacbd1675336927543b6ad2434de9d5188767ff3",
+  "approved_tree": "2403c16ccff8faf749ff78df17aa0fb10987fe7e",
+  "transfer_manifest_path": "/Users/jku/git/c-compiler-land783/build/trap783/integrate785-fhmwmw9m/run.json",
+  "transfer_manifest_sha256": "3ece6c3c4a03df471fffb8d972e457bedb70fee950efc7d8c815343c72f0a695",
+  "verified_artifacts": 37,
+  "verified_source_pins": {
+    "host.js": "fbe30fe0063ee2608b4fdb2e234351a5b2e0beb006286397d8f4912018d85eb3",
+    "kernel.js": "2efb7afdb9f7fe27e0496d1d01423ab6ca5073ebdad91d69d1edb9980bd3e1db",
+    "os/process-worker.js": "345c96d10dcb06a0ccfbec092a6dd9c21d13f2a40204bee8e9a25e741f50c4a2",
+    "tests/host/run.js": "10a0f9f20d8b6145269f2d9e017d9799321a4f58ffec472156f9482eaa01fbcb",
+    "tests/host/test_stat_identity.js": "ae823974cdd42ba02511f51723aed3b3c5fe902d728f036b9d57c46ac2b765a9",
+    "tests/kernel/test_rofs.js": "ea4319c10353071121960a13ffba8e8b30393dcda99a95c27ec9ca9ac9519be3",
+    "todos/KERNEL.md": "70382f0c177feaee7f54195224a8662bdbc280b9aea54bd4abfe82dfaefec1b8",
+    "todos/LIABILITIES.md": "36258d9fa7b4874bc210b10f74a97d07aad085a2b0b2e63b8a36db979c511820"
+  },
+  "verified_overlay_pins": {
+    "os/os-common.js": "41c262c7f13f90cc15b90d954b15677a042ebe940a2964450fe07bee466365a9",
+    "tests/kernel/test_cc_srclib.js": "add4fd1fc1ee4227d35477d629990880e7b942efc9b05f49e4290fb8fe4b711d"
+  },
+  "verification": "read/hash comparisons of retained artifacts, current land783 files and approved git tree; no source mutation or execution of guest/tests",
+  "historical_node_executable": "unrecorded; no contemporaneous executable pin identified in retained focused records; not reconstructed",
+  "instrument_sources": "file-identity.c and INSTRUMENT-SCOPE.md remain preparation only; workload harnesses and engine/fixture pins remain pending",
+  "no_launch": true
+}

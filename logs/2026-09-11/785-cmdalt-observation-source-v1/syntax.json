@@ -1,0 +1,34 @@
+[
+  {
+    "file": "common.py",
+    "method": "ast.parse only",
+    "result": "pass"
+  },
+  {
+    "file": "launch.py",
+    "method": "ast.parse only",
+    "result": "pass"
+  },
+  {
+    "file": "supervisor.py",
+    "method": "ast.parse only",
+    "result": "pass"
+  },
+  {
+    "file": "inspect.py",
+    "method": "ast.parse only",
+    "result": "pass"
+  },
+  {
+    "file": "observe-preload.cjs",
+    "method": "pinned Node --check; no evaluation",
+    "result": "exit0",
+    "nodeSha256": "926d267c151bcb240522d4a1cff9a474a80bfdffadb07246a5b70f9baea9c24c"
+  },
+  {
+    "file": "observation.cjs",
+    "method": "pinned Node --check; no evaluation",
+    "result": "exit0",
+    "nodeSha256": "926d267c151bcb240522d4a1cff9a474a80bfdffadb07246a5b70f9baea9c24c"
+  }
+]

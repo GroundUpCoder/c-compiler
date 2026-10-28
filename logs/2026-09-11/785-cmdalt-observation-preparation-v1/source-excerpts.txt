@@ -1,0 +1,303 @@
+
+FILE os/boot.js SHA256 1fb180d9aad664450834aaabfb14b88f8c6675e29e9f83b3e641e731a0ef5c24
+86: // installs ITS OWN tree's image fixture, so a foreign-cwd launch silently
+87: // rewrites another tree's blob. GUARDED, not exempted — the #142 survey
+88: // measured every harness spawn: the kernel e2es inherit the suite-runner's
+89: // `cwd: tests/kernel` (drive.js driveBoot passes no cwd; the mkdtemp fixture
+90: // dir is only the --image= argument, never the cwd), and test_heavylock_e2e
+91: // sets ROOT-based cwds explicitly. Ahead of the heavy requires and the
+92: // heavy-lock join below — refuse before you load a compiler or take a
+93: // machine-wide lock (the todos/0341 order).
+94: require(path.join(ROOT, 'tests/lib/tree-guard.js'))
+95:   .assertSameTree(__dirname, { label: 'os/boot.js' });
+96: 
+97: const HOST = path.join(ROOT, 'host.js');
+98: const KERNEL = path.join(ROOT, 'kernel.js');
+99: const K = require(KERNEL);
+100: const { BLOCK_FS } = require(HOST);
+101: const CompilerJS = require(path.join(ROOT, 'compiler.js'));
+102: const COMMON = require(path.join(__dirname, 'os-common.js'));
+103: const OS_KSVC = require(path.join(__dirname, 'ksvc.js'));
+104: 
+105: /* ---- args ---- */
+345: 
+346: async function mountAndBoot() {
+347:   /* System blob: materialize on demand, then mount READ-ONLY at /usr.
+348:    * bakedVersion() reads the blob's own /usr/share/os-release, written last
+349:    * in the bake, so a crashed half-bake/half-copy reads -1 and
+350:    * re-materializes. STRICTLY older re-bakes; a NEWER blob (an upgrade
+351:    * swapped in from outside, e.g. mkimage against a bumped manifest) is
+352:    * kept as-is — "upgrade = swap the blob". A blob at EXACTLY the manifest
+353:    * version must also be input-fresh (todos/0082): bake inputs newer than
+354:    * the blob's mtime mean it predates the current tree — never silently
+355:    * reuse it (--stale-ok overrides). Materialization prefers INSTALLING a
+356:    * prebaked fixture (file copy ≪ bake; --fixture=, default the repo's
+357:    * os/os-system.img) when that fixture is itself version-current and
+358:    * input-fresh; --no-fixture and --fresh-system force a real bake. */
+359:   let store = new COMMON.NodeFileStore(fs, imagePath, freshBoot || freshSystem);
+360:   const mfVersion = manifest.version | 0;
+361:   let inputScan = null;   // lazy: ~10-25ms over ~2500 files, only when needed
+362:   const newestInput = () => inputScan ||
+363:     (inputScan = COMMON.newestBakeInput(fs, path, ROOT, manifest));
+364:   let sysMode = null;   // 'reused' | 'installed' | 'baked'
+365:   const wantPkgKey = wantPkgs.join(',');
+366:   const pkgsMatch = (st) => COMMON.bakedPackages(BLOCK_FS, st).join(',') === wantPkgKey &&
+367:     COMMON.bakedSmallSnapshot(BLOCK_FS, st) === (manifest.smallSnapshot || null);
+368:   const bv = COMMON.bakedVersion(BLOCK_FS, store);
+369:   if (bv > mfVersion) sysMode = 'reused';           // an upgrade blob is kept
+370:   else if (bv === mfVersion) {
+371:     if (!pkgsMatch(store)) {
+372:       bootLog('system blob package set [' +
+373:         COMMON.bakedPackages(BLOCK_FS, store).join(',') + '] != wanted [' +
+374:         wantPkgKey + '] — re-materializing');
+375:     } else if (staleOk || fs.statSync(imagePath).mtimeMs >= newestInput().mtimeMs) {
+376:       sysMode = 'reused';
+377:     } else {
+378:       bootLog('system blob is input-stale (' + path.relative(ROOT, newestInput().path) +
+379:         ' is newer) — re-materializing');
+380:     }
+381:   }
+382:   if (sysMode === null && fixturePath && !freshSystem &&
+383:       path.resolve(fixturePath) !== imagePath) {
+384:     try {
+385:       const fSt = fs.statSync(fixturePath);
+386:       // Validate against the fixture file directly (the image-fixture.js
+387:       // pattern) — bakedVersion/bakedPackages are a handful of small reads,
+388:       // not a reason to pull the whole blob into memory.
+389:       const fxStore = new COMMON.NodeFileStore(fs, fixturePath, false);
+390:       const fv = COMMON.bakedVersion(BLOCK_FS, fxStore);
+391:       const fxPkgs = COMMON.bakedPackages(BLOCK_FS, fxStore);
+392:       const fxSmall = COMMON.bakedSmallSnapshot(BLOCK_FS, fxStore) === (manifest.smallSnapshot || null);
+393:       fxStore.close();
+394:       if (fv >= mfVersion && (!fxSmall || fxPkgs.join(',') !== wantPkgKey)) {
+395:         bootLog('prebaked ' + fixturePath + ' package set [' +
+396:           fxPkgs.join(',') + '] != wanted [' +
+397:           wantPkgKey + '] — baking instead');
+398:       } else if (fv >= mfVersion && (staleOk || fSt.mtimeMs >= newestInput().mtimeMs)) {
+399:         bootLog('installing prebaked system image ' + fixturePath + ' (v' + fv + ')');
+400:         // Install by clone, not by rewrite (#576 A3): COPYFILE_FICLONE is a
+401:         // copy-on-write clonefile on APFS — byte-identical, no data I/O —
+402:         // with a silent full-copy fallback elsewhere. Landing under a tmp
+403:         // name and renaming keeps the crash discipline the old
+404:         // superblock-last write ordering provided: a crash leaves either
+405:         // the previous blob or the complete new one, never a half-copy.
+406:         // The clone runs BEFORE store.close() so a throw (ENOSPC, ...)
+407:         // leaves the store open for the bake fallback; the finally reopens
+408:         // it whatever the rename did, so no path exits with a dead fd.
+409:         const tmp = imagePath + '.installing';
+410:         fs.rmSync(tmp, { force: true });
+411:         fs.copyFileSync(fixturePath, tmp, fs.constants.COPYFILE_FICLONE);
+412:         store.close();
+413:         try { fs.renameSync(tmp, imagePath); }
+414:         finally { store = new COMMON.NodeFileStore(fs, imagePath, false); }
+415:         fs.utimesSync(imagePath, fSt.atime, fSt.mtime);  // freshness rides along
+416:         sysMode = 'installed';
+417:       } else if (fv >= mfVersion) {
+418:         bootLog('prebaked ' + fixturePath + ' is input-stale (' +
+419:           path.relative(ROOT, newestInput().path) + ' is newer) — baking instead');
+420:       }
+421:     } catch (e) { /* missing/unreadable fixture -> bake */ }
+422:   }
+423:   if (sysMode === null) {
+424:     // Stamp the blob with the bake START time: an input edited DURING the
+425:     // bake may or may not be reflected, so it must read as newer.
+426:     const bakeStart = new Date();
+427:     store.resize(0);   // a stale blob re-bakes from scratch (regenerable)
+428:     await COMMON.bakeSystemImage(BLOCK_FS, CompilerJS, store, manifest, seedIo);
+429:     store.flush();
+430:     fs.utimesSync(imagePath, bakeStart, bakeStart);
+431:     sysMode = 'baked';
+432:   }
+433:   const sysFs = BLOCK_FS.createV4(store, { readonly: true });
+434:   // Process-side read-only /usr (todos/0180): ONE SAB copy of the sealed
+435:   // system image, shipped to every process worker at spawn — /usr reads
+436:   // (fonts, configs, assets) stop crossing the RPC boundary.
+437:   const roSab = BLOCK_FS.storeToSab(store);
+438: 
+439:   /* Root (writable) volume: fresh files get the skeleton + the manifest's
+440:    * `user` section, exactly once. Later boots (and system re-bakes) never
+441:    * write here — that's the whole 0040 contract. */
+442:   const rootFresh = freshBoot || !fs.existsSync(rootImagePath);
+443:   const rootStore = new COMMON.NodeFileStore(fs, rootImagePath, freshBoot);
+444:   const rootFs = BLOCK_FS.createV4(rootStore);   // devNodes ON: its /dev IS /dev
+445:   // /proc (todos/0043): a synthetic kernel-rendered volume — the Kernel
+446:   // constructor binds itself to it via the mount table.
+447:   const kfs = new BLOCK_FS.MountFS({ '/': rootFs, '/usr': sysFs, '/proc': new K.ProcFS() });
+448:   if (rootFresh) {
+449:     bootLog('seeding user volume (manifest v' + manifest.version + ')');
+450:     COMMON.initRootVolume(kfs);
+451:     await COMMON.seedEntries(kfs, manifest.user, seedIo);
+452:     // Baked packages' `seed` content (gucman content-resource design §3.5):
+453:     // planted from the SEALED BLOB, after the manifest's own user entries
+454:     // (which therefore win any collision). Identical here and in the browser
+455:     // worker by construction — neither reads the manifest for this.
+456:     const nseed = COMMON.seedBakedSeeds(kfs, bootLog);
+457:     if (nseed) bootLog('seeded ' + nseed + ' file(s) from baked packages');
+458:     // Host keyboard-scheme auto-detect (META-ARROW-KEYBIND.md decision 4):
+459:     // seed macos as the DEFAULT on a Mac host (admin layer; user config wins).
+460:     if (COMMON.seedHostKeyScheme(kfs, hostPlatform))
+
+FILE kernel.js SHA256 2efb7afdb9f7fe27e0496d1d01423ab6ca5073ebdad91d69d1edb9980bd3e1db
+220:   // embedder hook — egress without a host is meaningless, fail loud).
+221:   EGRESS: 0x0304,
+222:   // 0x04xx — the brokered filesystem (KERNEL.md "fd/data-plane amendment").
+223:   FS_OPEN: 0x0401, FS_CLOSE: 0x0402, FS_READ: 0x0403, FS_WRITE: 0x0404,
+224:   FS_LSEEK: 0x0405, FS_STAT: 0x0406, FS_LSTAT: 0x0407, FS_FSTAT: 0x0408,
+225:   FS_ACCESS: 0x0409, FS_UNLINK: 0x040A, FS_RENAME: 0x040B, FS_MKDIR: 0x040C,
+226:   FS_RMDIR: 0x040D, FS_LINK: 0x040E, FS_SYMLINK: 0x040F, FS_READLINK: 0x0410,
+227:   FS_FTRUNCATE: 0x0411, FS_CHMOD: 0x0412, FS_FCHMOD: 0x0413, FS_CHDIR: 0x0414,
+228:   FS_GETCWD: 0x0415, FS_DUP: 0x0416, FS_DUP2: 0x0417, FS_OPENDIR: 0x0418,
+229:   FS_REALPATH: 0x0419, FS_UTIME: 0x041A, FS_FUTIME: 0x041B, FS_ISATTY: 0x041C,
+230:   FS_SELECT: 0x041D, FS_FCNTL_DUPFD: 0x041E, FS_FSYNC: 0x041F,
+2558: /* Absolute path in `pcb`'s working directory (BlockFS normalizes . and ..
+2559:  * on absolute paths; the kernel only supplies the base). */
+2560: Kernel.prototype._pathFor = function (pcb, p) {
+2561:   if (typeof p !== 'string' || p.length === 0) return p;
+2562:   if (p.charCodeAt(0) === 47) return p;
+2563:   return (pcb.cwd === '/' ? '' : pcb.cwd) + '/' + p;
+2564: };
+2565: 
+2566: /* Create the system tty (call BEFORE boot; v1: one tty, attached to every
+3775: Kernel.prototype._fsRpc = function (pcb, op, req) {
+3776:   var self = this;
+3777:   var fs = this._fs;
+3778:   if (!fs) { this._respond(pcb, { errno: 'ENOSYS' }); return; }
+3779:   var eFs = function () { return { errno: fs._lastError || 'EIO' }; };
+3780:   var ofdOf = function (fd) {
+3781:     var id = pcb.fds.get(fd | 0);
+3782:     return id === undefined ? null : self._ofds.get(id) || null;
+3783:   };
+3784:   var allocFd = function (min) {
+3785:     var fd = min | 0;
+3786:     while (pcb.fds.has(fd)) fd++;
+3787:     return fd;
+3788:   };
+3789:   var P = function (p) { return self._pathFor(pcb, p); };
+3790:   var r;
+3791: 
+3792:   switch (op) {
+3793:     case OP.FS_OPEN: {
+3794:       // FS_WATCH bookkeeping: record the path on every file OFD (cheap —
+3795:       // a string; the settle emit canonicalizes lazily, gated on live
+4072:         this._respond(pcb, eFs());
+4073:         return;
+4074:       }
+4075:       this._respond(pcb, {});
+4076:       return;
+4077:     }
+4078:     case OP.FS_CHMOD: r = fs.chmod(P(req.path), req.mode | 0); this._respond(pcb, r === null ? eFs() : {}); return;
+4079:     case OP.FS_FCHMOD: {
+4080:       var o6 = ofdOf(req.fd);
+4081:       if (!o6 || o6.kind !== 'file') { this._respond(pcb, { errno: 'EBADF' }); return; }
+4082:       r = fs.fchmod(o6.bfsFd, req.mode | 0);
+4083:       this._respond(pcb, r === null ? eFs() : {});
+4084:       return;
+4085:     }
+9016: };
+9017: RemoteFS.prototype.fsync = function (fd) {
+9018:   if (this._roFd(fd)) return 0;   // read-only volume: nothing to flush
+9019:   return this._ok(this._c.call(OP.FS_FSYNC, { fd: fd })) && 0;
+9020: };
+9021: RemoteFS.prototype.chmod = function (p, mode) { return this._ok(this._c.call(OP.FS_CHMOD, { path: p, mode: mode })) && 0; };
+9022: RemoteFS.prototype.fchmod = function (fd, mode) {
+9023:   if (this._roFd(fd)) {
+9024:     var lr = this._ro.fs.fchmod(fd - RO_FD_BASE, mode);
+9025:     return lr === null ? this._setErr(this._ro.fs._lastError || 'EIO') : 0;
+
+FILE host.js SHA256 fbe30fe0063ee2608b4fdb2e234351a5b2e0beb006286397d8f4912018d85eb3
+4968:         bytes[resolved_ptr + encoded.length] = 0;
+4969:         return resolved_ptr;
+4970:       },
+4971:       ftruncate: wrap(function (fd, size) { return this.ftruncate(fd, Number(size)); }),
+4972:       chmod: wrap(function (path_ptr, mode) {
+4973:         return this.chmod(readString(path_ptr), mode);
+4974:       }),
+4975:       fchmod: wrap(function (fd, mode) { return this.fchmod(fd, mode); }),
+4976:       // atime/mtime arrive as i64 BigInts (time_t); Number() them before the
+4977:       // FS scales by timeScale (BigInt * Number would throw).
+4978:       __utime: wrap(function (path_ptr, atime, mtime) {
+
+FILE tests/kernel/lib/drive.js SHA256 b649bad8ad5e7afe3a5e5405b843965a3c95423da5a14c632de1fba7b4dc7ea7
+65: //             Buffer output, e.g. reading binary PNG frames back)
+66: function driveBoot(script, opts = {}) {
+67:   const image = opts.image || freshImage(opts.prefix).image;
+68:   let input = Array.isArray(script) ? script.join('\n') : String(script);
+69:   if (!input.endsWith('\n')) input += '\n';
+70: 
+71:   const spawnOpts = { input, timeout: opts.timeout != null ? opts.timeout : 300000 };
+72:   const enc = 'encoding' in opts ? opts.encoding : 'utf8';
+73:   if (enc != null && enc !== 'buffer') spawnOpts.encoding = enc;   // else raw Buffer
+74:   if (opts.maxBuffer) spawnOpts.maxBuffer = opts.maxBuffer;
+75: 
+76:   // opts.nodeArgs: node/V8 flags BEFORE the script (e.g.
+77:   // `--wasm-max-mem-pages=N` to bound every wasm instance's heap — the
+78:   // deterministic-OOM knob for the comdlg-diag test; worker_threads
+79:   // inherit the process's V8 flags).
+80:   const args = [...(opts.nodeArgs || []), BOOT, '--image=' + image,
+81:                 ...(opts.quiet === false ? [] : ['--quiet']), ...(opts.args || [])];
+82:   const r = cp.spawnSync('node', args, spawnOpts);
+83:   if (r.error) throw r.error;
+84:   r.image = image;   // let a follow-up session reuse the same image
+
+FILE tests/lib/parent-watch.js SHA256 47390e4ec47bb9db53e1fef9a688aa43f66d251e6221bfc659be1143cb5b0216
+1: 'use strict';
+2: // tests/lib/parent-watch.js — a `node -r` PRELOAD that suite-runner.js injects
+3: // into every test file it spawns. It makes a test file die with its runner.
+4: //
+5: // THE HOLE IT PLUGS. suite-runner spawns each file `detached: true` so the file
+6: // becomes its own process-GROUP leader — that is what lets the per-file timeout
+7: // SIGKILL the whole group and take the test's serve.js + Chromium with it. But
+8: // detaching cuts the other way too: the test file is no longer in the runner's
+9: // group, so when the RUNNER itself is killed from outside (the 600s call-ceiling
+10: // SIGKILL), nothing reaches the children. The runner's own SIGINT/SIGTERM
+11: // handler cannot help either — SIGKILL runs no handler. Result, observed: 70
+12: // serve.js processes reparented to init, squatting the sweep's fixed ports, so
+13: // the next run's tests polled those ports and got a STALE server. Spurious reds.
+14: //
+15: // The fix has to live INSIDE the test process, and it has to be a poll rather
+16: // than a handler, because the event it must notice (its parent dying) delivers
+17: // no signal here. So: remember our ppid at startup, and when the OS reparents us
+18: // to init (ppid changes), tear down our own process group. That is the same
+19: // idiom the --under-load generators in suite-runner.js already use, and it works
+20: // no matter HOW the runner died — SIGTERM, SIGKILL, or a panic.
+21: //
+22: // Preload rather than a wrapper process: zero extra pids, no stdio rewiring, no
+23: // exit-code laundering. `process.argv` is unaffected (node strips -r), so the
+24: // test file sees exactly what it saw before, and the runner's pass/fail/timeout
+25: // classification is unchanged.
+26: //
+27: // Which death this covers: the RUNNER-KILLED-FROM-OUTSIDE one (SIGTERM and
+28: // SIGKILL alike). Clean exit is covered by the test's own teardown +
+29: // harness-temp.js; the per-file timeout by suite-runner's existing group kill;
+30: // anything that predates or escapes all three by the startup reaper in
+31: // tests/lib/harness-leaks.js.
+32: const POLL_MS = 1000;
+33: const INITIAL_PPID = process.ppid;
+34: 
+35: // The group kill is only OURS to do when we really are the group leader, which
+36: // is true exactly when suite-runner spawned us detached — it says so explicitly
+37: // rather than us guessing from a ps call on the way out the door.
+38: const GROUP_LEADER = process.env.CC_HARNESS_GROUP_LEADER === '1';
+39: 
+40: // Already parentless at startup: nothing to watch for.
+41: if (INITIAL_PPID > 1) {
+42:   const timer = setInterval(() => {
+43:     if (process.ppid === INITIAL_PPID) return;
+44:     clearInterval(timer);
+45:     process.stderr.write(
+46:       `\n[parent-watch] runner ${INITIAL_PPID} is gone (reparented to ${process.ppid}) — ` +
+47:       'tearing down this test\'s process group so its serve.js/Chromium cannot squat a port.\n');
+48:     // Best-effort fixture cleanup FIRST: we are the last code that will run in
+49:     // this process, and the dirs are ~150 MB each.
+50:     try { require('./harness-temp.js').cleanupAll(); } catch {}
+51:     if (GROUP_LEADER) {
+52:       // Kills us too — the group includes this process. Anything after this
+53:       // line only runs if the kill failed.
+54:       try { process.kill(-process.pid, 'SIGKILL'); } catch {}
+55:     }
+56:     process.exit(137);
+57:   }, POLL_MS);
+58:   // Never hold the event loop open: a test that finishes normally must exit
+59:   // exactly when it always did.
+60:   timer.unref();
+61: }

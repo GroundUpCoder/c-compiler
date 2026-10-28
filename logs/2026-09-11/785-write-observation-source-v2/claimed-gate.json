@@ -1,0 +1,14 @@
+{
+  "grant": {
+    "allowedJobs": [
+      "gate"
+    ],
+    "commentId": "01a090e0-3877-76eb-9be0-5112a6773a81",
+    "text": "COORDINATOR ONE-SHOT CHANGED WRITE OBSERVATION V2 GRANT. FULL source acceptance01a090df-2614 /tmp/cc-785-write-observation-source-v2-review.md and revision read; changed scenario explicitly authorized01a090d4-c46a. Authorize sole785 author ONE 785-write-observation-source-v2/launch.py gate invocation at exactplan6f6ca4b2176b2d168d3e92cff3fde78ff5d0cee18e53c4c4ca04144c49b872ac, staged2403c16ccff8faf749ff78df17aa0fb10987fe7e on aacbd167. allowedJobs gate only;420s native boot/600s directchild; exact59prefix, retainedsystem copy/freshroot, explicitly pinned transformedboot f8cc9291 omits exactly default-sync with original module paths/wm preserved. Require strict service/build/package/compiler refusals, no fallback/server/secondboot. allowCanonicalStaleRecovery true only normal heavy-lock path; no manual unlink. independentControlsAcceptanceCommentId01a08c47-5388-70b2-b0eb-7f07ffc9030f. Fresh14:29:49Z healthOK/locksclear/73.25GiBfree/treeexact and27prepared13301source49absolute verified. Author repeat all normal guards; any refusal/failure consumes one attempt, no automatic retry. Require actual loader identity/omission trace, exactlyone complete-content WRITE pair before reply forwarding, readonly readback/state preservation evidence, native boot/child/pane/output/afterpins/ownedimages/archive. Known line44 chmod diagnostic stays visible; this is NOT chmod755/permission/unchangedboot/historicalrootpair acceptance. Preserve every priorRED and accepted53/Node/browser, no successfulcorpus/broad replay, product edit/commit/main/deployment or retainedserver cleanup. Report actual manifest/PIDs then independent evidence audit before final landing decision.",
+    "planSha256": "6f6ca4b2176b2d168d3e92cff3fde78ff5d0cee18e53c4c4ca04144c49b872ac",
+    "allowCanonicalStaleRecovery": true,
+    "independentControlsAcceptanceCommentId": "01a08c47-5388-70b2-b0eb-7f07ffc9030f"
+  },
+  "at": "2026-09-11T14:31:03.447088+00:00",
+  "run": "/Users/jku/git/c-compiler-land783/build/trap783/durable-run-gate-sir4jj5z"
+}

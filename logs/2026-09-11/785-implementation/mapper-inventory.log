@@ -1,0 +1,43 @@
+
+[1mdiff-aware plan[0m (vs 7050d4ab)
+  31 changed path(s), 0 ignored (docs/logs)
+    host.js  →  todos, unit, blockfs, kernel, sweep, host, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, tcc, libc, fuzz, fakegit
+    kernel.js  →  todos, kernel, sweep
+    os/os-common.js  →  todos, kernel, sweep, host
+    os/process-worker.js  →  todos, sweep
+    tests/host/run.js  →  todos, host
+    tests/kernel/test_cc_srclib.js  →  todos, kernel
+    tests/kernel/test_rofs.js  →  todos, kernel
+    todos/LIABILITIES.md  →  todos
+    logs/2026-09-11/785-implementation/expanded-controls.log  →  todos
+    logs/2026-09-11/785-implementation/first-implementation.log  →  todos
+    logs/2026-09-11/785-implementation/focused-results.json  →  todos
+    logs/2026-09-11/785-implementation/liabilities.log  →  todos
+    logs/2026-09-11/785-implementation/mapper-inventory.log  →  todos
+    logs/2026-09-11/785-implementation/red-first-pins.txt  →  todos
+    logs/2026-09-11/785-implementation/red-first-test.js.txt  →  todos
+    logs/2026-09-11/785-implementation/red-first.log  →  todos
+    logs/2026-09-11/785-implementation/second-implementation.log  →  todos
+    logs/2026-09-11/785-implementation/tests_blockfs_test_dev.js.log  →  todos
+    logs/2026-09-11/785-implementation/tests_blockfs_test_mounts.js.log  →  todos
+    logs/2026-09-11/785-implementation/tests_host_test_stat_identity.js.log  →  todos
+    logs/2026-09-11/785-implementation/tests_kernel_test_mounts.js.log  →  todos
+    logs/2026-09-11/785-implementation/tests_kernel_test_procfs.js.log  →  todos
+    logs/2026-09-11/785-implementation/tests_kernel_test_rofs.js.log  →  todos
+    logs/2026-09-11/785-preparation/PLAN-v1.md  →  todos
+    logs/2026-09-11/785-preparation/PLAN.md  →  todos
+    logs/2026-09-11/785-preparation/downstream-review.md  →  todos
+    logs/2026-09-11/785-preparation/foundation-srclib-input.patch  →  todos
+    logs/2026-09-11/785-preparation/inputs.json  →  todos
+    logs/2026-09-11/785-preparation/review-device-correction.md  →  todos
+    logs/2026-09-11/785-preparation/review-v1.md  →  todos
+    tests/host/test_stat_identity.js  →  todos, host
+
+  [1msuites:[0m todos, unit, blockfs, kernel, sweep, host, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, tcc, libc, fuzz, fakegit
+
+[1m━━━ tier: diff ━━━[0m
+  runs: todos, unit, host, blockfs, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, tcc, libc, fuzz, fakegit, kernel, sweep
+  [33mdeliberately NOT run: netsurf-patch, disw, sourcemap[0m
+  a green diff is NOT a full gate — ships require `node tests/run.js full`.
+
+plan: todos, unit, host, blockfs, ast, extra, ext, projects, zlib, lua, freetype, libpng, libjpeg, cairo, micropython, micropython-upstream, sqlite, tcc, libc, fuzz, fakegit, kernel, sweep

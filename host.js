@@ -270,6 +270,7 @@ function createFileSystem({ fs, ctx }) {
      size(32) blocks(40) atime(48) mtime(56) ctime(64)
      atim.sec(72) atim.nsec(80) mtim.sec(88) mtim.nsec(96) ctim.sec(104) ctim.nsec(112) */
   function writeStatBuf(buf_ptr, st) {
+    // L81 / #787: the native adapter still drops native st_dev and narrows ino.
     const memory = getMemory();
     const view = new DataView(memory.buffer);
     let mode = 0;
@@ -3661,7 +3662,7 @@ var BLOCK_FS = (function () {
     var sc = this._fmt.timeScale, ns = 1e9 / sc;
     var i = w.ino;
     return {
-      ino: w.inoId, mode: i.mode, size: i.dataSize,
+      dev: 0, ino: w.inoId, mode: i.mode, size: i.dataSize,
       mtime: Math.floor(i.mtime / sc), ctime: Math.floor(i.ctime / sc),
       atime: Math.floor(i.atime / sc), btime: Math.floor(i.btime / sc),
       mtimeNsec: (i.mtime % sc) * ns, ctimeNsec: (i.ctime % sc) * ns,
@@ -3722,15 +3723,16 @@ var BLOCK_FS = (function () {
       return this._setErr('EBADF');
     var entry = this._fdTable[fd];
     if (entry.inoId === undefined) {
+      // L82 / #788: anonymous stdio retains legacy (dev,ino)=(0,0).
       // stdin/stdout/stderr — return S_IFCHR
-      return { ino: 0, mode: 0o020600, size: 0, mtime: 0, ctime: 0,
+      return { dev: 0, ino: 0, mode: 0o020600, size: 0, mtime: 0, ctime: 0,
                atime: 0, btime: 0, nlink: 1, uid: 0, gid: 0 };
     }
     var ino = this._inodes.read(entry.inoId);
     if (!ino) return this._setErr('EBADF');
     var sc = this._fmt.timeScale, ns = 1e9 / sc;
     return {
-      ino: entry.inoId, mode: ino.mode, size: ino.dataSize,
+      dev: 0, ino: entry.inoId, mode: ino.mode, size: ino.dataSize,
       mtime: Math.floor(ino.mtime / sc), ctime: Math.floor(ino.ctime / sc),
       atime: Math.floor(ino.atime / sc), btime: Math.floor(ino.btime / sc),
       mtimeNsec: (ino.mtime % sc) * ns, ctimeNsec: (ino.ctime % sc) * ns,
@@ -4220,10 +4222,17 @@ var BLOCK_FS = (function () {
   // Write a stat buffer into WASM memory. Matches the 64-bit struct stat layout
   // (see <sys/stat.h> / writeStatBuf in the Node backend, verified by
   // tests/unit/stdlib/stat_layout): 120 bytes, i64 size/blocks/times.
+  // #785: validate the entire identity before either ABI writes any output.
+  // Explicit zero describes a private/legacy namespace; absence is not zero.
+  function validStatIdentity(st) {
+    return st && Number.isInteger(st.dev) && st.dev >= 0 && st.dev <= 0xffffffff &&
+      Number.isInteger(st.ino) && st.ino >= 0 && st.ino <= 0xffffffff;
+  }
+
   function writeStatBuf(memory, bufPtr, st) {
     var view = new DataView(memory.buffer);
     var size = st.size || 0;
-    view.setUint32(bufPtr + 0, 0, true);              // st_dev
+    view.setUint32(bufPtr + 0, st.dev, true);              // st_dev
     view.setUint32(bufPtr + 4, st.ino, true);         // st_ino
     view.setUint32(bufPtr + 8, st.mode, true);        // st_mode
     view.setUint32(bufPtr + 12, st.nlink || 1, true); // st_nlink
@@ -4621,18 +4630,21 @@ var BLOCK_FS = (function () {
       stat: wrap(function (path_ptr, buf_ptr) {
         var st = this.stat(readString(path_ptr));
         if (st === null) return -1;
+        if (!validStatIdentity(st)) { this._lastError = 'EIO'; return -1; }
         writeStatBuf(getMemory(), buf_ptr, st);
         return 0;
       }),
       lstat: wrap(function (path_ptr, buf_ptr) {
         var st = this.lstat(readString(path_ptr));
         if (st === null) return -1;
+        if (!validStatIdentity(st)) { this._lastError = 'EIO'; return -1; }
         writeStatBuf(getMemory(), buf_ptr, st);
         return 0;
       }),
       fstat: wrap(function (fd, buf_ptr) {
         var st = this.fstat(fd);
         if (st === null) return -1;
+        if (!validStatIdentity(st)) { this._lastError = 'EIO'; return -1; }
         writeStatBuf(getMemory(), buf_ptr, st);
         return 0;
       }),
@@ -5178,8 +5190,8 @@ var BLOCK_FS = (function () {
     // 64-byte WASI filestat from a gucOS stat object.
     function writeFilestat(bufPtr, st) {
       var v = view();
-      v.setBigUint64(bufPtr, 0n, true);                                // dev
-      v.setBigUint64(bufPtr + 8, BigInt(st.ino >>> 0), true);          // ino
+      v.setBigUint64(bufPtr, BigInt(st.dev), true);                                // dev
+      v.setBigUint64(bufPtr + 8, BigInt(st.ino), true);          // ino
       v.setBigUint64(bufPtr + 16, 0n, true);                           // (filetype cell zeroed)
       v.setUint8(bufPtr + 16, filetypeOfMode(st.mode));
       v.setBigUint64(bufPtr + 24, BigInt(st.nlink || 1), true);
@@ -5579,6 +5591,7 @@ var BLOCK_FS = (function () {
       fd_filestat_get: function (fd, bufPtr) {
         var st = self.fstat(fd);
         if (!st || typeof st !== 'object') return wfail();
+        if (!validStatIdentity(st)) return W.EIO;
         writeFilestat(bufPtr, st);
         return 0;
       },
@@ -5727,6 +5740,7 @@ var BLOCK_FS = (function () {
         var full = joinPath(base, readPath(pathPtr, pathLen));
         var st = (lookupflags & 1) ? self.stat(full) : self.lstat(full);
         if (!st || typeof st !== 'object') return wfail();
+        if (!validStatIdentity(st)) return W.EIO;
         writeFilestat(bufPtr, st);
         return 0;
       },
@@ -6195,18 +6209,43 @@ var BLOCK_FS = (function () {
   // never routes here, so read/write on 0-2 are EBADF by design.
 
   function MountFS(mounts) {
-    // mounts: { '/': fs, '/root': fs } or [{ prefix, fs }]; '/' is required.
+    // One owner assigns IDs for its live namespace. An explicit volumeKey is
+    // trusted embedding authority binding independent readers of ONE live
+    // inode namespace; equal image bytes do not establish that relationship.
+    if (!mounts || typeof mounts !== 'object') throw new TypeError('MountFS: mounts required');
     var list = Array.isArray(mounts)
-      ? mounts.map(function (m) { return { prefix: m.prefix, fs: m.fs }; })
-      : Object.keys(mounts).map(function (p) { return { prefix: p, fs: mounts[p] }; });
+      ? mounts.map(function (m) {
+        if (!m || typeof m !== 'object') throw new TypeError('MountFS: invalid mount');
+        var explicit = Object.prototype.hasOwnProperty.call(m, 'volumeKey');
+        return { prefix: m.prefix, fs: m.fs, volumeKey: explicit ? m.volumeKey : m.fs };
+      })
+      : Object.keys(mounts).map(function (p) { return { prefix: p, fs: mounts[p], volumeKey: mounts[p] }; });
+    var prefixes = new Set(), readers = new Set(), identities = new Map(), volumeDevs = new Map();
+    // Validate and allocate provisionally: no mount hooks change on refusal.
     list.forEach(function (m) {
-      if (m.prefix !== '/' && m.prefix.slice(-1) === '/') m.prefix = m.prefix.slice(0, -1);
-      if (m.prefix.charAt(0) !== '/') throw new Error('MountFS: prefix must be absolute: ' + m.prefix);
+      if (typeof m.prefix !== 'string') throw new TypeError('MountFS: prefix must be absolute');
+      if (m.prefix !== '/' && m.prefix.endsWith('/')) m.prefix = m.prefix.slice(0, -1);
+      if (!/^\/(?:[^/]+(?:\/[^/]+)*)?$/.test(m.prefix) ||
+          m.prefix.split('/').some(function (p) { return p === '.' || p === '..' || p.indexOf('\0') !== -1; }))
+        throw new TypeError('MountFS: invalid absolute prefix: ' + m.prefix);
+      if (prefixes.has(m.prefix)) throw new TypeError('MountFS: duplicate prefix: ' + m.prefix);
+      prefixes.add(m.prefix);
+      if (!m.fs || typeof m.fs !== 'object' || typeof m.fs.stat !== 'function' || typeof m.fs.lstat !== 'function')
+        throw new TypeError('MountFS: invalid filesystem');
+      if (readers.has(m.fs)) throw new TypeError('MountFS: duplicate filesystem reader');
+      readers.add(m.fs);
+      if (!m.volumeKey || typeof m.volumeKey !== 'object' || Array.isArray(m.volumeKey))
+        throw new TypeError('MountFS: volumeKey must be an opaque object token');
+      if (!identities.has(m.volumeKey)) {
+        var dev = identities.size + 1;
+        if (dev > 0xffffffff) throw new RangeError('MountFS: volume identity exhausted');
+        identities.set(m.volumeKey, dev);
+      }
+      volumeDevs.set(m.fs, identities.get(m.volumeKey));
     });
-    list.sort(function (a, b) { return b.prefix.length - a.prefix.length; }); // longest first, '/' last
-    if (!list.length || list[list.length - 1].prefix !== '/') {
-      throw new Error('MountFS: a "/" mount is required');
-    }
+    if (!prefixes.has('/')) throw new TypeError('MountFS: a "/" mount is required');
+    list.sort(function (a, b) { return b.prefix.length - a.prefix.length; });
+    this._volumeDevs = volumeDevs;
     this._mounts = list;
     this._cwd = '/';
     this._lastError = '';
@@ -6234,6 +6273,24 @@ var BLOCK_FS = (function () {
       }
     });
   }
+
+  // Exact configured mount only: workers consume this owner's descriptor,
+  // never derive device numbers from paths or process-local counters.
+  MountFS.prototype.getVolumeIdentity = function (prefix) {
+    var mount = this._mounts.find(function (m) { return m.prefix === prefix; });
+    if (!mount) throw new TypeError('MountFS: identity requires an exact mount prefix');
+    // Local readers own an entire prefix. Any child mount, even another
+    // reader of the same volume, requires the owner's longest-prefix routing.
+    var leaf = !this._mounts.some(function (m) {
+      return m !== mount && (prefix === '/' || m.prefix.startsWith(prefix + '/'));
+    });
+    return Object.freeze({ dev: this._volumeDevs.get(mount.fs), readonly: mount.fs._readonly === true, leaf: leaf });
+  };
+  MountFS.prototype._qualifyStat = function (vol, st) {
+    if (st === null) return null;
+    if (!this._volumeDevs.has(vol)) throw new TypeError('MountFS: stat from unknown volume');
+    return Object.assign({}, st, { dev: this._volumeDevs.get(vol) });
+  };
 
   MountFS.prototype._setErr = function (name) {
     this._lastError = name;
@@ -6354,7 +6411,8 @@ var BLOCK_FS = (function () {
   };
 
   MountFS.prototype.stat = function (path) {
-    return this._dispatch([path], {}, function (vol, rel) { return vol.stat(rel); });
+    var self = this;
+    return this._dispatch([path], {}, function (vol, rel) { return self._qualifyStat(vol, vol.stat(rel)); });
   };
 
   // moduleKey (todos/0037, #188): the full-namespace twin of BlockFS's —
@@ -6375,7 +6433,8 @@ var BLOCK_FS = (function () {
   };
 
   MountFS.prototype.lstat = function (path) {
-    return this._dispatch([path], {}, function (vol, rel) { return vol.lstat(rel); });
+    var self = this;
+    return this._dispatch([path], {}, function (vol, rel) { return self._qualifyStat(vol, vol.lstat(rel)); });
   };
   MountFS.prototype.access = function (path, mode) {
     return this._dispatch([path], {}, function (vol, rel) { return vol.access(rel, mode); });
@@ -6477,7 +6536,8 @@ var BLOCK_FS = (function () {
     return this._fdOp(fd, function (vol, vfd) { return vol.lseek(vfd, offset, whence); });
   };
   MountFS.prototype.fstat = function (fd) {
-    return this._fdOp(fd, function (vol, vfd) { return vol.fstat(vfd); });
+    var self = this;
+    return this._fdOp(fd, function (vol, vfd) { return self._qualifyStat(vol, vol.fstat(vfd)); });
   };
   MountFS.prototype.ftruncate = function (fd, size) {
     return this._fdOp(fd, function (vol, vfd) { return vol.ftruncate(vfd, size); });

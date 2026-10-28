@@ -1,0 +1,29 @@
+# #785 Node stage V3 — preparation only
+
+Separate revision in prep785-volume-identity (prep HEAD7050d4ab); actual runtime input remains staged2403c16ccff8faf749ff78df17aa0fb10987fe7e on Foundation aacbd1675336927543b6ad2434de9d5188767ff3, exact index patch9d1759f4431bb6cca76361912f7a6a27ad6307ce0604cad05550a346defad277. All source and executable pins remain in run.json. No product change, callback inclusion, staging, commit or landing.
+
+V2 plan0cdbc247, its authorization/claim/config, and durable-run-gate-tgew74g9 remain unchanged. FULL independent failure review01a09080-c0d0-7084-9aa5-86ea5c59d0a6 is copied as review-node-red.md. Its findings are incorporated: numeric boot PID, common timer settlement, actual bounded failure state, primary error preservation, and conditional completion reporting. Old15rows remain partial historical observations, not runtime acceptance.
+
+## Narrow instrument correction
+
+Kernel.boot contract (current kernel.js2576-2595) resolves numeric init PID. The witness now requires a positive integer PID, records it separately, then awaits guest halt and additive native onExit callbacks. Factory handle terminate returns void (kernel.js9425), so its return is never awaited or mistaken for completion. Only actual onExit callbacks populate exitCode/exitObservedAt. Kernel and instrument cleanup termination requests have separate fields.
+
+Each case has one bounded90s lifecycle wait with timer clear in finally on resolution, rejection or timeout. Timeout throws and follows the same failure path; it never directly exits the parent. First failure is retained before cleanup with current output, RPCs, descriptors, numeric PID/boot settlement, guest halt flag/status and native worker observations. That original error is rethrown after cleanup; cleanup errors live in a separate array. Result snapshots exist after cleanup even on red. Artifact-write errors are retained separately and stop subsequent cases; they cannot turn a failed run green.
+
+On failure only, close instrument worker admission to prevent late pending boot/spawn from creating another worker. Observe the existing lifecycle for up to5s; this is a deadline-bound event wait, not a fixed sleep. For any created worker lacking an observed exit, request termination using its captured existing handle method; no kernel/product termination policy is edited. Then await actual native exit callbacks for up to5s. Rejects/timeouts/request errors are explicit cleanup errors and never replace the first error. A settled rejected lifecycle may end the grace phase immediately. Missing guest halt, unresolved boot and missing native exits remain explicit. A parent exit is never synthesized into worker evidence.
+
+After bounded cleanup and synchronous result writes, finalize source-after and outcome once. Completion fields derive from actual case records, have no unconditional success text, and distinguish observed completion of entered cases from allFourCasesCompleted. On any error, exit1 after finalization; an unresolved worker or boot may remain unobserved and the native parent exit must not be represented as its onExit callback. Outer supervisor still observes the actual child result and performs source-after/archive checks after child exit. Write/finalization failures retain the primary error where possible, emit diagnostics and remain red; process death or blocked synchronous I/O can still leave partial evidence for the unchanged outer supervisor.
+
+## Unchanged future runtime obligations
+
+Any future separately granted attempt remains one compile (120s bound) followed by four sequential cases: leaf-local, leaf-broker, leaf-inherit, nested-broker. All four must complete in that attempt. Exact op/path multisets and metadata/DATA against each owner oracle, aliases, positive broker/promotion RPCs, leaf zero enumerated FS RPCs, absent nested RO descriptors and two actual inheritance workers remain asserted. Actual generated image and module hashes precede guest execution. No successful-corpus or historical baseline replay. Browser and original cmdalt assertions remain separately serialized future stages.
+
+Maximum case waits remain90s each, with at most10s bounded failure cleanup for the failing case, after which execution stops. Outer direct-child600s deadline/TERM/escalation remains unchanged. These bounds are not claims about maximum native scheduling latency or synchronous disk/compilation finalization duration.
+
+## Wrapper and launch boundary
+
+supervisor.py, supervisor-v4-reference.py.txt, common.py, launch.py, inspect.py, health.cjs, tmux.conf and file-identity.c are byte-identical to V2. wrapper-delta.json records exact hashes and equality. No V4 signal/control algorithm delta or control replay. Only runtime child instrument/common.cjs and plan paths/pins/docs change. Exact unified instrument delta retained in instrument-v2-v3.patch.
+
+Runtime template is disabled: PENDING grant, no allowed kinds/output. No authorization-gate.json, claimed-gate.json or authorized-config.json is copied. New exact manifest requires independent source acceptance and a fresh coordinator one-shot grant; old grant cannot authorize this revision. Launch must freshly verify hashes/HEAD/index/unstaged set, resource/lock guards, exact prospective executables, new output and private tmux pane. Capture native compiler/guest/worker/child/pane distinctions, source-after/archive, lock/process evidence; preserve dead pane/socket. No cleanup or automatic chain.
+
+Only source reads, artifact writes/hashes, pinned Node --check and Python ast.parse were performed here. No module import/evaluation, compile, worker, guest, browser, image/package, server or runtime launch was performed. Syntax is not behavioral validation. Failure cleanup remains source-reviewed only until a separately authorized runtime observation.

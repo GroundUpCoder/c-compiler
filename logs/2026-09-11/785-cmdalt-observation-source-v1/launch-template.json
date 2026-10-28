@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "allowedJobs": [],
+  "grant": null,
+  "planSha256": "assigned by future grant only",
+  "runtime": "one boot420s /outer600s; no retry",
+  "approvalNeeded": "independent source review then separate coordinator runtime grant"
+}

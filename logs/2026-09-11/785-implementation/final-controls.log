@@ -1,0 +1,14 @@
+ok distinct mounted volumes with equal inode numbers; aliases and opened handles
+ok owner tokens bind readers of one live namespace, not byte-identical copies
+ok invalid mount configuration fails before installing any hooks
+ok checked allocation boundary refuses before hooks (fault-injected registry size)
+ok filesystem device paths retain identity and rdev I/O through dup/rename/unlink
+ok owner RO descriptor, zero-RPC local pair, broker escape and fd promotion
+ok missing optional RO identity uses broker for actual opens/stats/fds
+ok explicit invalid RO metadata is a configuration error
+ok kernel filesystem devices, spawn OPEN/inheritance, and anonymous compatibility
+ok actual mounted pairs survive both production ABI adapters
+ok C and WASI preserve unsigned identity and unchanged field offsets
+ok invalid identity pair returns EIO without writing either ABI output
+ok backend failures retain ENOENT/EBADF; explicit legacy dev zero remains valid
+stat identity: 13 passed, 0 failed

@@ -1,0 +1,42 @@
+[
+  {
+    "file": "common.py",
+    "sha256": "2d517f59f90c8ae86054109702837ea3873d3830a961d8762d2952627b3d789a",
+    "equalTo": "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-cmdalt-observation-source-v1/common.py"
+  },
+  {
+    "file": "launch.py",
+    "sha256": "1b85685d33259d26aa07b87a1c0919fc31ccb9c14c9010f7c305a51a620b73b4",
+    "equalTo": "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-cmdalt-observation-source-v1/launch.py"
+  },
+  {
+    "file": "supervisor.py",
+    "sha256": "1b61bb493e3e6e99638dfde3b0b167faad237423bc7b0e5aa692d8687bf2fbd2",
+    "equalTo": "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-cmdalt-observation-source-v1/supervisor.py"
+  },
+  {
+    "file": "inspect.py",
+    "sha256": "202341c80833ff58deb1b685f1bc052399bafddfbad79307acc4267be28e4f98",
+    "equalTo": "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-cmdalt-observation-source-v1/inspect.py"
+  },
+  {
+    "file": "health.cjs",
+    "sha256": "f28eb3fc8b20e5cc259bd9836b743fccc4f3e93d08c14d11e4ed77ae807984c5",
+    "equalTo": "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-cmdalt-observation-source-v1/health.cjs"
+  },
+  {
+    "file": "tmux.conf",
+    "sha256": "c22bd9a1bb85c851826bd77d7b1d49149b432d983120d3f2c1080fab557f2dd4",
+    "equalTo": "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-cmdalt-observation-source-v1/tmux.conf"
+  },
+  {
+    "file": "common.cjs",
+    "sha256": "86fe925d8e4a2e512b9a50a427f7722478c68e8a3112386b0e693942481087f4",
+    "equalTo": "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-cmdalt-observation-source-v1/common.cjs"
+  },
+  {
+    "file": "native.cjs",
+    "sha256": "c54f63d0c4453c163a037e17473ce352cced92d12d957b23ea676811e05a4b08",
+    "equalTo": "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-cmdalt-observation-source-v1/native.cjs"
+  }
+]

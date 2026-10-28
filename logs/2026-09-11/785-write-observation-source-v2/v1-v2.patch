@@ -1,0 +1,11 @@
+--- v1/observe-preload.cjs
++++ v2/observe-preload.cjs
+@@ -57,7 +57,7 @@
+   if(filename!==bootPath)return oldJs.apply(this,arguments);
+   assert.strictEqual(++transformLoads,1);Module._extensions['.js']=oldJs;
+   assert.strictEqual(hashFile(bootPath),c.transform.originalSha256);
+-  emit('boot-transform-load',{filename,moduleFilename:mod.filename,modulePaths:mod.paths,originalSha256:c.transform.originalSha256,transformedSha256:c.transform.transformedSha256,mainModule:require.main===mod});
++  emit('boot-transform-load',{filename,moduleFilename:mod.filename,modulePaths:mod.paths,originalSha256:c.transform.originalSha256,transformedSha256:c.transform.transformedSha256,mainModule:process.mainModule===mod});
+   return mod._compile(transformed,filename); // original module filename/paths/__dirname
+  };
+  const kernelPath=require.resolve(path.join(c.root,'kernel.js'));

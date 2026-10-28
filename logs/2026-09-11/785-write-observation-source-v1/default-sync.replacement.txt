@@ -1,0 +1,1 @@
+  globalThis[Symbol.for('identity785.boot.omission')]({ filename: __filename, dirname: __dirname, root: ROOT });

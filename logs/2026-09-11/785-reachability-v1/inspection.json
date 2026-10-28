@@ -1,0 +1,343 @@
+{
+  "kind": "offline readonly library inspection; not guest runtime",
+  "node": "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+  "nodeSha256": "926d267c151bcb240522d4a1cff9a474a80bfdffadb07246a5b70f9baea9c24c",
+  "hostSha256": "fbe30fe0063ee2608b4fdb2e234351a5b2e0beb006286397d8f4912018d85eb3",
+  "images": [
+    {
+      "path": "/Users/jku/git/c-compiler-land783/build/trap783/durable-run-gate-le3ges2n/payload/observation-system.img",
+      "before": "f07105d6ff8ce041b432fc95b2ed2a140309a0c9946c9ee90ca8d8cb21e265ff",
+      "after": "f07105d6ff8ce041b432fc95b2ed2a140309a0c9946c9ee90ca8d8cb21e265ff"
+    },
+    {
+      "path": "/Users/jku/git/c-compiler-land783/build/trap783/durable-run-gate-le3ges2n/payload/observation-root.img",
+      "before": "8ae9453ad7ecb766eadeec9900847ffb742e97730bf833ee142b6689fc851e69",
+      "after": "8ae9453ad7ecb766eadeec9900847ffb742e97730bf833ee142b6689fc851e69"
+    }
+  ],
+  "writeAttempts": 0,
+  "directories": {
+    "/bin": [
+      ".",
+      "..",
+      "[",
+      "awk",
+      "base64",
+      "basename",
+      "cat",
+      "cc",
+      "cksum",
+      "clip",
+      "cmdalt",
+      "cmp",
+      "comm",
+      "coreutils",
+      "cp",
+      "ctlpanel",
+      "curl",
+      "cut",
+      "date",
+      "dd",
+      "deck",
+      "desktop-defaults",
+      "diff",
+      "dirname",
+      "du",
+      "echo",
+      "egrep",
+      "env",
+      "expr",
+      "false",
+      "fgrep",
+      "file-gucos-ticket",
+      "fileman",
+      "filepick",
+      "find",
+      "fold",
+      "free",
+      "grep",
+      "gucman",
+      "gunzip",
+      "gzip",
+      "head",
+      "hostname",
+      "id",
+      "kill",
+      "less",
+      "ln",
+      "ls",
+      "md5sum",
+      "mgp",
+      "mgpp",
+      "mkdir",
+      "mktemp",
+      "mv",
+      "nl",
+      "notepad",
+      "notepad.res",
+      "od",
+      "open",
+      "padbox",
+      "paste",
+      "pbcopy",
+      "pbpaste",
+      "pgrep",
+      "pkill",
+      "printf",
+      "ps",
+      "pwd",
+      "python",
+      "readlink",
+      "realpath",
+      "rm",
+      "rmdir",
+      "sed",
+      "sedit",
+      "seq",
+      "sh",
+      "sha1sum",
+      "sha256sum",
+      "sleep",
+      "small",
+      "snake",
+      "software",
+      "sort",
+      "split",
+      "stat",
+      "strace",
+      "strings",
+      "sync",
+      "tac",
+      "tail",
+      "tar",
+      "tee",
+      "term",
+      "test",
+      "time",
+      "top",
+      "touch",
+      "tr",
+      "true",
+      "truncate",
+      "uname",
+      "uniq",
+      "unlink",
+      "uptime",
+      "usleep",
+      "vi",
+      "wc",
+      "which",
+      "whoami",
+      "wm",
+      "wmctl",
+      "xargs",
+      "yes",
+      "zcat"
+    ],
+    "/usr/local/bin": [
+      ".",
+      "..",
+      "bar",
+      "foo",
+      "python"
+    ]
+  },
+  "records": [
+    {
+      "path": "/bin",
+      "lstat": {
+        "mode": 41471,
+        "size": 8
+      },
+      "stat": {
+        "mode": 16877,
+        "size": 1220
+      },
+      "error": null,
+      "link": "/usr/bin"
+    },
+    {
+      "path": "/usr/local",
+      "lstat": {
+        "mode": 41471,
+        "size": 10
+      },
+      "stat": {
+        "mode": 16877,
+        "size": 9
+      },
+      "error": null,
+      "link": "/var/local"
+    },
+    {
+      "path": "/usr/local/bin",
+      "lstat": {
+        "mode": 16877,
+        "size": 30
+      },
+      "stat": {
+        "mode": 16877,
+        "size": 30
+      },
+      "error": null
+    },
+    {
+      "path": "/usr/local/bin/chmod",
+      "lstat": null,
+      "stat": null,
+      "error": "ENOENT"
+    },
+    {
+      "path": "/bin/chmod",
+      "lstat": null,
+      "stat": null,
+      "error": "ENOENT"
+    },
+    {
+      "path": "/usr/bin/chmod",
+      "lstat": null,
+      "stat": null,
+      "error": "ENOENT"
+    },
+    {
+      "path": "/bin/busybox",
+      "lstat": null,
+      "stat": null,
+      "error": "ENOENT"
+    },
+    {
+      "path": "/bin/coreutils",
+      "lstat": {
+        "mode": 33261,
+        "size": 591414
+      },
+      "stat": {
+        "mode": 33261,
+        "size": 591414
+      },
+      "error": null,
+      "sha256": "27daeae835ff94113df7120b610930d41ed2158941f3bddacd5f71872f59bec3",
+      "magic": "0061736d0100000001e803384e016001"
+    },
+    {
+      "path": "/bin/sh",
+      "lstat": {
+        "mode": 33261,
+        "size": 295928
+      },
+      "stat": {
+        "mode": 33261,
+        "size": 295928
+      },
+      "error": null,
+      "sha256": "e37e0cabbed144e040d8163fd7048d42249e698249e3cea3e0d74d2574aca113",
+      "magic": "0061736d0100000001ef02294e016003"
+    },
+    {
+      "path": "/usr/local/bin/python",
+      "lstat": {
+        "mode": 33188,
+        "size": 26
+      },
+      "stat": {
+        "mode": 33188,
+        "size": 26
+      },
+      "error": null,
+      "sha256": "b3564fe6f26334ccf6c780e43c0d575fbf1be7ed457ff0330554d3143aac5ec1",
+      "magic": "23212f62696e2f73680a6563686f2053",
+      "text": "#!/bin/sh\necho SHADOW-RAN\n"
+    },
+    {
+      "path": "/etc/profile",
+      "lstat": {
+        "mode": 33188,
+        "size": 299
+      },
+      "stat": {
+        "mode": 33188,
+        "size": 299
+      },
+      "error": null,
+      "sha256": "ad573da57939969e7c927e3bfc76bc5703702ec40332da2d091957109720cdb9",
+      "magic": "23206775634f532064656661756c7420",
+      "text": "# gucOS default profile — sourced by login shells (hush spawned as \"-sh\",\n# todos/0174). hush itself sources ~/.profile right after this file, so put\n# per-user settings there (e.g. ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL exports\n# for /bin/gcode) — do NOT source ~/.profile here or it runs twice.\n"
+    },
+    {
+      "path": "/root/.profile",
+      "lstat": null,
+      "stat": null,
+      "error": "ENOENT"
+    },
+    {
+      "path": "/etc/gucman/defaults",
+      "lstat": null,
+      "stat": null,
+      "error": "ENOENT"
+    },
+    {
+      "path": "/usr/share/gucman/defaults",
+      "lstat": {
+        "mode": 33188,
+        "size": 292
+      },
+      "stat": {
+        "mode": 33188,
+        "size": 292
+      },
+      "error": null,
+      "sha256": "3e24307f3edf31d09bfad294b3d1627c0780eb82502df62edb78f0b16d5af208",
+      "magic": "232044656661756c74207061636b6167",
+      "text": "# Default packages (#419): `gucman sync-defaults` installs these at\n# boot unless already installed, baked in, or removed by the user\n# (a remove is durable — /var/lib/gucman/removed/<name>). Overridable\n# wholesale at /etc/gucman/defaults. One package name per line.\ndoom\ngcode\ncalc\npaint\n"
+    },
+    {
+      "path": "/etc/gucman/repos",
+      "lstat": null,
+      "stat": null,
+      "error": "ENOENT"
+    },
+    {
+      "path": "/usr/share/gucman/repos",
+      "lstat": {
+        "mode": 33188,
+        "size": 420
+      },
+      "stat": {
+        "mode": 33188,
+        "size": 420
+      },
+      "error": null,
+      "sha256": "c9ab57ec05262acda80b3b1a12fd73b84a176671b405c03ef4469ccd9b3928fd",
+      "magic": "23206775636d616e207061636b616765",
+      "text": "# gucman package repository (gucman Slice 1). One base URL per line;\n# the first non-comment line wins. Overridable at /etc/gucman/repos.\n# The default is origin-relative: the browser fetches /packages/index.json\n# from the same deploy that served the OS (serve.js maps /packages/* to\n# dist/packages/*, tools/mkpkg.js output). Headless boots write an\n# absolute http://... URL into /etc/gucman/repos instead.\n/packages\n"
+    },
+    {
+      "path": "/bin/gucman",
+      "lstat": {
+        "mode": 33261,
+        "size": 196623
+      },
+      "stat": {
+        "mode": 33261,
+        "size": 196623
+      },
+      "error": null,
+      "sha256": "a1d9da3dfb4c78521aeccc7a5727d0fa94c9e6964992ac5f2db8c1efce7d254c",
+      "magic": "0061736d01000000018f032e4e016001"
+    },
+    {
+      "path": "/usr/bin/cmdalt",
+      "lstat": {
+        "mode": 33261,
+        "size": 34702
+      },
+      "stat": {
+        "mode": 33261,
+        "size": 34702
+      },
+      "error": null,
+      "sha256": "7a9ca6b0ba0679dc97e3b7c471fa2a06192e117653aa0eae4ff3d5b0b41ba310",
+      "magic": "0061736d0100000001e9011b4e016002"
+    }
+  ]
+}

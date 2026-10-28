@@ -1,0 +1,56 @@
+{
+  "at": "2026-09-11T13:11:15.109233+00:00",
+  "checks": [
+    {
+      "argv": [
+        "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+        "--check",
+        "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-browser-stage-v1/browser.mjs"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+        "--check",
+        "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-browser-stage-v1/common.cjs"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+        "--check",
+        "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-browser-stage-v1/fixture-server.cjs"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+        "--check",
+        "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-browser-stage-v1/health.cjs"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+        "--check",
+        "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-browser-stage-v1/native.cjs"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "scope": "syntax only, no module evaluation"
+}

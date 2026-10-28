@@ -1,0 +1,12 @@
+--- original/os/boot.js
++++ instrumented/os/boot.js
+@@ -618,8 +618,5 @@
+   // nothing and stays byte-identical. Non-fatal like wm; the service's fd 1/2
+   // route to the boot console (the progress/failure UI); a failed install
+   // retries on the next boot; outcome record at /run/gucman-sync.status.
+-  if (kfs.stat('/etc/gucman/defaults') || kfs.stat('/usr/share/gucman/defaults')) {
+-    await kernel.service({ path: '/bin/gucman', argv: ['gucman', 'sync-defaults'],
+-                           envp: ['PATH=/usr/local/bin:/bin'] });
+-  }
++  globalThis[Symbol.for('identity785.boot.omission')]({ filename: __filename, dirname: __dirname, root: ROOT });
+ }

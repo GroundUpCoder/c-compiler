@@ -1,0 +1,22 @@
+ok distinct mounted volumes with equal inode numbers; aliases and opened handles
+ok owner tokens bind readers of one live namespace, not byte-identical copies
+ok invalid mount configuration fails before installing any hooks
+ok filesystem device paths retain identity and rdev I/O through dup/rename/unlink
+FAIL owner RO descriptor, zero-RPC local pair, broker escape and fd promotion
+TypeError: fs.dup2 is not a function
+    at Object.call (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:41:33)
+    at RemoteFS.dup2 (/Users/jku/git/c-compiler-prep785/kernel.js:9054:31)
+    at /Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:115:24
+    at test (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:10:9)
+    at Object.<anonymous> (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:105:1)
+    at Module._compile (node:internal/modules/cjs/loader:1829:14)
+    at Object..js (node:internal/modules/cjs/loader:1969:10)
+    at Module.load (node:internal/modules/cjs/loader:1552:32)
+    at Module._load (node:internal/modules/cjs/loader:1354:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+ok missing optional RO identity uses broker for actual opens/stats/fds
+ok explicit invalid RO metadata is a configuration error
+ok C and WASI preserve unsigned identity and unchanged field offsets
+ok invalid identity pair returns EIO without writing either ABI output
+ok backend failures retain ENOENT/EBADF; explicit legacy dev zero remains valid
+stat identity: 9 passed, 1 failed

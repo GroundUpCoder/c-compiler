@@ -1,0 +1,56 @@
+[
+  {
+    "command": [
+      "node",
+      "tests/host/test_stat_identity.js"
+    ],
+    "exit": 0,
+    "seconds": 0.044,
+    "log": "tests_host_test_stat_identity.js.log"
+  },
+  {
+    "command": [
+      "node",
+      "tests/blockfs/test_mounts.js"
+    ],
+    "exit": 0,
+    "seconds": 0.038,
+    "log": "tests_blockfs_test_mounts.js.log"
+  },
+  {
+    "command": [
+      "node",
+      "tests/blockfs/test_dev.js"
+    ],
+    "exit": 0,
+    "seconds": 0.033,
+    "log": "tests_blockfs_test_dev.js.log"
+  },
+  {
+    "command": [
+      "node",
+      "tests/kernel/test_mounts.js"
+    ],
+    "exit": 0,
+    "seconds": 0.045,
+    "log": "tests_kernel_test_mounts.js.log"
+  },
+  {
+    "command": [
+      "node",
+      "tests/kernel/test_rofs.js"
+    ],
+    "exit": 0,
+    "seconds": 0.035,
+    "log": "tests_kernel_test_rofs.js.log"
+  },
+  {
+    "command": [
+      "node",
+      "tests/kernel/test_procfs.js"
+    ],
+    "exit": 0,
+    "seconds": 0.037,
+    "log": "tests_kernel_test_procfs.js.log"
+  }
+]

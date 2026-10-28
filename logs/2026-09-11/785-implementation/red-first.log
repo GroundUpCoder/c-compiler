@@ -1,0 +1,129 @@
+FAIL distinct mounted volumes with equal inode numbers; aliases and opened handles
+AssertionError [ERR_ASSERTION]: Expected "actual" to be strictly unequal to:
+
+undefined
+    at /Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:51:10
+    at test (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:10:9)
+    at Object.<anonymous> (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:48:1)
+    at Module._compile (node:internal/modules/cjs/loader:1829:14)
+    at Object..js (node:internal/modules/cjs/loader:1969:10)
+    at Module.load (node:internal/modules/cjs/loader:1552:32)
+    at Module._load (node:internal/modules/cjs/loader:1354:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+FAIL owner tokens bind readers of one live namespace, not byte-identical copies
+AssertionError [ERR_ASSERTION]: Expected "actual" to be strictly unequal to:
+
+undefined
+    at /Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:75:10
+    at test (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:10:9)
+    at Object.<anonymous> (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:66:1)
+    at Module._compile (node:internal/modules/cjs/loader:1829:14)
+    at Object..js (node:internal/modules/cjs/loader:1969:10)
+    at Module.load (node:internal/modules/cjs/loader:1552:32)
+    at Module._load (node:internal/modules/cjs/loader:1354:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+FAIL invalid mount configuration fails before installing any hooks
+AssertionError [ERR_ASSERTION]: Missing expected exception (TypeError).
+    at /Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:88:57
+    at test (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:10:9)
+    at Object.<anonymous> (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:79:1)
+    at Module._compile (node:internal/modules/cjs/loader:1829:14)
+    at Object..js (node:internal/modules/cjs/loader:1969:10)
+    at Module.load (node:internal/modules/cjs/loader:1552:32)
+    at Module._load (node:internal/modules/cjs/loader:1354:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+FAIL filesystem device paths retain identity and rdev I/O through dup/rename/unlink
+AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+  assert(st.dev > 0)
+
+    at /Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:94:5
+    at test (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:10:9)
+    at Object.<anonymous> (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:90:1)
+    at Module._compile (node:internal/modules/cjs/loader:1829:14)
+    at Object..js (node:internal/modules/cjs/loader:1969:10)
+    at Module.load (node:internal/modules/cjs/loader:1552:32)
+    at Module._load (node:internal/modules/cjs/loader:1354:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+FAIL owner RO descriptor, zero-RPC local pair, broker escape and fd promotion
+AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+  assert(Object.isFrozen(descriptor))
+
+    at /Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:107:64
+    at test (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:10:9)
+    at Object.<anonymous> (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:105:1)
+    at Module._compile (node:internal/modules/cjs/loader:1829:14)
+    at Object..js (node:internal/modules/cjs/loader:1969:10)
+    at Module.load (node:internal/modules/cjs/loader:1552:32)
+    at Module._load (node:internal/modules/cjs/loader:1354:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+FAIL missing optional RO identity uses broker for actual opens/stats/fds
+AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+  assert(fd < K.RO_FD_BASE)
+
+    at /Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:126:3
+    at test (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:10:9)
+    at Object.<anonymous> (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:122:1)
+    at Module._compile (node:internal/modules/cjs/loader:1829:14)
+    at Object..js (node:internal/modules/cjs/loader:1969:10)
+    at Module.load (node:internal/modules/cjs/loader:1552:32)
+    at Module._load (node:internal/modules/cjs/loader:1354:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+FAIL explicit invalid RO metadata is a configuration error
+AssertionError [ERR_ASSERTION]: Missing expected exception (TypeError).
+    at /Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:137:12
+    at test (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:10:9)
+    at Object.<anonymous> (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:134:1)
+    at Module._compile (node:internal/modules/cjs/loader:1829:14)
+    at Object..js (node:internal/modules/cjs/loader:1969:10)
+    at Module.load (node:internal/modules/cjs/loader:1552:32)
+    at Module._load (node:internal/modules/cjs/loader:1354:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+FAIL C and WASI preserve unsigned identity and unchanged field offsets
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+0 !== 4294967295
+
+    at /Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:157:41
+    at test (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:10:9)
+    at Object.<anonymous> (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:154:1)
+    at Module._compile (node:internal/modules/cjs/loader:1829:14)
+    at Object..js (node:internal/modules/cjs/loader:1969:10)
+    at Module.load (node:internal/modules/cjs/loader:1552:32)
+    at Module._load (node:internal/modules/cjs/loader:1354:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+FAIL invalid identity pair returns EIO without writing either ABI output
+AssertionError [ERR_ASSERTION]: dev=undefined
+
+0 !== -1
+
+    at /Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:170:14
+    at test (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:10:9)
+    at Object.<anonymous> (/Users/jku/git/c-compiler-prep785/tests/host/test_stat_identity.js:165:1)
+    at Module._compile (node:internal/modules/cjs/loader:1829:14)
+    at Object..js (node:internal/modules/cjs/loader:1969:10)
+    at Module.load (node:internal/modules/cjs/loader:1552:32)
+    at Module._load (node:internal/modules/cjs/loader:1354:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+ok backend failures retain ENOENT/EBADF; explicit legacy dev zero remains valid
+stat identity: 1 passed, 9 failed

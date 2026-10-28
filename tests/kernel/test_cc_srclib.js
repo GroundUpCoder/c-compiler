@@ -353,5 +353,50 @@ for (const bad of ['../../etc/shadow.c', '/etc/passwd', 'a/../b.c', 'a\\b.c', 'a
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+/* Distributed source-library metadata still has one expected source set.
+ * Mutate only the read seam: no package/header on disk is edited. */
+{
+  const read = rel => {try {return fs.readFileSync(path.join(ROOT,rel),'utf8');} catch {return null;}};
+  const changed = (file, edit) => rel => rel===file ? edit(read(rel)) : read(rel);
+  const base=COMMON.requireDriftErrors(read);
+  check('real source-library requirements and shipped sources agree',base.length===0,base);
+  const headers=[['NSObjCRuntime.h','NSObject.m'],['NSObjCRuntime.h','NSAutoreleasePool.m'],
+    ['NSString.h','NSString.m'],['NSException.h','NSException.m'],
+    ['NSArray.h','NSArray.m'],['NSEnumerator.h','NSEnumerator.m']];
+  for(const [header,source] of headers) {
+    const file='os/foundation/Foundation/'+header, directive='__require_source("foundation/'+source+'");';
+    check('fixture contains actual directive '+source,read(file).includes(directive));
+    const errors=COMMON.requireDriftErrors(changed(file,s=>s.replace(directive,'')));
+    check('missing distributed requirement refuses '+source,
+      errors.some(e=>e.includes('missing '+directive.slice(0,-1))),errors);
+  }
+  const errors=COMMON.requireDriftErrors(changed('os/foundation/Foundation/NSArray.h',s=>s+'\n__require_source("foundation/stray.m");\n'));
+  check('stray distributed requirement refuses',errors.some(e=>e.includes('stray __require_source("foundation/stray.m")')),errors);
+  let missingHeader='';try {COMMON.requireDriftErrors(changed('os/foundation/Foundation/NSEnumerator.h',()=>null));}catch(e){missingHeader=e.message;}
+  check('missing enrolled header is a mustRead failure',missingHeader.includes('cannot read os/foundation/Foundation/NSEnumerator.h'),missingHeader);
+  const missingSource=COMMON.requireDriftErrors(changed('os/foundation/NSEnumerator.m',()=>null));
+  check('missing shipped source refuses',missingSource.some(e=>e.includes('ships no os/foundation/NSEnumerator.m')),missingSource);
+  const badNamespace=COMMON.requireDriftErrors(changed('packages/foundation.json',s=>{const p=JSON.parse(s);p.srclib.src.foundation='absent-tree';return JSON.stringify(p);}));
+  check('wrong owner namespace refuses',badNamespace.some(e=>e.includes("does not map srclib namespace 'foundation'")),badNamespace);
+
+  // Direct enrollment stays distributed. Transitive discovery is broader:
+  // NSObject.m already includes Foundation.h and pulls the complete library.
+  const runtimeRequirements=read('os/foundation/Foundation/NSObjCRuntime.h').match(/^__require_source.*$/gm);
+  check('runtime header keeps only its two direct requirements',
+    JSON.stringify(runtimeRequirements)===JSON.stringify([
+      '__require_source("foundation/NSObject.m");','__require_source("foundation/NSAutoreleasePool.m");']),runtimeRequirements);
+  const foundationFiles=require('../foundation/files.js');
+  for(const [header,ownSource] of [
+    ['NSObjCRuntime.h','NSObject.m'],['NSObject.h','NSObject.m'],
+    ['NSString.h','NSString.m'],['NSException.h','NSException.m'],
+    ['NSArray.h','NSArray.m'],['NSEnumerator.h','NSEnumerator.m']]) {
+    const seen=new Set(),files=new Proxy({...foundationFiles,'/tests/discovery.m':'#include <Foundation/'+header+'>\nint main(void){return 0;}\n'},
+      {get(target,name){if(typeof name==='string'&&name.startsWith('/lib/'))seen.add(name);return target[name];}});
+    const result=compileMap(files,['/tests/discovery.m'],pp=>{pp.includePaths.push('/include');pp.sourceRoots.push({prefix:'foundation',dir:'/lib'});});
+    check(header+' source discovery compiles',result.ok&&result.linkErrors.length===0,result.err);
+    check(header+' discovers its required implementation',seen.has('/lib/'+ownSource),Array.from(seen));
+  }
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

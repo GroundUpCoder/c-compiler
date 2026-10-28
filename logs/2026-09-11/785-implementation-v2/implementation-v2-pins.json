@@ -1,0 +1,47 @@
+{
+  "branch": "prep785-volume-identity",
+  "base": "7050d4ab03b3ffa74180593c9842dde9804a035b",
+  "patch": "implementation-v2.patch",
+  "patch_sha256": "60ef1825ef00697212e4506cfa1a4bff12ebfe78a3428936b1613239cd8d23a1",
+  "source_sha256": {
+    "host.js": "fbe30fe0063ee2608b4fdb2e234351a5b2e0beb006286397d8f4912018d85eb3",
+    "kernel.js": "2efb7afdb9f7fe27e0496d1d01423ab6ca5073ebdad91d69d1edb9980bd3e1db",
+    "os/process-worker.js": "345c96d10dcb06a0ccfbec092a6dd9c21d13f2a40204bee8e9a25e741f50c4a2",
+    "tests/host/run.js": "10a0f9f20d8b6145269f2d9e017d9799321a4f58ffec472156f9482eaa01fbcb",
+    "tests/host/test_stat_identity.js": "ae823974cdd42ba02511f51723aed3b3c5fe902d728f036b9d57c46ac2b765a9",
+    "tests/kernel/test_rofs.js": "ea4319c10353071121960a13ffba8e8b30393dcda99a95c27ec9ca9ac9519be3",
+    "todos/KERNEL.md": "70382f0c177feaee7f54195224a8662bdbc280b9aea54bd4abfe82dfaefec1b8",
+    "todos/LIABILITIES.md": "36258d9fa7b4874bc210b10f74a97d07aad085a2b0b2e63b8a36db979c511820"
+  },
+  "input_overlay_sha256": "bb1acbaa7bfae06957f90c90925f1e0337bdb97fe0185892d4a67fd8c1cc71e8",
+  "overlay_source_sha256": {
+    "os/os-common.js": "41c262c7f13f90cc15b90d954b15677a042ebe940a2964450fe07bee466365a9",
+    "tests/kernel/test_cc_srclib.js": "add4fd1fc1ee4227d35477d629990880e7b942efc9b05f49e4290fb8fe4b711d"
+  },
+  "evidence_sha256": {
+    "0.log": "7cca3db1fac19562fde645a14a8f06db7c8fce3db60ea981303902b6acd8c3a4",
+    "1.log": "8ec6b5403d84b175236e2505a0c0fb96a639ec2a40ca694820a8f1027ccb195f",
+    "2.log": "5d61c27cf90d80b8832be1c4c4d6ff0804a3b1b116c5db10880b8ded9529a62b",
+    "3.log": "a5d14849de321f37603b4b188ec1f8fe136b2992bc271f7e712df1b142fd37f0",
+    "4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "5.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "6.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "7.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "first-green.log": "52174471195f39e20d1071b35248df04171648793263d901242a203cb276072b",
+    "focused-results.json": "811952ee87b2b87ba6654ca41d780b1e05c38f34c724f2bb204b8fb55181c785",
+    "red-pins.txt": "c6ccc3dca07d3de59a42e70c24bc7017bd4268c8685d485e7d135989399f03b0",
+    "red-test.js.txt": "a394134216f924edbff9b311176192ff05afc88d974464f1cf219d2dbf8a59df",
+    "red.log": "9b1b50e96277eef7daa0e1b5a17216dd7615d626c1c55173d6a172976d008127"
+  },
+  "scope": "isolated source delta and lightweight Node checks; no guest program, real worker, browser, image/package or OS workload; historical cmdalt not replayed",
+  "final_controls": {
+    "command": [
+      "node",
+      "tests/host/test_stat_identity.js"
+    ],
+    "exit": 0,
+    "groups_passed": 17,
+    "groups_failed": 0,
+    "log": "0.log"
+  }
+}

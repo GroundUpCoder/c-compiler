@@ -1,0 +1,16 @@
+{
+  "kind": "preparation-only; no workload launch",
+  "actualInputManifest": "3ece6c3c4a03df471fffb8d972e457bedb70fee950efc7d8c815343c72f0a695",
+  "actualTree": "2403c16ccff8faf749ff78df17aa0fb10987fe7e",
+  "files": {
+    "REVIEW.md": "974e8f64f0b53f064ba26e7e46ef9f8a077d00d5a5505ab1836eb1ed7ec3efa4",
+    "browser.mjs": "02e78a2408d90da039276568c64a17a480fe20dba47b3b997d70881c0d1718bd",
+    "cmdalt-preload.cjs": "b6c68651e5025d2013178ceaeb6e57dc3867a00e7290414b8c071db0c5a1aaa5",
+    "cmdalt.cjs": "75875cb0f2e184ae9eafc9857707d2f1595b7be1ab307129f80601f35ea59857",
+    "common.cjs": "6b94696fbdad0bb87e9234fcd4114994c1a1df17e75efe8d470563a0a75ca089",
+    "file-identity.c": "54123704b1e7a9b3e37b2f3a292d9b3e32505da914b41328527ecfc5f82d3211",
+    "launch-template.json": "83a9d500a94392e34aec134f7425317e34613c721f97893b742d16ee0d2969ca",
+    "node-worker.cjs": "f5ac90ad9bf19a1696adfde4bb0553f165c6c510908844582b494c630da95567",
+    "syntax-only.json": "601cb8ceeedcdbc5accb7ed0a76c1f50dd15b976261b7d5a27e23422e4a1af8d"
+  }
+}

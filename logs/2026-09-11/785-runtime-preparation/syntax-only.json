@@ -1,0 +1,52 @@
+[
+  {
+    "command": [
+      "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+      "--check",
+      "logs/2026-09-11/785-runtime-preparation/browser.mjs"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+      "--check",
+      "logs/2026-09-11/785-runtime-preparation/cmdalt-preload.cjs"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+      "--check",
+      "logs/2026-09-11/785-runtime-preparation/cmdalt.cjs"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+      "--check",
+      "logs/2026-09-11/785-runtime-preparation/common.cjs"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+      "--check",
+      "logs/2026-09-11/785-runtime-preparation/node-worker.cjs"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

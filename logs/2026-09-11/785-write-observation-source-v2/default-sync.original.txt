@@ -1,0 +1,4 @@
+  if (kfs.stat('/etc/gucman/defaults') || kfs.stat('/usr/share/gucman/defaults')) {
+    await kernel.service({ path: '/bin/gucman', argv: ['gucman', 'sync-defaults'],
+                           envp: ['PATH=/usr/local/bin:/bin'] });
+  }

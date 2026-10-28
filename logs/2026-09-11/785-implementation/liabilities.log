@@ -1,0 +1,3 @@
+liabilities: FAILED (2 error(s)):
+  - todos/LIABILITIES.md:289: L81 "provenance" value "#785 scope boundary; no native identity repair in the mounted-volume delta" is not a ticket ref (cc "#N" or legacy 4-digit id)
+  - todos/LIABILITIES.md:295: L82 "provenance" value "#785 adds explicit compatibility metadata only; filesystem-backed devices remain on the file OFD path" is not a ticket ref (cc "#N" or legacy 4-digit id)

@@ -1,0 +1,10 @@
+{
+  "allowedJobs": [
+    "gate"
+  ],
+  "commentId": "01a09079-22f4-727a-8332-9432b8cba806",
+  "text": "COORDINATOR ONE-SHOT NODE-ONLY EXECUTION GRANT. FULL independent review01a09078-055a and /tmp/cc-785-node-stage-v2-review.md read. Authorize sole785 author ONE invocation of reviewed 785-node-stage-v2/launch.py gate, plan0cdbc24743549c2b2e7d645f17b25daf34a0c7b180cadcbcc57e9976562f5c3a at exact staged2403c16ccff8faf749ff78df17aa0fb10987fe7e on aacbd167. Scope exactly one C compile then four sequential Node-worker cases, 600s direct-child deadline and unchanged V4 escalation/finalization. allowedJobs gate only; allowCanonicalStaleRecovery true solely through normal heavy-lock acquisition, no manual unlink. independentControlsAcceptanceCommentId01a08c47-5388-70b2-b0eb-7f07ffc9030f, prior cooperative/ignoring acceptances retained. Fresh coordinator preflight12:37:11Z: host-health OK, both lock paths absent,73.65GiB disk free, staged tree exact. Author must repeat normal full pin/resource/lock checks immediately before launch; refusal or failure consumes this attempt, no automatic retry. Preserve exact plan including nonblocking fixed workerCompletion wording; audit actual per-case native exits, never infer catch-path completion from that label. Retain compiler/guest/native worker distinctions, generated fixtures/module before execution, fresh grant/config/claim, direct child/pane/sourceAfter/archive/process evidence. No browser/cmdalt/image-package workload, broad replay, source edit/commit/main/deployment or retained-server cleanup. Deliver actual manifest/PIDs and independently audit result before next separate stage.",
+  "planSha256": "0cdbc24743549c2b2e7d645f17b25daf34a0c7b180cadcbcc57e9976562f5c3a",
+  "allowCanonicalStaleRecovery": true,
+  "independentControlsAcceptanceCommentId": "01a08c47-5388-70b2-b0eb-7f07ffc9030f"
+}

@@ -1,0 +1,20 @@
+--- v1/browser.mjs
++++ v2/browser.mjs
+@@ -33,7 +33,7 @@
+   const publication = { '/os/os-system.img': fixture.image, '/os/os-system.img.small.json': fixture.metadata };
+   const serverConfig = path.join(c.output, 'server-config.json');
+   fs.writeFileSync(serverConfig, JSON.stringify({ root: c.root, sources: c.sources, publication, output: c.output }));
+-  server = cp.spawn(process.execPath, ['-r', path.join(c.root, 'tests/lib/parent-watch.js'), path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixture-server.cjs'), serverConfig], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
++  server = cp.spawn(process.execPath, ['-r', path.join(c.root, 'tests/lib/parent-watch.js'), path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixture-server.cjs'), serverConfig], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: { ...process.env, CC_HARNESS_GROUP_LEADER: '0' } });
+   serverWatch = nativeAudit.children.find(w => w.child === server);
+   assert(serverWatch, 'actual server native child captured');
+   for (const [stream,name] of [[server.stdout,'server.stdout'],[server.stderr,'server.stderr']]) {
+@@ -94,7 +94,7 @@
+       insert('      warm: !!ent,', '      identity785SingleUsePid: w.__identity785Use,\n      warm: !!ent,');
+     }
+     if (file === 'kernel.js') {
+-      insert('  pcb.state = STATE_ZOMBIE;\n  pcb.exit = status;', `  if (typeof self !== 'undefined' && self.postMessage) self.postMessage({ type:'spawn-trace', trace:{ pid:pcb.pid, identity785GuestWaitStatus:status } });
++      insert('  pcb.state = STATE_ZOMBIE;\n  pcb.exit = status;', `  if (typeof globalThis.postMessage === 'function') globalThis.postMessage({ type:'spawn-trace', trace:{ pid:pcb.pid, identity785GuestWaitStatus:status } });
+   pcb.state = STATE_ZOMBIE;
+   pcb.exit = status;`);
+     }

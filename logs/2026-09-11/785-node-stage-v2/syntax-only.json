@@ -1,0 +1,55 @@
+[
+  {
+    "file": "node-worker.cjs",
+    "command": [
+      "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+      "--check",
+      "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-node-stage-v2/node-worker.cjs"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "file": "supervisor.py",
+    "verification": "AST parse only",
+    "result": "pass"
+  },
+  {
+    "file": "common.cjs",
+    "command": [
+      "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+      "--check",
+      "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-node-stage-v2/common.cjs"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "file": "inspect.py",
+    "verification": "AST parse only",
+    "result": "pass"
+  },
+  {
+    "file": "launch.py",
+    "verification": "AST parse only",
+    "result": "pass"
+  },
+  {
+    "file": "common.py",
+    "verification": "AST parse only",
+    "result": "pass"
+  },
+  {
+    "file": "health.cjs",
+    "command": [
+      "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+      "--check",
+      "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-node-stage-v2/health.cjs"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

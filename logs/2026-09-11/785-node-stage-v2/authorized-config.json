@@ -1,0 +1,51 @@
+{
+  "grantReference": "01a09079-22f4-727a-8332-9432b8cba806",
+  "allowedKinds": [
+    "node-worker"
+  ],
+  "root": "/Users/jku/git/c-compiler-land783",
+  "base": "aacbd1675336927543b6ad2434de9d5188767ff3",
+  "approvedTree": "2403c16ccff8faf749ff78df17aa0fb10987fe7e",
+  "indexPatchSha256": "9d1759f4431bb6cca76361912f7a6a27ad6307ce0604cad05550a346defad277",
+  "node": {
+    "executable": "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+    "sha256": "926d267c151bcb240522d4a1cff9a474a80bfdffadb07246a5b70f9baea9c24c",
+    "provenance": "prospective file pin captured during preparation; not historical test engine attribution"
+  },
+  "sources": {
+    "compiler.js": "baf40333b01e843d9573a4b44de257ace97f5c4e26d69666212d2eee8f2cdb05",
+    "host.js": "fbe30fe0063ee2608b4fdb2e234351a5b2e0beb006286397d8f4912018d85eb3",
+    "kernel.js": "2efb7afdb9f7fe27e0496d1d01423ab6ca5073ebdad91d69d1edb9980bd3e1db",
+    "os/boot.js": "1fb180d9aad664450834aaabfb14b88f8c6675e29e9f83b3e641e731a0ef5c24",
+    "os/cmdalt.h": "08fff0d267dbc5693f7f6391ab0e77f0e2f07f7c780f8c2b7e0410b2de6698e1",
+    "os/kernel-worker.js": "cd5de99c5bb5984589f9795dd36548b55aba06acf34b3b8561b5d2777ea9e17b",
+    "os/os-common.js": "41c262c7f13f90cc15b90d954b15677a042ebe940a2964450fe07bee466365a9",
+    "os/os.html": "d02d419f65c7ffbed69af3bf387008206f4fdeab4c41444e213fe8ce6e0fb4d0",
+    "os/process-worker.js": "345c96d10dcb06a0ccfbec092a6dd9c21d13f2a40204bee8e9a25e741f50c4a2",
+    "serve.js": "ef0bcceb280928fea5a42ccf7eb6c4624291b79c584814b8d48e01fc30db1762",
+    "tests/browser/lib/os-harness.mjs": "8d49ab6f1f7d3d1c17603881282f673b7a31c81dce2d502a73ccf796668e240d",
+    "tests/browser/lib/playwright-pin.cjs": "553cc06d928809a4b7cbb5dda4ceef1f731cc7c9e69d3b9cb54d498938addad8",
+    "tests/browser/package.json": "2ba8ee0923973aabfe4e31ebfc77512b1f0e8693b98b4e59c31faa249b2fd5dd",
+    "tests/host/run.js": "10a0f9f20d8b6145269f2d9e017d9799321a4f58ffec472156f9482eaa01fbcb",
+    "tests/host/test_stat_identity.js": "ae823974cdd42ba02511f51723aed3b3c5fe902d728f036b9d57c46ac2b765a9",
+    "tests/kernel/lib/drive.js": "b649bad8ad5e7afe3a5e5405b843965a3c95423da5a14c632de1fba7b4dc7ea7",
+    "tests/kernel/lib/gucman.js": "daac6f6a0eb6f200effcb6c25d5e69b3c75900a5a2c4a77ab1845eef4a08e688",
+    "tests/kernel/test_cc_srclib.js": "add4fd1fc1ee4227d35477d629990880e7b942efc9b05f49e4290fb8fe4b711d",
+    "tests/kernel/test_cmdalt_e2e.js": "4c824d77125887ee193a63d3e9dc622e3a0cc7d25a928e0d3122718fcf2d0357",
+    "tests/kernel/test_rofs.js": "ea4319c10353071121960a13ffba8e8b30393dcda99a95c27ec9ca9ac9519be3",
+    "tests/kernel/test_rofs_e2e.js": "1771573e168fd67f1e7c4ae60d4a44ad215d18bd5a52abc8187c7ed26d5655d4",
+    "tests/lib/heavy-lock.js": "d1c8bffd56d0d2d33b55e31c7c30d2781750b0c745268f2175c8eee6768f2948",
+    "todos/KERNEL.md": "70382f0c177feaee7f54195224a8662bdbc280b9aea54bd4abfe82dfaefec1b8",
+    "todos/LIABILITIES.md": "36258d9fa7b4874bc210b10f74a97d07aad085a2b0b2e63b8a36db979c511820",
+    "tests/lib/parent-watch.js": "47390e4ec47bb9db53e1fef9a688aa43f66d251e6221bfc659be1143cb5b0216",
+    "tests/lib/host-health.js": "99ef8eb6207e83b43ad834f526623f0f930db1d257b3f7b8b3bf460466dc8b5c"
+  },
+  "instruments": {
+    "file-identity.c": "54123704b1e7a9b3e37b2f3a292d9b3e32505da914b41328527ecfc5f82d3211",
+    "node-worker.cjs": "4f60bb1c2795cd24242d4a4037705a620e3be8dd6a41455219c04abb12f00023",
+    "common.cjs": "b53bdacadf789b72771df834b8a4c725a190d4b4240ff15526c3bb5643d5d3e1",
+    "health.cjs": "f28eb3fc8b20e5cc259bd9836b743fccc4f3e93d08c14d11e4ed77ae807984c5"
+  },
+  "output": "/Users/jku/git/c-compiler-land783/build/trap783/durable-run-gate-tgew74g9/payload",
+  "fixtures": {}
+}

@@ -1,0 +1,15 @@
+{
+  "enabled": false,
+  "allowedJobs": [],
+  "grant": null,
+  "command": null,
+  "proposedOuterSeconds": 600,
+  "proposedBootSeconds": 420,
+  "remainingPrerequisites": [
+    "independent scenario/design review",
+    "concrete driver/preload implementation freeze and source review",
+    "separate coordinator one-shot runtime grant",
+    "fresh normal guards"
+  ],
+  "reason": "design preparation only; not executable or launch-ready"
+}

@@ -1,0 +1,52 @@
+{
+  "branch": "prep785-volume-identity",
+  "base": "7050d4ab03b3ffa74180593c9842dde9804a035b",
+  "patch": "implementation-v1.patch",
+  "patch_sha256": "c41aa7882ed1c5fe86c5e8055a8c406a82b64032b05c92043735ce71ea411c09",
+  "source_sha256": {
+    "host.js": "5c14cdcbda08d3de26dde8f75d92c214214f360a88c9b687e36d31fecec33f32",
+    "kernel.js": "229631ae3da5615c84a735df0450d70b79aa1fcd0841fc5ec9d33093fef49543",
+    "os/process-worker.js": "a68c675a5eea529d76aafc6766204592823ccaf8c503ec06044da79119e0390a",
+    "tests/host/run.js": "10a0f9f20d8b6145269f2d9e017d9799321a4f58ffec472156f9482eaa01fbcb",
+    "tests/host/test_stat_identity.js": "0909543b17147803210f2e43c841400d802dca1d939e79599fee24a965c40361",
+    "tests/kernel/test_rofs.js": "1696e8f801e878d735964a8ca3dfeb878d8f5b397c9372906a98e244ab1d26e4",
+    "todos/KERNEL.md": "b3e0e74e2608463f07c429a09393b01b9eb33ecfe9b28b40ca1d213550df1848",
+    "todos/LIABILITIES.md": "36258d9fa7b4874bc210b10f74a97d07aad085a2b0b2e63b8a36db979c511820"
+  },
+  "input_overlay_sha256": "bb1acbaa7bfae06957f90c90925f1e0337bdb97fe0185892d4a67fd8c1cc71e8",
+  "overlay_source_sha256": {
+    "os/os-common.js": "41c262c7f13f90cc15b90d954b15677a042ebe940a2964450fe07bee466365a9",
+    "tests/kernel/test_cc_srclib.js": "add4fd1fc1ee4227d35477d629990880e7b942efc9b05f49e4290fb8fe4b711d"
+  },
+  "evidence_sha256": {
+    "expanded-controls.log": "f4937c1615708f38f114e32331ee90f18c45dc38e242aba610e9c038c2adb200",
+    "final-controls.log": "4b261c98a79dee2a6aa553e49cd5ec239aeafa92a6dab3671648f28383725619",
+    "first-implementation.log": "6f000910573a5aa3a19d1100c082cd038937514779f61ac85d624c3062495c71",
+    "focused-results.json": "4e1174a790759f0340da219171497b0f9d8e81846eb38e21c48ce17448291471",
+    "frozen-controls.log": "b88b1a95d543c2685675446f381a815d43bfeb0b3b52cab2b225e17564503d70",
+    "liabilities-corrected.log": "12a5f2eb1c3ea91a291a7cbc6c09c5a5e65cf98c8365f7e3c06347ad0695aa26",
+    "liabilities.log": "efda36c9556a3b8a4d84079e5da28ab3f5a5be0d64c03aa1cd3332ae69ff5f87",
+    "mapper-inventory.log": "91bb13f187931c5c2ad44641123ecefe5f2f1cbe0069cfbbb3b9e951d1d84961",
+    "red-first-pins.txt": "bc25444812b21f0e57f628adb0de812fa2104aecf31fdff46298c039d454cd55",
+    "red-first-test.js.txt": "97f916089f93c50d4675990eeeef5d6df64d8be61d2d3c86f854a0c8c3b93999",
+    "red-first.log": "6bd8085ac198dafac49acb1cbe47a00c86878ac55e952686584b75ac9622d1a7",
+    "second-implementation.log": "95fb7bbe265c8d0d766fde419f427fffced4a72241d7c04f98a82ba57e8f677d",
+    "tests_blockfs_test_dev.js.log": "7ad706b298a4ae69867237b812c5cba8d634f33e30a0eed56623e4d942e9b97c",
+    "tests_blockfs_test_mounts.js.log": "5d61c27cf90d80b8832be1c4c4d6ff0804a3b1b116c5db10880b8ded9529a62b",
+    "tests_host_test_stat_identity.js.log": "95fb7bbe265c8d0d766fde419f427fffced4a72241d7c04f98a82ba57e8f677d",
+    "tests_kernel_test_mounts.js.log": "a5d14849de321f37603b4b188ec1f8fe136b2992bc271f7e712df1b142fd37f0",
+    "tests_kernel_test_procfs.js.log": "ad901674953eef13f90c512abf0a5b3fe6a49bb78799a5bfa67505e49755cbc0",
+    "tests_kernel_test_rofs.js.log": "8ec6b5403d84b175236e2505a0c0fb96a639ec2a40ca694820a8f1027ccb195f"
+  },
+  "scope": "isolated source delta and lightweight Node checks; no guest program, real worker, browser, image/package or OS workload; historical cmdalt not replayed",
+  "final_controls": {
+    "command": [
+      "node",
+      "tests/host/test_stat_identity.js"
+    ],
+    "exit": 0,
+    "groups_passed": 14,
+    "groups_failed": 0,
+    "log": "frozen-controls.log"
+  }
+}

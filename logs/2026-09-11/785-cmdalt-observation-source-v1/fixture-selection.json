@@ -1,0 +1,16 @@
+{
+  "originalRun": "/Users/jku/git/c-compiler-land783/build/trap783/durable-run-gate-w8muo0_1",
+  "originalManifest": "/Users/jku/git/c-compiler-land783/build/trap783/durable-run-gate-w8muo0_1/launch.json",
+  "originalFixtureMetadata": "/Users/jku/git/c-compiler-land783/build/trap783/durable-run-gate-w8muo0_1/payload/cmdalt-35026-1.json",
+  "retainedSystemImage": "/Users/jku/git/c-compiler-land783/build/trap783/durable-run-gate-w8muo0_1/payload/cmdalt-35026-1.img",
+  "retainedSystemSha256": "f07105d6ff8ce041b432fc95b2ed2a140309a0c9946c9ee90ca8d8cb21e265ff",
+  "retainedSystemBytes": 18550656,
+  "prefixLines": 60,
+  "fullSessionALines": 73,
+  "prefixSha256": "0f16a8d0f575e5a5b13466a8c6e5b1ba33a22818b12fdc5bb2be337ec2a63c58",
+  "selection": "exact original session A prefix, through existing shadow chmod inclusive; no added guest command",
+  "originalSystemExistsNow": false,
+  "originalRootExistsNow": false,
+  "rootReconstruction": "new root seeded by unchanged boot; original root bytes were not archived; cannot claim exact old root replay",
+  "omitted": "session A suffix, all session B, packages/server/minimal bake/compilation; accepted53checks not replayed as acceptance"
+}

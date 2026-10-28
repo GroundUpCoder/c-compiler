@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/Users/jku/Library/pnpm/nodejs/25.8.2/bin/node",
+    "--check",
+    "/Users/jku/git/c-compiler-prep785/logs/2026-09-11/785-write-observation-source-v2/observe-preload.cjs"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "nodeSha256": "926d267c151bcb240522d4a1cff9a474a80bfdffadb07246a5b70f9baea9c24c",
+  "sourceSha256": "433c3fc89499400dd95590f6571054b1846d6ade97bfd28931b5f35801cade6a",
+  "scope": "syntax only; no entrypoint evaluation"
+}

@@ -1,0 +1,389 @@
+--- V2/cmdalt.cjs
++++ observation/observation.cjs
+@@ -1,62 +1,81 @@
+ 'use strict';
+ const fs=require('fs'),path=require('path'),cp=require('child_process'),assert=require('assert');
+-const {setup}=require('./common.cjs'),{bounded,watch,stop}=require('./native.cjs');
+-const {c,record,finalize}=setup('cmdalt');
+-require(path.join(c.root,'tests/lib/heavy-lock.js')).joinHeavyLock({name:'#785 current cmdalt observation'});
+-let primaryError=null, stagePassed=false, childWatch;
+-const cleanupErrors=[],writeErrors=[],streams=[];
+-const { observePackageServer }=require('./server-observe.cjs');
+-let serverObservation=null;
+-let rejectOutput;
+-const outputFailure=new Promise((_,reject)=>{rejectOutput=reject;});
+-// Attach a handler immediately, even if startup throws before the race is reached.
+-outputFailure.catch(()=>{});
+-function outputStream(name) {
+-  const stream=fs.createWriteStream(path.join(c.output,name),{flags:'wx'});
+-  const state={name,stream,closed:false,finished:false};
+-  state.done=new Promise(resolve=>{
+-    stream.on('error',error=>{writeErrors.push({name,error:String(error)});rejectOutput(error);});
+-    stream.on('finish',()=>{state.finished=true;});
+-    stream.on('close',()=>{state.closed=true;resolve();});
+-  });
+-  streams.push(state);return stream;
++const {setup,hashFile}=require('./common.cjs'),{bounded,watch,stop}=require('./native.cjs');
++const {c,record,finalize}=setup('observation');
++require(path.join(c.root,'tests/lib/heavy-lock.js')).joinHeavyLock({name:'#785 one boot identity observation'});
++let primaryError=null,stagePassed=false,w;
++const cleanupErrors=[],writeErrors=[],streams=[];let rejectOutput;
++const outputFailure=new Promise((_,reject)=>{rejectOutput=reject;});outputFailure.catch(()=>{});
++function stream(name){
++ const s=fs.createWriteStream(path.join(c.output,name),{flags:'wx'}),state={name,s,finished:false,closed:false};
++ state.done=new Promise(resolve=>{s.on('error',e=>{writeErrors.push({name,error:String(e)});rejectOutput(e);});s.on('finish',()=>state.finished=true);s.on('close',()=>{state.closed=true;resolve();});});
++ streams.push(state);return s;
+ }
++const system=path.join(c.output,'observation-system.img'),rootImage=path.join(c.output,'observation-root.img');
+ (async()=>{
+- try {
+-  assert(!process.env.NODE_OPTIONS,'unexpected NODE_OPTIONS');
+-  const preload=path.join(__dirname,'cmdalt-preload.cjs');
+-  const command=[process.execPath,'-r',path.join(c.root,'tests/lib/parent-watch.js'),path.join(c.root,'tests/kernel/test_cmdalt_e2e.js')];
+-  const child=cp.spawn(command[0],command.slice(1),{cwd:c.root,stdio:['ignore','pipe','pipe'],env:{...process.env,CC_HARNESS_GROUP_LEADER:'0',IDENTITY785_CONFIG:path.resolve(process.argv[3]),NODE_OPTIONS:'--require='+JSON.stringify(preload)}});
+-  childWatch=watch(child,command);
+-  const stdout=outputStream('original-test.stdout'),stderr=outputStream('original-test.stderr');
+-  child.stdout.pipe(stdout);child.stderr.pipe(stderr);
+-  await bounded(Promise.race([childWatch.done,outputFailure]),c.cmdalt.timeoutMs,'original cmdalt complete package/two-boot test');
+-  record('cmdalt-result.json',childWatch.row);
+-  assert.strictEqual(childWatch.row.code,0,'original current cmdalt all assertions');assert.strictEqual(childWatch.row.signal,null);
+-  const observations=fs.readFileSync(path.join(c.output,'cmdalt-identity.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+-  assert.strictEqual(observations.length,1,'exact original session A shadow chmod observation');
+-  for(const row of observations){
+-   assert.strictEqual(row.kind,'post-existing-shadow-chmod');
+-   const a=row.files['/usr/local/bin/python'].stat,b=row.files['/usr/bin/cmdalt'].stat;
+-   assert(a && b && (a.dev!==b.dev || a.ino!==b.ino),'measured current pair differs');
+-  }
+-  const bootFiles=fs.readdirSync(c.output).filter(n=>/^cmdalt-\d+-\d+\.exit\.json$/.test(n));
+-  assert.strictEqual(bootFiles.length,2,'two original current boots, no omitted package session');
+-  for(const file of bootFiles){const x=JSON.parse(fs.readFileSync(path.join(c.output,file)));assert.strictEqual(x.status,0);assert.strictEqual(x.signal,null);assert(!x.error);}
++ try{
++  assert(!process.env.NODE_OPTIONS,'ambient preload forbidden');
++  assert.strictEqual(hashFile(c.observation.system),c.observation.systemSha256);
++  assert(!fs.existsSync(system)&&!fs.existsSync(rootImage),'fresh owned image namespace required');
++  fs.copyFileSync(c.observation.system,system,fs.constants.COPYFILE_EXCL);
++  assert.strictEqual(hashFile(system),c.observation.systemSha256);
++  const input=fs.readFileSync(path.join(__dirname,'session-a-prefix.sh'));
++  fs.writeFileSync(path.join(c.output,'stdin.sh'),input,{flag:'wx'});
++  record('fixture-before.json',{retained:{path:c.observation.system,sha256:hashFile(c.observation.system)},owned:{path:system,sha256:hashFile(system)},root:{path:rootImage,exists:false},prefixSha256:hashFile(path.join(c.output,'stdin.sh')),freshRootNotHistoricalReplay:true});
++  const command=[process.execPath,'-r',path.join(c.root,'tests/lib/parent-watch.js'),'-r',path.join(__dirname,'observe-preload.cjs'),path.join(c.root,'os/boot.js'),'--image='+system,'--fixture='+system,'--quiet','--packages=none'];
++  const child=cp.spawn(command[0],command.slice(1),{cwd:c.root,stdio:['pipe','pipe','pipe'],env:{...process.env,CC_HARNESS_GROUP_LEADER:'0',IDENTITY785_CONFIG:path.resolve(process.argv[3])}});
++  w=watch(child,command);
++  child.stdin.on('error',e=>{writeErrors.push({name:'stdin',error:String(e)});rejectOutput(e);});
++  child.stdout.pipe(stream('boot.stdout'));child.stderr.pipe(stream('boot.stderr'));child.stdin.end(input);
++  await bounded(Promise.race([w.done,outputFailure]),c.observation.timeoutMs,'one boot native completion');
++  record('boot-result.json',w.row);
++  assert(w.row.exitObserved&&w.row.closeObserved&&!w.row.error,'actual native boot completion');
++  assert.strictEqual(w.row.code,0);assert.strictEqual(w.row.signal,null);assert.strictEqual(w.row.closeCode,0);assert.strictEqual(w.row.closeSignal,null);
++  // Only parse after native close; all trace writes are synchronous in that child.
++  const text=fs.readFileSync(path.join(c.output,'boot-trace.jsonl'),'utf8');assert(text.endsWith('\n'),'partial trace');
++  const events=text.trim().split('\n').map(JSON.parse),summary=JSON.parse(fs.readFileSync(path.join(c.output,'boot-observer-summary.json')));
++  events.forEach((e,i)=>{assert.strictEqual(e.seq,i+1);assert.strictEqual(e.hostPid,w.row.pid);});
++  assert(events.length<=4096&&Buffer.byteLength(text)<=8*1024*1024);
++  const one=kind=>{const a=events.filter(e=>e.kind===kind);assert.strictEqual(a.length,1,kind);return a[0];};
++  const entry=one('preload-entry');assert(entry.isMainThread&&entry.threadId===0);assert.strictEqual(entry.executableSha256,c.node.sha256);
++  assert.strictEqual(entry.configSha256,hashFile(path.resolve(process.argv[3])));
++  const mod=one('module-identity');assert(mod.exportsEqual);assert.strictEqual(mod.sha256,c.sources['kernel.js']);
++  assert.strictEqual(mod.real,fs.realpathSync(path.join(c.root,'kernel.js')));
++  const installed=one('hook-installed');assert(installed.readbackEqual&&installed.moduleEqual);
++  const mounted=one('boot-mounted-before-spawn');assert.strictEqual(mounted.systemSha256,c.observation.systemSha256);assert(mounted.rootExists&&mounted.hookEqual&&mounted.buildGuardsEqual);
++  const first=one('first-fsRpc');assert(first.prototypeEqual&&first.instanceEqual&&first.moduleEqual);
++  assert.deepStrictEqual(one('no-build-guards').names,['bakeSystemImage','buildProject']);
++  assert(!events.some(e=>e.kind==='forbidden-build'));
++  const end=one('preload-exit');assert.strictEqual(end.code,0);assert.deepStrictEqual(end.errors,[]);
++  assert.strictEqual(summary.hostPid,w.row.pid);assert.strictEqual(summary.code,0);assert.deepStrictEqual(summary.errors,[]);assert(!summary.traceDisabled);assert.strictEqual(summary.records,events.length);
++  assert.strictEqual(summary.qualified,1);
++  const pairs=events.filter(e=>e.kind==='response-before-forward'&&e.observation&&e.observation.qualified);
++  assert.strictEqual(pairs.length,1);const pair=pairs[0];assert(pair.targetMatches&&pair.success&&pair.responseNumber===1);
++  const condition=events.filter(e=>e.kind==='condition'&&e.id===pair.id);assert.strictEqual(condition.length,1);assert.strictEqual(condition[0].maskedMode,0o755);assert(condition[0].prototypeEqual&&condition[0].instanceEqual);
++  const completed=events.filter(e=>e.kind==='operation-complete'&&e.id===pair.id);assert.strictEqual(completed.length,1);assert(completed[0].returned&&!completed[0].thrown&&completed[0].responses===1&&completed[0].respondRestored);assert(pair.seq<completed[0].seq);
++  const files=pair.observation.files,a=files['/usr/local/bin/python'],b=files['/usr/bin/cmdalt'];
++  assert(a.stat.dev!==b.stat.dev||a.stat.ino!==b.stat.ino,'actual distinct pair');
++  for(const f of [a,b])for(const k of ['dev','ino','mode','rdev'])assert.strictEqual(f.stat[k],f.lstat[k]);
++  assert.strictEqual(a.stat.mode&0o777,0o755);
++  record('identity-result.json',{condition:condition[0],pair,completed:completed[0],freshRootNotHistoricalReplay:true});
++  assert.strictEqual(hashFile(system),c.observation.systemSha256,'no system replacement/bake');
+   stagePassed=true;
+- }catch(error){primaryError=error;}
++ }catch(e){primaryError=e;}
+  finally{
+-  await stop(childWatch,cleanupErrors);
+-  try { await bounded(Promise.all(streams.map(s=>s.done)),5000,'original output flush'); }
+-  catch(error){cleanupErrors.push(String(error));for(const s of streams)if(!s.closed)s.stream.destroy();}
+-  try { serverObservation=await observePackageServer(c); }
+-  catch(error){serverObservation={cleanupObserved:false,error:String(error)};cleanupErrors.push(String(error));}
+-  record('package-server-after.json',serverObservation);
+-  const outputComplete=streams.length===2 && streams.every(s=>s.closed && s.finished) && writeErrors.length===0;
+-  record('output-finalization.json',{outputComplete,writeErrors,streams:streams.map(s=>({name:s.name,closed:s.closed,finished:s.finished}))});
+-  record('native-cleanup.json',{testChild:childWatch && childWatch.row,cleanupErrors,serverObservation,writeErrors,descendantNativeExits:'see cmdalt-native.jsonl; any missing server exit callback remains unknown, not inferred from parent exit'});
++  try{await stop(w,cleanupErrors);}catch(e){cleanupErrors.push(String(e));}
++  try{await bounded(Promise.all(streams.map(x=>x.done)),5000,'boot output final flush');}
++  catch(e){cleanupErrors.push(String(e));for(const x of streams)if(!x.closed)x.s.destroy();}
++  const outputComplete=streams.length===2&&streams.every(x=>x.finished&&x.closed)&&writeErrors.length===0;
++  record('output-finalization.json',{outputComplete,writeErrors,streams:streams.map(x=>({name:x.name,finished:x.finished,closed:x.closed}))});
++  const images=[];
++  for(const file of [system,rootImage]){try{images.push({path:file,exists:fs.existsSync(file),sha256:fs.existsSync(file)?hashFile(file):null});}catch(e){cleanupErrors.push(String(e));}}
++  let retainedOriginalSha256=null;try{retainedOriginalSha256=hashFile(c.observation.system);}catch(e){cleanupErrors.push(String(e));}
++  record('fixture-after.json',{images,retainedOriginalSha256});
++  // Require the actual newly seeded root too; missing files remain missing evidence.
++  if(!images.some(x=>x.path===rootImage&&x.exists))cleanupErrors.push('owned root image absent');
++  record('native-cleanup.json',{boot:w&&w.row,cleanupErrors,writeErrors,server:'none in scope',workerNativeExits:'not observed; native boot exit does not establish worker callbacks'});
+   if(primaryError)record('failure.json',{primaryError:primaryError.stack,cleanupErrors,writeErrors});
+-  finalize(primaryError,{stagePassed,cleanupComplete:!!childWatch && childWatch.row.exitObserved && childWatch.row.closeObserved && cleanupErrors.length===0 && outputComplete && serverObservation.cleanupObserved,artifactErrors:[...cleanupErrors,...writeErrors]});
++  finalize(primaryError,{stagePassed,cleanupComplete:!!w&&w.row.exitObserved&&w.row.closeObserved&&outputComplete&&cleanupErrors.length===0,artifactErrors:[...cleanupErrors,...writeErrors]});
+   if(process.exitCode)process.exit(1);
+  }
+ })();
+--- V2/cmdalt-preload.cjs
++++ observation/observe-preload.cjs
+@@ -1,121 +1,132 @@
+ 'use strict';
+-// Opt-in current fixture observation. No original source/assertion edits.
+-const fs = require('fs'), path = require('path'), assert = require('assert');
+-const { hashFile } = require('./common.cjs');
+-const configPath = process.env.IDENTITY785_CONFIG;
+-assert(configPath, 'missing authorized instrument configuration');
+-const c = JSON.parse(fs.readFileSync(configPath));
+-assert(c.grantReference && c.grantReference !== 'PENDING' && c.allowedKinds.includes('cmdalt'));
+-assert.strictEqual(hashFile(process.execPath), c.node.sha256);
+-for (const f of ['host.js', 'kernel.js', 'tests/kernel/test_cmdalt_e2e.js', 'os/cmdalt.h'])
+-  assert.strictEqual(hashFile(path.join(c.root, f)), c.sources[f], f);
+-// Native spawn evidence is recorded without changing arguments/results.
+-const cp = require('child_process');
+-const syncSpawn = cp.spawnSync, asyncSpawn = cp.spawn;
+-let spawnNumber = 0, packageServerCall = null;
+-function appendNative(value) { fs.appendFileSync(path.join(c.output, 'cmdalt-native.jsonl'), JSON.stringify({ observerPid: process.pid, ...value }) + '\n'); }
+-cp.spawnSync = function (file, args, opts) {
+-  const number = process.pid + '-' + (++spawnNumber);
+-  appendNative({ kind:'sync-start', number, command:[file,...(args || [])] });
+-  const r = syncSpawn.apply(this, arguments);
+-  appendNative({ kind:'sync-result', number, pid:r.pid, status:r.status, signal:r.signal, error:r.error && String(r.error) });
+-  fs.writeFileSync(path.join(c.output,'native-'+number+'.stdout'),r.stdout || '',{flag:'wx'});
+-  fs.writeFileSync(path.join(c.output,'native-'+number+'.stderr'),r.stderr || '',{flag:'wx'});
+-  return r;
+-};
+-cp.spawn = function (file, args, opts) {
+-  const child = asyncSpawn.apply(this, arguments);
+-  appendNative({ kind:'async-spawn', pid:child.pid, command:[file,...(args || [])] });
+-  if (packageServerCall && args && args[0] === path.join(c.root,'serve.js') && args[1] === packageServerCall.dir) {
+-    packageServerCall.pid = child.pid; packageServerCall.command = [file,...args];
+-    const observed = syncSpawn(c.observationTools.ps, ['-p',String(child.pid),'-o','pid=,ppid=,pgid=,lstart=,command='], {encoding:'utf8',timeout:1000});
+-    packageServerCall.identity = { status:observed.status,signal:observed.signal,error:observed.error && String(observed.error),stdout:observed.stdout,stderr:observed.stderr };
+-    fs.appendFileSync(path.join(c.output,'package-server.jsonl'),JSON.stringify({kind:'spawned',...packageServerCall})+'\n');
++(() => {
++ const wt=require('worker_threads');
++ // Node workers inherit execArgv; only the native boot main thread owns trace.
++ if(!wt.isMainThread)return;
++ const fs=require('fs'),path=require('path'),assert=require('assert');
++ const {hashFile,sha}=require('./common.cjs');
++ const configPath=process.env.IDENTITY785_CONFIG;
++ assert(configPath,'explicit observation config required');
++ const c=JSON.parse(fs.readFileSync(configPath));
++ assert(c.grantReference && c.grantReference!=='PENDING' && c.allowedKinds.includes('observation'));
++ assert.strictEqual(fs.realpathSync(process.argv[1]),fs.realpathSync(path.join(c.root,'os/boot.js')));
++ assert.strictEqual(hashFile(process.execPath),c.node.sha256);
++ for(const [f,h] of Object.entries(c.instruments))assert.strictEqual(hashFile(path.join(__dirname,f)),h);
++ const tracePath=path.join(c.output,'boot-trace.jsonl');
++ const fd=fs.openSync(tracePath,'wx');let seq=0,bytes=0,disabled=false,first=false,operation=0,qualified=0;
++ const errors=[],counts=Object.create(null);
++ function fail(e){if(errors.length<32)errors.push(String(e && (e.stack||e)));disabled=true;}
++ function emit(kind,data={}){
++  if(disabled)return;
++  try{
++   const line=JSON.stringify({seq:++seq,kind,hostPid:process.pid,...data})+'\n';
++   const buf=Buffer.from(line);assert(seq<=4096 && bytes+buf.length<=8*1024*1024,'trace cap exceeded');
++   let off=0;while(off<buf.length){const n=fs.writeSync(fd,buf,off,buf.length-off);assert(n>0,'trace write made no progress');off+=n;}
++   bytes+=buf.length;fs.fsyncSync(fd);
++  }catch(e){fail(e);}
++ }
++ emit('preload-entry',{ppid:process.ppid,isMainThread:wt.isMainThread,threadId:wt.threadId,argv:process.argv,execArgv:process.execArgv,
++  executable:fs.realpathSync(process.execPath),executableSha256:hashFile(process.execPath),configPath,
++  configSha256:hashFile(configPath),environment:{IDENTITY785_CONFIG:configPath,NODE_OPTIONS:process.env.NODE_OPTIONS||null}});
++ process.on('exit',code=>{
++  emit('preload-exit',{code,counts,qualified,errors});
++  try{fs.fsyncSync(fd);fs.closeSync(fd);}catch(e){fail(e);}
++  // Separate failure channel survives a trace-cap/write failure when possible.
++  // Missing/malformed summary is independently RED in the parent.
++  try{const f=fs.openSync(path.join(c.output,'boot-observer-summary.json'),'wx');
++   fs.writeFileSync(f,JSON.stringify({hostPid:process.pid,code,counts,qualified,errors,traceDisabled:disabled,records:seq,bytes}));fs.fsyncSync(f);fs.closeSync(f);
++  }catch(e){try{process.stderr.write('IDENTITY785 observer summary failure: '+String(e)+'\n');}catch(_){} }
++ });
++ const kernelPath=require.resolve(path.join(c.root,'kernel.js'));
++ const K=require(kernelPath),COMMON=require(path.join(c.root,'os/os-common.js'));
++ assert.strictEqual(hashFile(kernelPath),c.sources['kernel.js']);
++ assert.strictEqual(hashFile(path.join(c.root,'os/os-common.js')),c.sources['os/os-common.js']);
++ const guards={};
++ for(const name of ['bakeSystemImage','buildProject']){
++  assert.strictEqual(typeof COMMON[name],'function',name);
++  guards[name]=function(){emit('forbidden-build',{name});throw new Error('observation forbids '+name);};
++  COMMON[name]=guards[name];assert.strictEqual(COMMON[name],guards[name]);
++ }
++ emit('no-build-guards',{names:Object.keys(guards)});
++ const proto=K.Kernel.prototype,original=proto._fsRpc;
++ assert.strictEqual(typeof original,'function');
++ const originalDescriptor=Object.getOwnPropertyDescriptor(proto,'_fsRpc');
++ emit('module-identity',{resolved:kernelPath,real:fs.realpathSync(kernelPath),sha256:hashFile(kernelPath),
++  cacheFilename:require.cache[kernelPath].filename,exportsEqual:require.cache[kernelPath].exports===K,
++  originalFunctionSha256:sha(Buffer.from(Function.prototype.toString.call(original))),descriptor:{writable:originalDescriptor.writable,enumerable:originalDescriptor.enumerable,configurable:originalDescriptor.configurable},
++  opChmod:K.OP.FS_CHMOD,opFchmod:K.OP.FS_FCHMOD});
++ function preserveErrors(owner,fn){
++  const seen=new Set(),saved=[];
++  function visit(f){if(!f||seen.has(f))return;seen.add(f);saved.push([f,Object.getOwnPropertyDescriptor(f,'_lastError')]);
++   if(Array.isArray(f._mounts))for(const m of f._mounts)visit(m.fs);
+   }
+-  child.on('exit',(code,signal)=>appendNative({ kind:'async-exit', pid:child.pid, code, signal }));
+-  child.on('close',(code,signal)=>appendNative({ kind:'async-close', pid:child.pid, code, signal }));
+-  return child;
+-};
+-function retainTree(dir, label) {
+-  const target=path.join(c.output,label), files={}; fs.mkdirSync(target,{recursive:false});
+-  function walk(at,rel) {
+-    for(const n of fs.readdirSync(at).sort()) {
+-      const src=path.join(at,n), r=path.join(rel,n), st=fs.lstatSync(src);
+-      assert(!st.isSymbolicLink(),'unexpected generated-fixture symlink');
+-      if(st.isDirectory()){fs.mkdirSync(path.join(target,r));walk(src,r);}
+-      else if(st.isFile()){ const bytes=fs.readFileSync(src);fs.writeFileSync(path.join(target,r),bytes,{flag:'wx'});files[r]=require('./common.cjs').sha(bytes); }
+-    }
++  visit(owner);
++  try{return fn();}finally{for(const [f,d] of saved){if(d)Object.defineProperty(f,'_lastError',d);else delete f._lastError;}}
++ }
++ function metadata(s){
++  assert(s && Number.isInteger(s.dev) && s.dev>=0 && s.dev<=0xffffffff && Number.isSafeInteger(s.ino) && s.ino>0,'invalid volume/inode metadata');
++  assert(Number.isInteger(s.mode)&&Number.isSafeInteger(s.rdev)&&s.rdev>=0,'invalid mode/rdev metadata');
++  return {dev:s.dev,ino:s.ino,mode:s.mode,rdev:s.rdev};
++ }
++ const same=(a,b)=>a.dev===b.dev&&a.ino===b.ino;
++ function snapshot(kernel,pcb,op,req,full){
++  return preserveErrors(kernel._fs,()=>{
++   const owner=kernel._fs;let subject,ofdEvidence=null;
++   if(op===K.OP.FS_CHMOD)subject=owner.stat(full);
++   else{
++    const id=pcb.fds.get(req.fd|0),ofd=id===undefined?null:kernel._ofds.get(id);
++    ofdEvidence={guestFd:req.fd,ofdId:id,kind:ofd&&ofd.kind,bfsFd:ofd&&ofd.bfsFd,path:ofd&&ofd.path};
++    if(!ofd||ofd.kind!=='file')return {qualified:false,reason:'unresolved non-file OFD',ofd:ofdEvidence};
++    subject=owner.fstat(ofd.bfsFd); // volume-qualified stat; never OFD device dispatch identity
++   }
++   const sm=metadata(subject),shadow=owner.stat('/usr/local/bin/python');
++   if(!shadow)return {qualified:false,reason:'shadow absent',subject:sm,ofd:ofdEvidence};
++   const sh=metadata(shadow);
++   if(!same(sm,sh)||(req.mode&0o777)!==0o755)return {qualified:false,reason:'different subject or mode',subject:sm,shadow:sh,ofd:ofdEvidence};
++   const files={};for(const name of ['/usr/local/bin/python','/usr/bin/cmdalt'])files[name]={stat:metadata(owner.stat(name)),lstat:metadata(owner.lstat(name))};
++   return {qualified:true,subject:sm,ofd:ofdEvidence,files,volumes:owner._mounts.map(m=>({prefix:m.prefix,identity:owner.getVolumeIdentity(m.prefix)}))};
++  });
++ }
++ function wrapped(pcb,op,req){
++  try{counts[op]=(counts[op]||0)+1;if(!first){first=true;emit('first-fsRpc',{op,prototypeEqual:proto._fsRpc===wrapped,instanceEqual:this._fsRpc===wrapped,moduleEqual:require(kernelPath)===K});}}
++  catch(e){fail(e);}
++  if(op!==K.OP.FS_CHMOD && op!==K.OP.FS_FCHMOD)return original.apply(this,arguments);
++  const kernel=this,id=++operation;let full=null,responses=0,returned=false,thrown=null;
++  try{full=op===K.OP.FS_CHMOD?kernel._pathFor(pcb,req.path):null;
++   emit('condition',{id,op,path:req.path,pathType:typeof req.path,mode:req.mode,modeType:typeof req.mode,maskedMode:req.mode&0o777,fd:req.fd,guestPid:pcb.pid,cwd:pcb.cwd,full,
++    oldPredicates:{opcode:op===K.OP.FS_CHMOD,path:full==='/usr/local/bin/python',mode:(req.mode&0o777)===0o755},prototypeEqual:proto._fsRpc===wrapped,instanceEqual:kernel._fsRpc===wrapped});
++  }catch(e){fail(e);}
++  const descriptor=Object.getOwnPropertyDescriptor(kernel,'_respond'),respond=kernel._respond;
++  function tapped(target,reply){
++   // No product response can be lost to instrumentation failure.
++   try{
++    if(target===pcb){responses++;const success=!!reply&&!reply.errno;
++     let observed=null;if(success)observed=snapshot(kernel,pcb,op,req,full);
++     if(observed&&observed.qualified)qualified++;
++     emit('response-before-forward',{id,responseNumber:responses,targetMatches:true,reply,success,observation:observed});
++    }else emit('response-before-forward',{id,targetMatches:false,reply});
++   }catch(e){fail(e);}
++   return respond.apply(this,arguments); // exactly one forwarding of each actual call
+   }
+-  walk(dir,'');
+-  fs.writeFileSync(path.join(c.output,label+'.json'),JSON.stringify({source:dir,files},null,2),{flag:'wx'});
+-}
+-const gucman = require(path.join(c.root,'tests/kernel/lib/gucman.js'));
+-const startServer = gucman.startServer;
+-gucman.startServer = function (dir) {
+-  // Includes the original test's hand-built shadow package, after addShadowPackage.
+-  retainTree(dir,'cmdalt-package-publication-'+process.pid);
+-  const call = { dir, observerPid:process.pid }; packageServerCall = call;
+-  let pending;
+-  try { pending = startServer.apply(this,arguments); }
+-  finally { packageServerCall = null; }
+-  return pending.then(port => {
+-    call.port=port;
+-    fs.appendFileSync(path.join(c.output,'package-server.jsonl'),JSON.stringify({kind:'ready',...call})+'\n');
+-    return port;
+-  }, error => {
+-    fs.appendFileSync(path.join(c.output,'package-server.jsonl'),JSON.stringify({kind:'start-failed',...call,error:String(error)})+'\n');
+-    throw error;
+-  });
+-};
+-const K = require(path.join(c.root, 'kernel.js'));
+-const original = K.Kernel.prototype._fsRpc;
+-K.Kernel.prototype._fsRpc = function (pcb, op, req) {
+-  const full = op === K.OP.FS_CHMOD ? this._pathFor(pcb, req.path) : null;
+-  if (full !== '/usr/local/bin/python' || (req.mode & 0o777) !== 0o755)
+-    return original.call(this, pcb, op, req);
+-  const ownRespond = Object.prototype.hasOwnProperty.call(this, '_respond');
+-  const respond = this._respond; let success = false;
+-  this._respond = function (target, reply) {
+-    if (target === pcb) success = !!reply && !reply.errno;
+-    return respond.apply(this, arguments);
+-  };
+-  let result;
+-  try { result = original.call(this, pcb, op, req); }
+-  finally { if (ownRespond) this._respond = respond; else delete this._respond; }
+-  if (!success) return result;
+-  // Read-only stat walks can touch error slots. Preserve every relevant slot
+-  // so the observation cannot change a later syscall's errno provenance.
+-  const owner = this._fs, backends = [owner, ...owner._mounts.map(m => m.fs)];
+-  const errors = backends.map(f => f._lastError);
+-  let observation;
+-  try {
+-    observation = { kind: 'post-existing-shadow-chmod', pid: pcb.pid, hostPid: process.pid,
+-      node: { executable: fs.realpathSync(process.execPath), sha256: hashFile(process.execPath), versions: process.versions },
+-      sourcePins: c.sources, files: {} };
+-    for (const name of ['/usr/local/bin/python', '/usr/bin/cmdalt'])
+-      observation.files[name] = { stat: owner.stat(name), lstat: owner.lstat(name) };
+-    observation.volumes = owner._mounts.map(m => ({ prefix: m.prefix, identity: owner.getVolumeIdentity(m.prefix) }));
+-  } catch (e) { observation = { kind: 'observation-error', error: e.stack }; }
+-  finally { backends.forEach((f, i) => { f._lastError = errors[i]; }); }
+-  fs.appendFileSync(path.join(c.output, 'cmdalt-identity.jsonl'), JSON.stringify(observation) + '\n');
+-  return result;
+-};
+-// Retain the actual generated fixture bytes/hash immediately before each boot.
+-const drive = require(path.join(c.root, 'tests/kernel/lib/drive.js'));
+-const driveBoot = drive.driveBoot;
+-let boots = 0;
+-drive.driveBoot = function (script, opts) {
+-  assert(opts && opts.image, 'explicit current cmdalt fixture required');
+-  const number = process.pid + '-' + (++boots);
+-  const bytes = fs.readFileSync(opts.image);
+-  fs.writeFileSync(path.join(c.output, 'cmdalt-' + number + '.img'), bytes, { flag: 'wx' });
+-  fs.writeFileSync(path.join(c.output, 'cmdalt-' + number + '.json'), JSON.stringify({
+-    imagePath: opts.image, imageSha256: require('./common.cjs').sha(bytes), script, opts,
+-    testSha256: hashFile(path.join(c.root, 'tests/kernel/test_cmdalt_e2e.js')),
+-  }, null, 2), { flag: 'wx' });
+-  const r = driveBoot.apply(this, arguments);
+-  fs.writeFileSync(path.join(c.output, 'cmdalt-' + number + '.stdout'), r.stdout || '', { flag: 'wx' });
+-  fs.writeFileSync(path.join(c.output, 'cmdalt-' + number + '.stderr'), r.stderr || '', { flag: 'wx' });
+-  fs.writeFileSync(path.join(c.output, 'cmdalt-' + number + '.exit.json'), JSON.stringify({ pid: r.pid, status: r.status, signal: r.signal, error: r.error && String(r.error) }), { flag: 'wx' });
+-  return r;
+-};
++  let installed=false;
++  try{
++   try{Object.defineProperty(kernel,'_respond',{value:tapped,writable:true,configurable:true,enumerable:descriptor?descriptor.enumerable:false});installed=true;}
++   catch(e){fail(e);}
++   try{const result=original.apply(this,arguments);returned=true;return result;}
++   catch(e){thrown=String(e);throw e;}
++  }finally{
++   if(installed){try{if(descriptor)Object.defineProperty(kernel,'_respond',descriptor);else delete kernel._respond;}catch(e){fail(e);}}
++   emit('operation-complete',{id,responses,returned,thrown,respondRestored:kernel._respond===respond});
++  }
++ }
++ Object.defineProperty(proto,'_fsRpc',{...originalDescriptor,value:wrapped});
++ emit('hook-installed',{readbackEqual:proto._fsRpc===wrapped,moduleEqual:require(kernelPath)===K});
++ const bootDescriptor=Object.getOwnPropertyDescriptor(proto,'boot'),originalBoot=proto.boot;
++ Object.defineProperty(proto,'boot',{...bootDescriptor,value:function(){
++  try{emit('boot-mounted-before-spawn',{systemSha256:hashFile(path.join(c.output,'observation-system.img')),
++   rootExists:fs.existsSync(path.join(c.output,'observation-root.img')),hookEqual:this._fsRpc===wrapped,
++   buildGuardsEqual:Object.keys(guards).every(n=>COMMON[n]===guards[n])});}catch(e){fail(e);}
++  return originalBoot.apply(this,arguments);
++ }});
++
++})();

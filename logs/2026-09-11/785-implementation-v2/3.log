@@ -1,0 +1,20 @@
+ok routing: writes land on the owning volume, prefix stripped
+ok routing: mount-point dir exists in the outer volume; readdir needs no synthesis
+ok routing: stat/readdir across the mount point
+ok fd ops: one namespace over both volumes; lseek/fstat/ftruncate/futime/fchmod
+ok fd ops: dup / fcntl_dupfd stay on the owning volume
+ok EXDEV: cross-volume rename and link refuse; in-volume ones work
+ok EBUSY: unlink/rmdir/rename on the mount point refuse
+ok escape: user-volume link -> /bin/... resolves on the system volume
+ok escape: system-volume link -> /root/... resolves on the user volume
+ok escape: mid-path symlink + O_CREAT creates on the target volume
+ok escape: relative '..' target climbs over the mount root
+ok escape: cross-volume symlink loop is ELOOP, not a hang
+ok escape: mkdir/unlink through an escaping directory symlink
+ok readonly /usr: every mutator on the RPC surface is EROFS
+ok readonly /usr: reads, the /bin symlink, and the /usr/local escape work
+ok moduleKey (todos/0037, #188): immutable on RO volumes, VALIDATED on rw
+ok _lastError propagates from the routed volume
+ok _resolvePath + chdir/getcwd (the FS_REALPATH/FS_CHDIR surface)
+
+test_mounts (kernel): 18 passed, 0 failed

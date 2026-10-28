@@ -1,0 +1,10 @@
+{
+  "allowedJobs": [
+    "gate"
+  ],
+  "commentId": "01a090a1-dccf-7085-ad8e-289aa11a57ff",
+  "text": "COORDINATOR ONE-SHOT BROWSER-V2 GRANT. Read FULL browser review01a090a0-fb13 and /tmp/cc-785-browser-stage-v2-review.md plus V2 PLAN; separate cmdalt review also read but NOT granted. Authorize sole785 author ONE 785-browser-stage-v2/launch.py gate invocation, exact plan6df3061db4f62e83a339b8e818c0bc1445e30980493022aab921d5923a15a9d6 at staged2403c16ccff8faf749ff78df17aa0fb10987fe7e on aacbd167. allowedJobs gate only;1200s direct-child deadline, includes one explicit minimal-image bake with600s bound, owned pinned static server and Chromium witness. Require all28 exact records, all3 positive eligible admitted RO identity processes and an actual prewarmed single-use witness, aliases/DATA/guest wait0, available native Chromium/server cleanup and directchild/pane/sourceAfter/fixture/served hashes. Response-transformed execution explicit; guest module SHA output is not archived Wasm, browser worker native exits unavailable. allowCanonicalStaleRecovery true only through normal heavy-lock acquisition; no manual unlink. independentControlsAcceptanceCommentId01a08c47-5388-70b2-b0eb-7f07ffc9030f. Fresh13:21:43Z coordinator healthOK/bothlocksabsent/73.61GiBfree/treeexact and23prepared13301source215absolute match. Author repeats all guards before launch; any refusal/failure consumes this attempt, no automatic retry. Preserve source/Small pins, old failures and accepted Node. No cmdalt chain/Node replay/broad or Firefox-six repeat, product edit/commit/main/deployment or retainedserver cleanup. Own new stage processes may be terminated only by the reviewed cleanup contract. Report actual launch/PIDs and complete evidence for independent audit before next separate decision.",
+  "planSha256": "6df3061db4f62e83a339b8e818c0bc1445e30980493022aab921d5923a15a9d6",
+  "allowCanonicalStaleRecovery": true,
+  "independentControlsAcceptanceCommentId": "01a08c47-5388-70b2-b0eb-7f07ffc9030f"
+}

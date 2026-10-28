@@ -1,0 +1,66 @@
+--- accepted-node-v3/supervisor.py
++++ browser-candidate/supervisor.py
+@@ -78,7 +78,7 @@
+                 if not base.exists():continue
+                 for p in base.rglob('*'):
+                     service()
+-                    if not p.is_file() or p.suffix not in ['.json','.log','.wasm','.img','.stdout','.stderr']:continue
++                    if not p.is_file():continue  # retain every scoped payload byte, including transformed JS and package tarballs
+                     try:
+                         dest=archive/p.relative_to(ROOT);dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(p,dest)
+                         state['archive']['files'][str(p.relative_to(ROOT))]=sha(dest)
+--- accepted-node-v3/common.py
++++ browser-candidate/common.py
+@@ -38,7 +38,7 @@
+         value=json.loads(config.read_text());run_out=checked_out(Path(value['output']).parent)
+         launch=json.loads((run_out/'launch.json').read_text())
+         assert sha(config)==launch['runtimeConfigSha256'],'authorized config drift'
+-        expected=dict(PLAN['runtimeTemplate'],grantReference=launch['authorization']['commentId'],allowedKinds=['node-worker'],output=str(run_out/'payload'))
++        expected=dict(PLAN['runtimeTemplate'],grantReference=launch['authorization']['commentId'],allowedKinds=[PLAN['runtimeKind']],output=str(run_out/'payload'))
+         assert value==expected,'unexpected runtime config delta'
+     for key in PLAN['forbiddenEnvironment']:
+         assert not os.environ.get(key),'guard/environment override: '+key
+--- accepted-node-v3/launch.py
++++ browser-candidate/launch.py
+@@ -11,7 +11,7 @@
+     assert grant['planSha256']==sha(PREP/'run.json'),'plan mismatch'
+     state['authorization']=grant;checkpoint()
+     with (PREP/('claimed-'+job+'.json')).open('x') as f:json.dump({'grant':grant,'at':now(),'run':str(out)},f,indent=2)
+-    config=dict(PLAN['runtimeTemplate'],grantReference=grant['commentId'],allowedKinds=['node-worker'],output=str(out/'payload'))
++    config=dict(PLAN['runtimeTemplate'],grantReference=grant['commentId'],allowedKinds=[PLAN['runtimeKind']],output=str(out/'payload'))
+     with (PREP/'authorized-config.json').open('x') as f:json.dump(config,f,indent=2)
+     state['runtimeConfigSha256']=sha(PREP/'authorized-config.json');checkpoint()
+     verify()
+@@ -34,7 +34,7 @@
+     disk=run(['df','-k',str(ROOT)]);state['disk']=disk;checkpoint()
+     assert disk['exit']==0 and int(disk['stdout'].splitlines()[-1].split()[3])>=PLAN['minimumFreeKiB'],'disk refusal'
+     if job=='gate':
+-        assert PLAN['workloadKind']=='focused785-node','workload scope mismatch'
++        assert PLAN['workloadKind']=='focused785-'+PLAN['runtimeKind'],'workload scope mismatch'
+         check=run([PLAN['executables']['node'],'--check',str(ROOT/PLAN['syntaxTarget'])]);state['instrumentSyntax']=check;checkpoint()
+         assert check['exit']==0,'instrument syntax refusal'
+     verify()
+--- accepted-node-v3/common.cjs
++++ browser-candidate/common.cjs
+@@ -25,7 +25,7 @@
+     executable: fs.realpathSync(process.execPath), executableSha256: hashFile(process.execPath), versions: process.versions,
+     argv: process.argv, started: new Date().toISOString() });
+   function finalize(priorError, evidence) {
+-    const after = { status: 'checking', priorError: priorError && priorError.stack, sources: {}, instruments: {} };
++    const after = { status: 'checking', priorError: priorError && priorError.stack, sources: {}, instruments: {}, fixtures: {} };
+     try {
+       assert.strictEqual(hashFile(process.execPath), c.node.sha256);
+       for (const [f, hash] of Object.entries(c.sources)) { after.sources[f] = hashFile(path.join(c.root, f)); assert.strictEqual(after.sources[f], hash, f); }
+@@ -33,10 +33,11 @@
+       assert.strictEqual(cp.execFileSync('git', ['rev-parse', 'HEAD'], { cwd: c.root, encoding: 'utf8' }).trim(), c.base);
+       assert.strictEqual(sha(cp.execFileSync('git', ['diff', '--cached', '--binary'], { cwd: c.root, maxBuffer: 32 << 20 })), c.indexPatchSha256);
+       assert.strictEqual(cp.execFileSync('git', ['diff', '--name-only'], { cwd: c.root, encoding: 'utf8' }).trim(), '');
++      for (const [f,hash] of Object.entries(c.fixtures || {})) { after.fixtures[f] = hashFile(f); assert.strictEqual(after.fixtures[f],hash,f); }
+       after.status = 'unchanged';
+     } catch (error) { after.status = 'failed'; after.error = error.stack; }
+     record('source-after.json', after);
+-    const failed = !!priorError || after.status !== 'unchanged' || !evidence || !evidence.allFourCasesCompleted || !evidence.nativeCompletionObserved || !evidence.guestCompletionObserved || evidence.artifactErrors.length > 0;
++    const failed = !!priorError || after.status !== 'unchanged' || !evidence || !evidence.stagePassed || !evidence.cleanupComplete || evidence.artifactErrors.length > 0;
+     record('outcome.json', { status: failed ? 'fail' : 'pass', primaryError: priorError && (priorError.stack || String(priorError)), evidence });
+     if (failed) process.exitCode = 1;
+   }

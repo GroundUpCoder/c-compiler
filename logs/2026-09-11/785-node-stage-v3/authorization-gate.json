@@ -1,0 +1,10 @@
+{
+  "allowedJobs": [
+    "gate"
+  ],
+  "commentId": "01a09086-59d4-7d7c-b957-ff9d13b895a1",
+  "text": "COORDINATOR FRESH ONE-SHOT V3 NODE-ONLY GRANT. Read FULL review01a09085-7e97 and /tmp/cc-785-node-v3-source-review.md plus V3 PLAN. Authorize sole785 author ONE invocation of 785-node-stage-v3/launch.py gate at exact plan9d4f2ef97dda98c6afae91ed1eaef6d16e6e825ce8af71fbd45edbe69fda30e8, staged2403c16ccff8faf749ff78df17aa0fb10987fe7e on aacbd167. allowedJobs gate only; one compile and four sequential current-attempt cases;600s direct-child bound with reviewed V4 escalation. allowCanonicalStaleRecovery true exclusively through normal heavy-lock acquisition, no manual unlink; independentControlsAcceptanceCommentId01a08c47-5388-70b2-b0eb-7f07ffc9030f. Fresh12:51:42Z preflight healthOK/bothlocksabsent/73.64GiBfree/treeexact; coordinator16prepared26source5absolute hashes match. Author repeat all normal guards immediately before launch. One-shot refusal/failure consumes attempt, no automatic retry. Preserve V2 RED and its grant/claim; do not reuse partial15rows as completed V3 case. Require all four fresh case outcomes, real compiler/guest/worker/native child/pane distinctions, conditional completion/cleanup errors, module/fixture hashes and after-child source/archive checks. Passing success path does not establish every failure-cleanup branch. No browser/cmdalt chain, successful-corpus or broad replay, product edit/commit/main/deployment or retainedserver cleanup. Deliver actual manifest/native PIDs and independent evidence audit before next separate stage.",
+  "planSha256": "9d4f2ef97dda98c6afae91ed1eaef6d16e6e825ce8af71fbd45edbe69fda30e8",
+  "allowCanonicalStaleRecovery": true,
+  "independentControlsAcceptanceCommentId": "01a08c47-5388-70b2-b0eb-7f07ffc9030f"
+}

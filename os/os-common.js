@@ -1574,7 +1574,10 @@ function checkReservedPackageFiles(pkg, label) {
  * zlib consumer had to install a PNG decoder, and the two packages could not
  * be installed together — gucman refuses to overwrite a planted link). */
 var SRCLIB_TABLE = [
-  { header: 'os/foundation/Foundation/NSObjCRuntime.h', lib: 'os/foundation/lib.json',
+  { headers: ['os/foundation/Foundation/NSObjCRuntime.h',
+      'os/foundation/Foundation/NSString.h', 'os/foundation/Foundation/NSException.h',
+      'os/foundation/Foundation/NSArray.h', 'os/foundation/Foundation/NSEnumerator.h'],
+    lib: 'os/foundation/lib.json',
     ns: 'foundation', pkg: 'packages/foundation.json', tree: 'os/foundation' },
   { header: 'vendor/freetype/demo/ft2build.h', lib: 'vendor/freetype/lib.json',
     ns: 'freetype', pkg: 'packages/freetype.json', tree: 'vendor/freetype/srclib' },
@@ -1669,14 +1672,21 @@ function requireDriftErrors(readText) {
    * `veneer` — no windows.h consumer should pull an image decoder — but
    * packages/win32.json must still SHIP it, so it joins the payload half. */
   var gdiplus = sourcesOf('os/win32/gdiplus.json', 'win32');
-  /* Each srclib header's require set must equal its lib.json sources, and
+  /* Each srclib's enrolled headers together must require its lib.json sources, and
    * the OWNING package must really ship every TU the block names — the
    * payload is ONE `tree` entry (no per-file keys for unshipped() to see),
    * so the check is file-level: the namespace maps to the expected vendor
    * tree and every lib.json source exists in it. Table: SRCLIB_TABLE. */
   var srclibs = SRCLIB_TABLE;
   function srclibErrors(sl) {
-    var errs = diff(sl.header, requiresOf(sl.header), sourcesOf(sl.lib, sl.ns));
+    var headers = sl.headers || [sl.header], actual = [];
+    headers.forEach(function (header) {
+      requiresOf(header).forEach(function (source) {
+        if (actual.indexOf(source) < 0) actual.push(source);
+      });
+    });
+    var label = headers.join(' + ');
+    var errs = diff(label, actual, sourcesOf(sl.lib, sl.ns));
     var pkg = JSON.parse(mustRead(sl.pkg));
     var key = pkg.srclib && pkg.srclib.src && pkg.srclib.src[sl.ns];
     var entry = key ? (pkg.files || {})[key] : undefined;
@@ -1689,7 +1699,7 @@ function requireDriftErrors(readText) {
       var rel = sl.tree + '/' + s.replace(/^.*\//, '');
       var text = readText(rel);
       if (text === null || text === undefined)
-        errs.push(sl.pkg + ' ships no ' + rel + ', which ' + sl.header +
+        errs.push(sl.pkg + ' ships no ' + rel + ', which ' + label +
           ' requires (require-block drift, design §4.4)');
     });
     return errs;

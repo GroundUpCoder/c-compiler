@@ -1,0 +1,144 @@
+--- v1/cmdalt.cjs
++++ v2/cmdalt.cjs
+@@ -4,7 +4,23 @@
+ const {c,record,finalize}=setup('cmdalt');
+ require(path.join(c.root,'tests/lib/heavy-lock.js')).joinHeavyLock({name:'#785 current cmdalt observation'});
+ let primaryError=null, stagePassed=false, childWatch;
+-const cleanupErrors=[];
++const cleanupErrors=[],writeErrors=[],streams=[];
++const { observePackageServer }=require('./server-observe.cjs');
++let serverObservation=null;
++let rejectOutput;
++const outputFailure=new Promise((_,reject)=>{rejectOutput=reject;});
++// Attach a handler immediately, even if startup throws before the race is reached.
++outputFailure.catch(()=>{});
++function outputStream(name) {
++  const stream=fs.createWriteStream(path.join(c.output,name),{flags:'wx'});
++  const state={name,stream,closed:false,finished:false};
++  state.done=new Promise(resolve=>{
++    stream.on('error',error=>{writeErrors.push({name,error:String(error)});rejectOutput(error);});
++    stream.on('finish',()=>{state.finished=true;});
++    stream.on('close',()=>{state.closed=true;resolve();});
++  });
++  streams.push(state);return stream;
++}
+ (async()=>{
+  try {
+   assert(!process.env.NODE_OPTIONS,'unexpected NODE_OPTIONS');
+@@ -12,10 +28,9 @@
+   const command=[process.execPath,'-r',path.join(c.root,'tests/lib/parent-watch.js'),path.join(c.root,'tests/kernel/test_cmdalt_e2e.js')];
+   const child=cp.spawn(command[0],command.slice(1),{cwd:c.root,stdio:['ignore','pipe','pipe'],env:{...process.env,CC_HARNESS_GROUP_LEADER:'0',IDENTITY785_CONFIG:path.resolve(process.argv[3]),NODE_OPTIONS:'--require='+JSON.stringify(preload)}});
+   childWatch=watch(child,command);
+-  const stdout=fs.createWriteStream(path.join(c.output,'original-test.stdout'),{flags:'wx'}),stderr=fs.createWriteStream(path.join(c.output,'original-test.stderr'),{flags:'wx'});
++  const stdout=outputStream('original-test.stdout'),stderr=outputStream('original-test.stderr');
+   child.stdout.pipe(stdout);child.stderr.pipe(stderr);
+-  await bounded(childWatch.done,c.cmdalt.timeoutMs,'original cmdalt complete package/two-boot test');
+-  await Promise.all([stdout,stderr].map(s=>s.closed?Promise.resolve():new Promise((resolve,reject)=>{s.once('close',resolve);s.once('error',reject);}))); 
++  await bounded(Promise.race([childWatch.done,outputFailure]),c.cmdalt.timeoutMs,'original cmdalt complete package/two-boot test');
+   record('cmdalt-result.json',childWatch.row);
+   assert.strictEqual(childWatch.row.code,0,'original current cmdalt all assertions');assert.strictEqual(childWatch.row.signal,null);
+   const observations=fs.readFileSync(path.join(c.output,'cmdalt-identity.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+@@ -32,9 +47,16 @@
+  }catch(error){primaryError=error;}
+  finally{
+   await stop(childWatch,cleanupErrors);
+-  record('native-cleanup.json',{testChild:childWatch && childWatch.row,cleanupErrors,descendantNativeExits:'see cmdalt-native.jsonl; any missing server exit callback remains unknown, not inferred from parent exit'});
+-  if(primaryError)record('failure.json',{primaryError:primaryError.stack,cleanupErrors});
+-  finalize(primaryError,{stagePassed,cleanupComplete:!!childWatch && childWatch.row.exitObserved && childWatch.row.closeObserved && cleanupErrors.length===0,artifactErrors:cleanupErrors});
++  try { await bounded(Promise.all(streams.map(s=>s.done)),5000,'original output flush'); }
++  catch(error){cleanupErrors.push(String(error));for(const s of streams)if(!s.closed)s.stream.destroy();}
++  try { serverObservation=await observePackageServer(c); }
++  catch(error){serverObservation={cleanupObserved:false,error:String(error)};cleanupErrors.push(String(error));}
++  record('package-server-after.json',serverObservation);
++  const outputComplete=streams.length===2 && streams.every(s=>s.closed && s.finished) && writeErrors.length===0;
++  record('output-finalization.json',{outputComplete,writeErrors,streams:streams.map(s=>({name:s.name,closed:s.closed,finished:s.finished}))});
++  record('native-cleanup.json',{testChild:childWatch && childWatch.row,cleanupErrors,serverObservation,writeErrors,descendantNativeExits:'see cmdalt-native.jsonl; any missing server exit callback remains unknown, not inferred from parent exit'});
++  if(primaryError)record('failure.json',{primaryError:primaryError.stack,cleanupErrors,writeErrors});
++  finalize(primaryError,{stagePassed,cleanupComplete:!!childWatch && childWatch.row.exitObserved && childWatch.row.closeObserved && cleanupErrors.length===0 && outputComplete && serverObservation.cleanupObserved,artifactErrors:[...cleanupErrors,...writeErrors]});
+   if(process.exitCode)process.exit(1);
+  }
+ })();
+--- v1/cmdalt-preload.cjs
++++ v2/cmdalt-preload.cjs
+@@ -12,7 +12,7 @@
+ // Native spawn evidence is recorded without changing arguments/results.
+ const cp = require('child_process');
+ const syncSpawn = cp.spawnSync, asyncSpawn = cp.spawn;
+-let spawnNumber = 0;
++let spawnNumber = 0, packageServerCall = null;
+ function appendNative(value) { fs.appendFileSync(path.join(c.output, 'cmdalt-native.jsonl'), JSON.stringify({ observerPid: process.pid, ...value }) + '\n'); }
+ cp.spawnSync = function (file, args, opts) {
+   const number = process.pid + '-' + (++spawnNumber);
+@@ -26,6 +26,12 @@
+ cp.spawn = function (file, args, opts) {
+   const child = asyncSpawn.apply(this, arguments);
+   appendNative({ kind:'async-spawn', pid:child.pid, command:[file,...(args || [])] });
++  if (packageServerCall && args && args[0] === path.join(c.root,'serve.js') && args[1] === packageServerCall.dir) {
++    packageServerCall.pid = child.pid; packageServerCall.command = [file,...args];
++    const observed = syncSpawn(c.observationTools.ps, ['-p',String(child.pid),'-o','pid=,ppid=,pgid=,lstart=,command='], {encoding:'utf8',timeout:1000});
++    packageServerCall.identity = { status:observed.status,signal:observed.signal,error:observed.error && String(observed.error),stdout:observed.stdout,stderr:observed.stderr };
++    fs.appendFileSync(path.join(c.output,'package-server.jsonl'),JSON.stringify({kind:'spawned',...packageServerCall})+'\n');
++  }
+   child.on('exit',(code,signal)=>appendNative({ kind:'async-exit', pid:child.pid, code, signal }));
+   child.on('close',(code,signal)=>appendNative({ kind:'async-close', pid:child.pid, code, signal }));
+   return child;
+@@ -48,7 +54,18 @@
+ gucman.startServer = function (dir) {
+   // Includes the original test's hand-built shadow package, after addShadowPackage.
+   retainTree(dir,'cmdalt-package-publication-'+process.pid);
+-  return startServer.apply(this,arguments);
++  const call = { dir, observerPid:process.pid }; packageServerCall = call;
++  let pending;
++  try { pending = startServer.apply(this,arguments); }
++  finally { packageServerCall = null; }
++  return pending.then(port => {
++    call.port=port;
++    fs.appendFileSync(path.join(c.output,'package-server.jsonl'),JSON.stringify({kind:'ready',...call})+'\n');
++    return port;
++  }, error => {
++    fs.appendFileSync(path.join(c.output,'package-server.jsonl'),JSON.stringify({kind:'start-failed',...call,error:String(error)})+'\n');
++    throw error;
++  });
+ };
+ const K = require(path.join(c.root, 'kernel.js'));
+ const original = K.Kernel.prototype._fsRpc;
+--- v1/server-observe.cjs
++++ v2/server-observe.cjs
+@@ -0,0 +1,37 @@
++'use strict';
++// Surviving parent's read-only observations. No PID signals or native-status invention.
++const fs=require('fs'),path=require('path'),cp=require('child_process'),{performance}=require('perf_hooks');
++function inspect(file,args) {
++ const r=cp.spawnSync(file,args,{encoding:'utf8',timeout:1000,maxBuffer:1<<20});
++ return {command:[file,...args],status:r.status,signal:r.signal,error:r.error && String(r.error),stdout:r.stdout,stderr:r.stderr};
++}
++function absent(r){return r.status===1 && r.signal===null && !r.error && !String(r.stdout||'').trim() && !String(r.stderr||'').trim();}
++async function observePackageServer(c) {
++ const file=path.join(c.output,'package-server.jsonl');
++ const records=fs.existsSync(file)?fs.readFileSync(file,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse):[];
++ const spawned=records.filter(r=>r.kind==='spawned'),ready=records.filter(r=>r.kind==='ready');
++ const result={records,observations:[],cleanupObserved:false,nativeExitStatus:'UNKNOWN unless an actual async-exit callback is retained in cmdalt-native.jsonl; absence is not an exit status'};
++ if(spawned.length!==1 || ready.length!==1){result.reason='server PID/port lifecycle incomplete or ambiguous';return result;}
++ const server=ready[0];
++ if(!Number.isInteger(server.pid)||server.pid<=1||server.pid!==spawned[0].pid||!Number.isInteger(server.port)||server.port<=0||server.port>65535||!server.identity||server.identity.status!==0||!server.identity.stdout.trim()){
++  result.reason='recorded server identity or port invalid';return result;
++ }
++ const fields=server.identity.stdout.trim().split(/\s+/);
++ if(Number(fields[0])!==server.pid || Number(fields[1])!==server.observerPid || server.dir!==spawned[0].dir || !server.command || server.command[1]!==path.join(c.root,'serve.js') || server.command[2]!==server.dir){result.reason='recorded PID/parent/command identity inconsistent';return result;}
++ const deadline=performance.now()+5000;
++ do {
++  const process=inspect(c.observationTools.ps,['-p',String(server.pid),'-o','pid=,ppid=,pgid=,lstart=,command=']);
++  const listener=inspect(c.observationTools.lsof,['-nP','-iTCP:'+server.port,'-sTCP:LISTEN','-Fpcn']);
++  result.observations.push({at:new Date().toISOString(),process,listener});
++  if(absent(process)&&absent(listener)){result.cleanupObserved=true;result.reason='recorded PID absent and port has no observable TCP listener';return result;}
++  if(process.status===0 && process.stdout.trim()!==server.identity.stdout.trim()){
++   result.reason='PID identity changed or ownership unresolved; no signal sent';return result;
++  }
++  if((process.status!==0&&!absent(process)) || (listener.status!==0&&!absent(listener))){result.reason='process/listener observation failed or ambiguous';return result;}
++  if(performance.now()>=deadline)break;
++  await new Promise(resolve=>setTimeout(resolve,Math.min(200,Math.max(0,deadline-performance.now()))));
++ }while(performance.now()<deadline);
++ result.reason='known server process or listener remains observable after bounded wait; coordinate, no signal sent';
++ return result;
++}
++module.exports={observePackageServer};

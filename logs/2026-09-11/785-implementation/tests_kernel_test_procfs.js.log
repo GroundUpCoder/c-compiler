@@ -1,0 +1,50 @@
+  ok   Kernel constructor binds ProcFS from the mount table
+  ok   stat /proc is a directory
+  ok   root volume grew the /proc mount-point dir
+  ok   static files present before boot
+  ok   no pids before boot
+  ok   spawned pid 2
+  ok   readdir /proc gains 1 and 2
+  ok   status Name from argv[0]
+  ok   status PPid agrees
+  ok   status NSpgid agrees
+  ok   status NSsid agrees
+  ok   status State running (no parked RPC)
+  ok   stat comm parenthesized
+  ok   stat ppid/pgid/sid agree
+  ok   stat has 44 fields
+  ok   cmdline is argv NUL-joined
+  ok   comm is argv[0] basename
+  ok   comm truncates to 15 via init
+  ok   uptime is two floats
+  ok   loadavg shape
+  ok   loadavg total = live procs
+  ok   loadavg last pid
+  ok   stat cpu line
+  ok   stat processes count
+  ok   meminfo MemTotal nonzero
+  ok   version reads
+  ok   open snapshot unaffected by the exit
+  ok   zombie still in readdir
+  ok   zombie status State Z
+  ok   zombie cmdline empty
+  ok   reaped pid 2
+  ok   readdir /proc loses reaped pid
+  ok   stat of a gone pid ENOENT
+  ok   mkdir EROFS
+  ok   unlink EROFS
+  ok   symlink EROFS
+  ok   rename within /proc EROFS
+  ok   write-open EACCES
+  ok   access W_OK EROFS
+  ok   moduleKey stays null (never Module-cached)
+  ok   chdir /proc works (top does this)
+  ok   FS_OPENDIR lists pids
+  ok   FS_OPEN cwd-relative
+  ok   FS_READ streams status content
+  ok   GETSID own sid
+  ok   GETSID ESRCH
+  ok   unbound: static files, no pids
+  ok   unbound: pid lookup ENOENT
+
+all ok

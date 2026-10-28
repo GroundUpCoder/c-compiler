@@ -1,0 +1,42 @@
+{
+  "supervisor.py": {
+    "v2": "b7b42a872df4e3d6ffd9491004f05f2711293d570886ad234bbac80c2b6775a8",
+    "v3": "b7b42a872df4e3d6ffd9491004f05f2711293d570886ad234bbac80c2b6775a8",
+    "equal": true
+  },
+  "supervisor-v4-reference.py.txt": {
+    "v2": "3aab9dfa1278d279dea27199c9685c16be3731362297f2889c4f80d0e0a5b609",
+    "v3": "3aab9dfa1278d279dea27199c9685c16be3731362297f2889c4f80d0e0a5b609",
+    "equal": true
+  },
+  "common.py": {
+    "v2": "f97ad338e4df22e8ff624cc3a74b4495cd21101e06804b18b252e439820602ee",
+    "v3": "f97ad338e4df22e8ff624cc3a74b4495cd21101e06804b18b252e439820602ee",
+    "equal": true
+  },
+  "launch.py": {
+    "v2": "5b0d22b532bc28f627d05439cc41e0b8ea59adf6d2437768fbdff4a4d1e203e9",
+    "v3": "5b0d22b532bc28f627d05439cc41e0b8ea59adf6d2437768fbdff4a4d1e203e9",
+    "equal": true
+  },
+  "inspect.py": {
+    "v2": "202341c80833ff58deb1b685f1bc052399bafddfbad79307acc4267be28e4f98",
+    "v3": "202341c80833ff58deb1b685f1bc052399bafddfbad79307acc4267be28e4f98",
+    "equal": true
+  },
+  "health.cjs": {
+    "v2": "f28eb3fc8b20e5cc259bd9836b743fccc4f3e93d08c14d11e4ed77ae807984c5",
+    "v3": "f28eb3fc8b20e5cc259bd9836b743fccc4f3e93d08c14d11e4ed77ae807984c5",
+    "equal": true
+  },
+  "tmux.conf": {
+    "v2": "c22bd9a1bb85c851826bd77d7b1d49149b432d983120d3f2c1080fab557f2dd4",
+    "v3": "c22bd9a1bb85c851826bd77d7b1d49149b432d983120d3f2c1080fab557f2dd4",
+    "equal": true
+  },
+  "file-identity.c": {
+    "v2": "54123704b1e7a9b3e37b2f3a292d9b3e32505da914b41328527ecfc5f82d3211",
+    "v3": "54123704b1e7a9b3e37b2f3a292d9b3e32505da914b41328527ecfc5f82d3211",
+    "equal": true
+  }
+}

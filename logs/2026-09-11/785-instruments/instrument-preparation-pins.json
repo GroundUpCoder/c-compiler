@@ -1,0 +1,22 @@
+{
+  "base": "7050d4ab03b3ffa74180593c9842dde9804a035b",
+  "source_sha256": {
+    "host.js": "fbe30fe0063ee2608b4fdb2e234351a5b2e0beb006286397d8f4912018d85eb3",
+    "kernel.js": "2efb7afdb9f7fe27e0496d1d01423ab6ca5073ebdad91d69d1edb9980bd3e1db",
+    "compiler.js": "baf40333b01e843d9573a4b44de257ace97f5c4e26d69666212d2eee8f2cdb05",
+    "os/process-worker.js": "345c96d10dcb06a0ccfbec092a6dd9c21d13f2a40204bee8e9a25e741f50c4a2",
+    "os/kernel-worker.js": "cd5de99c5bb5984589f9795dd36548b55aba06acf34b3b8561b5d2777ea9e17b",
+    "tests/kernel/test_rofs_e2e.js": "1771573e168fd67f1e7c4ae60d4a44ad215d18bd5a52abc8187c7ed26d5655d4",
+    "tests/kernel/test_cmdalt_e2e.js": "4c824d77125887ee193a63d3e9dc622e3a0cc7d25a928e0d3122718fcf2d0357",
+    "os/cmdalt.h": "08fff0d267dbc5693f7f6391ab0e77f0e2f07f7c780f8c2b7e0410b2de6698e1",
+    "tests/browser/lib/os-harness.mjs": "8d49ab6f1f7d3d1c17603881282f673b7a31c81dce2d502a73ccf796668e240d"
+  },
+  "artifact_sha256": {
+    "file-identity.c": "54123704b1e7a9b3e37b2f3a292d9b3e32505da914b41328527ecfc5f82d3211",
+    "source-approval-v2.md": "c0ea55733a582b29aae68c3bf63975fd6faaf6adf79708acb27f84be65b9d371",
+    "INSTRUMENT-SCOPE.md": "72dac253207dc721e6cf6eec5b2ad88c8db080942444331adbcaac399bae23a2"
+  },
+  "executed": false,
+  "browser_engine": "pending coordinator-selected launch",
+  "transfer_target": "must verify actual Foundation HEAD; last coordinator checkpoint aacbd167"
+}

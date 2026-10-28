@@ -1,0 +1,10 @@
+ok standalone volume: absolute symlink target resolves in-volume (unchanged)
+ok _walkHops throws __mountEscape with the full-namespace continuation
+ok escape splices the rest of the path after the symlink component
+ok in-volume absolute target strips the mount prefix (no escape)
+ok relative target with '..' climbs over the mount root and escapes
+ok mixed workload across both volumes; both stores pass fsck independently
+ok O_CREAT through an in-volume dangling symlink on a mounted volume creates the target
+ok O_CREAT through a cross-volume dangling symlink escapes and creates on the owner
+
+test_mounts (blockfs): 8 passed, 0 failed

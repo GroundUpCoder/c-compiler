@@ -1,0 +1,10 @@
+{
+  "allowedJobs": [
+    "gate"
+  ],
+  "commentId": "01a090c8-6d35-7fd8-9aa5-e4ee4758ffe1",
+  "text": "COORDINATOR ONE-SHOT OBSERVATION GRANT. FULL source review01a090c7-6e68 /tmp/cc-785-observation-source-v1-review.md read. Authorize sole785 author ONE 785-cmdalt-observation-source-v1/launch.py gate invocation at exactplan8d1c76a59dfd818fa06bfaefd3a34b7f920b126525cdcf56a2e1e7463d3324b3, staged2403c16ccff8faf749ff78df17aa0fb10987fe7e on aacbd167. allowedJobs gate only; one420s native boot within600s direct-child bound, exact retained system f07105d6 copied to fresh owned output, newly seeded root and exact original60line prefix. NO package/build/compiler/bake/server/secondboot or fallback; ordinary freshness/no-build guards must refuse loudly. allowCanonicalStaleRecovery true only through normal heavy-lock path, no manual unlink; independentControlsAcceptanceCommentId01a08c47-5388-70b2-b0eb-7f07ffc9030f. Fresh14:03:46Z healthOK/bothlocksabsent/73.31GiBfree/treeexact and20prepared13301source49absolute pins match. Author repeat normal guards before invocation; refusal/failure consumes attempt, no retry. Require boot-local install/condition/qualified snapshot-before-response trace, actual distinct pair, native boot/parent/pane, complete output/summary and retained owned images/sourceAfter/archive. Observation errors cannot alter product response or be waived by old53passes. Fresh-root result cannot reconstruct historical root/pair or prove old inherited-hook cause. Preserve all priorREDs and accepted Node/browser/original53checks. No product edit/commit/main/deployment/retainedserver cleanup or automatic replay. Report actual launch/PIDs and independent evidence review before landing decision.",
+  "planSha256": "8d1c76a59dfd818fa06bfaefd3a34b7f920b126525cdcf56a2e1e7463d3324b3",
+  "allowCanonicalStaleRecovery": true,
+  "independentControlsAcceptanceCommentId": "01a08c47-5388-70b2-b0eb-7f07ffc9030f"
+}

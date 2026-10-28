@@ -1,0 +1,47 @@
+  ok   open under /usr is local (fd >= RO_FD_BASE)
+  ok   local read returns the content
+  ok   local fstat sizes the file
+  ok   local lseek rewinds
+  ok   read after lseek
+  ok   isatty on a local fd is 0
+  ok   local close
+  ok   stat under /usr is local
+  ok   lstat sees the symlink itself
+  ok   access under /usr is local
+  ok   readlink under /usr is local
+  ok   in-volume relative symlink opens locally
+  ok   in-volume absolute symlink opens locally
+  ok   opendir under /usr is local
+  ok   local readdir lists the tree
+  ok   local closedir
+  ok   ENOENT under /usr is local and final
+  ok   ALL of the above made ZERO RPCs
+  ok   write on a local fd is EBADF (O_RDONLY fd)
+  ok   ftruncate on a local fd is EINVAL (fd not open for writing)
+  ok   fsync on a local fd is a no-op success
+  ok   EROFS legs made zero RPCs
+  ok   relative path opens brokered
+  ok   '..' climbing out goes brokered
+  ok   write-intent open goes brokered (kernel owns EROFS-after-walk)
+  ok   O_CREAT open goes brokered
+  ok   escape through /usr/local retries brokered
+  ok   escaping symlink stat retries brokered
+  ok   escaping opendir retries brokered
+  ok   dup of a local fd stays local
+  ok   the dup reads through the shared offset
+  ok   fcntl_dupfd stays local (result >= min trivially)
+  ok   dup family made zero RPCs
+  ok   dup2 local->0 returns the low fd
+  ok   promotion = FS_OPEN, FS_LSEEK, FS_DUP2, FS_CLOSE
+  ok   promotion re-opened the recorded full-namespace path
+  ok   promotion seeked to the shared local offset
+  ok   wrapped spawn returns the inner result
+  ok   DUP2 action arg rewritten to the kernel twin
+  ok   a CLOSE action for the twin was appended
+  ok   promotion opened then closed the twin parent-side
+  ok   no appended close when an action targets the twin fd
+  ok   spec without local fds passes through
+  ok   no-RO RemoteFS brokeres everything
+  ok   no-RO wrapSpawnHooks is identity
+
+rofs: PASS

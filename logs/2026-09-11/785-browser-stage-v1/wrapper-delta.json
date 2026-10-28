@@ -1,0 +1,37 @@
+{
+  "supervisor.py": {
+    "reference": "b7b42a872df4e3d6ffd9491004f05f2711293d570886ad234bbac80c2b6775a8",
+    "candidate": "1b61bb493e3e6e99638dfde3b0b167faad237423bc7b0e5aa692d8687bf2fbd2",
+    "equal": false
+  },
+  "common.py": {
+    "reference": "f97ad338e4df22e8ff624cc3a74b4495cd21101e06804b18b252e439820602ee",
+    "candidate": "2d517f59f90c8ae86054109702837ea3873d3830a961d8762d2952627b3d789a",
+    "equal": false
+  },
+  "launch.py": {
+    "reference": "5b0d22b532bc28f627d05439cc41e0b8ea59adf6d2437768fbdff4a4d1e203e9",
+    "candidate": "1b85685d33259d26aa07b87a1c0919fc31ccb9c14c9010f7c305a51a620b73b4",
+    "equal": false
+  },
+  "inspect.py": {
+    "reference": "202341c80833ff58deb1b685f1bc052399bafddfbad79307acc4267be28e4f98",
+    "candidate": "202341c80833ff58deb1b685f1bc052399bafddfbad79307acc4267be28e4f98",
+    "equal": true
+  },
+  "health.cjs": {
+    "reference": "f28eb3fc8b20e5cc259bd9836b743fccc4f3e93d08c14d11e4ed77ae807984c5",
+    "candidate": "f28eb3fc8b20e5cc259bd9836b743fccc4f3e93d08c14d11e4ed77ae807984c5",
+    "equal": true
+  },
+  "tmux.conf": {
+    "reference": "c22bd9a1bb85c851826bd77d7b1d49149b432d983120d3f2c1080fab557f2dd4",
+    "candidate": "c22bd9a1bb85c851826bd77d7b1d49149b432d983120d3f2c1080fab557f2dd4",
+    "equal": true
+  },
+  "common.cjs": {
+    "reference": "4062ba6746167472d5a17c5b20a2cb938db0f2b678fe1118afff6561e6f0aa67",
+    "candidate": "86fe925d8e4a2e512b9a50a427f7722478c68e8a3112386b0e693942481087f4",
+    "equal": false
+  }
+}

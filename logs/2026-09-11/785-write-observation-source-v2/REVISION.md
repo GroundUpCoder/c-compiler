@@ -1,0 +1,3 @@
+# V2 narrow loader-identity correction
+
+Read FULL review01a090dc-575a. One executable-line change: at actual CJS boot loader hook, record process.mainModule===mod instead of the preload-local require.main snapshot. Parent still requires mainModule true and original module filename; no assertion dropped or fabricated. Driver, exact boot transform, prefix, guards, readback/forwarding and eight shared files remain byte-identical V1. V1 freeze preserved. V1 instrument-delta.patch/syntax.json/REVIEW.md are retained historical artifacts; v1-v2.patch and syntax-v2.json describe this revision. No runtime grant or launch. Same changed scenario and historical limits.

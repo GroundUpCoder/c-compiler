@@ -1,0 +1,32 @@
+{
+  "branch": "prep785-volume-identity",
+  "worktree": "/Users/jku/git/c-compiler-prep785",
+  "base": "7050d4ab03b3ffa74180593c9842dde9804a035b",
+  "foundation_worktree": "/Users/jku/git/c-compiler-land783",
+  "overlay": "foundation-srclib-input.patch",
+  "overlay_sha256": "bb1acbaa7bfae06957f90c90925f1e0337bdb97fe0185892d4a67fd8c1cc71e8",
+  "source_sha256": {
+    "host.js": "e9d970a4cf1a7f67825092da5d73982920bda52f230fb4f318364cb2e9d3b0ca",
+    "kernel.js": "a3934723b5c3e1fae922f3b707c16ec1640df40a00f034da139ad17a050e4930",
+    "compiler.js": "baf40333b01e843d9573a4b44de257ace97f5c4e26d69666212d2eee8f2cdb05",
+    "os/boot.js": "1fb180d9aad664450834aaabfb14b88f8c6675e29e9f83b3e641e731a0ef5c24",
+    "os/kernel-worker.js": "cd5de99c5bb5984589f9795dd36548b55aba06acf34b3b8561b5d2777ea9e17b",
+    "os/process-worker.js": "6f9455ab045708c1dc69ed61af6af1061b02ce656cef5426a8a92a49194c5e5d",
+    "os/os-common.js": "41c262c7f13f90cc15b90d954b15677a042ebe940a2964450fe07bee466365a9",
+    "os/cmdalt.h": "08fff0d267dbc5693f7f6391ab0e77f0e2f07f7c780f8c2b7e0410b2de6698e1",
+    "os/cmdalt.c": "2f1f589aa1832de055d3506e0e13452a7c65875825de3f3cd1e78a7fbed5bd67",
+    "tests/kernel/test_cc_srclib.js": "add4fd1fc1ee4227d35477d629990880e7b942efc9b05f49e4290fb8fe4b711d",
+    "tests/kernel/test_cmdalt_e2e.js": "4c824d77125887ee193a63d3e9dc622e3a0cc7d25a928e0d3122718fcf2d0357",
+    "tests/kernel/test_rofs.js": "d4dd7b9ecbf287c6d369da9772442b14c764fb602bd0016384bb18f0be2d6c75",
+    "tests/kernel/test_rofs_e2e.js": "1771573e168fd67f1e7c4ae60d4a44ad215d18bd5a52abc8187c7ed26d5655d4",
+    "tests/kernel/test_mounts.js": "a538012dc5fe10bf9e14d505356b2af1c5b85189e7c8466ad4c8188f75aa7529",
+    "tests/kernel/test_rust_std_e2e.js": "e307fd572641555fe0a7fbdd54af7b9aaf99661cd691a600123cd75ae0851704",
+    "tests/blockfs/test_mounts.js": "a502ba46a49234090c6894dae83a42072e99f06b0d108b9b36bb096ac1a2fe6b",
+    "CLAUDE.md": "d36a5ce8fecd680c0e2436576f4ae10f3b530e636e066b10697df7c5c97ebc06",
+    "todos/PRINCIPLES.md": "bae0a409bd82ca39920b0be2a856217ffcff140910ea8e335c79b3b3292407e6",
+    "todos/GAMEDEV-EPIC.md": "7db85c58108c1358aefbd8b5f17aa4bee4c4ae55abbb60aabbb1bd4547373d72",
+    "todos/OS.md": "956128c9a0c10d73aef376521cfd35c94cc3991bd53ad236400dd539a96e8214",
+    "todos/LIABILITIES.md": "57e79eaf573b99919aa4cef334274284cbea6e3591fbf3438e1e3a0b60de2506"
+  },
+  "scope": "Preparation only. Two source modifications are an exact snapshot of Foundation staged srclib input, not #785 implementation. No callback feature included."
+}
